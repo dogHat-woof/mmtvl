@@ -83,7 +83,7 @@ Status values: `Not planned` → `Planned` → `In progress` → `Done` (or `Blo
 | ID | Milestone | Depends on | Status | Sub plan |
 |---|---|---|---|---|
 | M0 | Project bootstrap: Xcode project, test target, planning system, CLAUDE.md | — | Done | — |
-| M1 | Launcher shell & kiosk: borderless fullscreen window, home screen tiles, custom focus, launching external apps, Exit to Desktop | M0 | Planned | [M1-launcher-shell.md](M1-launcher-shell.md) |
+| M1 | Launcher shell & kiosk: borderless fullscreen window, home screen tiles, custom focus, launching external apps, Exit to Desktop | M0 | Done | [M1-launcher-shell.md](M1-launcher-shell.md) |
 | M2 | Input layer: remappable bindings, global Home (event tap + Accessibility onboarding), game controllers, cursor auto-hide, launch at login, sleep/wake behavior, signing with personal team | M1 | Not planned | — |
 | M3 | YouTube: WKWebView `youtube.com/tv`, TV user agent, key mapping, **verify Parent code**, profile fallback if needed, verify Link-with-TV-code casting | M2 | Not planned | — |
 | M4 | IPTV core: Keychain-stored M3U/Xtream source, channel import, single EPG source, grid guide, mpv player, **rewind buffer** | M2 | Not planned | — |

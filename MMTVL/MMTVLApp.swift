@@ -2,11 +2,10 @@ import SwiftUI
 
 @main
 struct MMTVLApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     var body: some Scene {
-        WindowGroup {
-            Text("MMTVL")
-                .font(.largeTitle)
-                .frame(minWidth: 640, minHeight: 360)
-        }
+        // The launcher window is owned by AppKit (D1), not SwiftUI.
+        Settings { EmptyView() }
     }
 }
