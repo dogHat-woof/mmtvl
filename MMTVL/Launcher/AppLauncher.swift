@@ -13,8 +13,23 @@ final class AppLauncher {
     /// Called when an app we launched quits and nothing else took the foreground (L5).
     var onReturnToLauncher: (() -> Void)?
 
+    /// Chromium browsers honor `--start-fullscreen`, but only when they aren't already running.
+    /// Other browsers (Safari) get full screen via Accessibility in M2.
+    nonisolated static let chromiumBundleIDs: Set<String> = [
+        "com.brave.Browser",
+        "com.google.Chrome",
+        "com.microsoft.edgemac",
+        "com.vivaldi.Vivaldi",
+        "org.chromium.Chromium",
+    ]
+
+    nonisolated static func launchArguments(browserBundleID: String?, fullScreen: Bool) -> [String] {
+        guard fullScreen, let browserBundleID, chromiumBundleIDs.contains(browserBundleID) else { return [] }
+        return ["--start-fullscreen"]
+    }
+
     private var launchedPIDs: Set<pid_t> = []
-    private var iconCache: [String: NSImage] = [:]
+    private var iconCache: [URL: NSImage] = [:]
     private var terminationObserver: NSObjectProtocol?
 
     init() {
@@ -35,17 +50,35 @@ final class AppLauncher {
             appURL(for: bundleID) != nil
         case .url(_, let browserBundleID?):
             appURL(for: browserBundleID) != nil
+        case .defaultBrowser:
+            defaultBrowserURL() != nil
         case .url, .internalDestination, .system:
             true
         }
     }
 
+    /// The tile title. The default browser tile shows the browser's own name, e.g. "Brave Browser".
+    func title(for item: LaunchItem) -> String {
+        guard case .defaultBrowser = item.kind,
+              let url = defaultBrowserURL(),
+              let bundle = Bundle(url: url),
+              let name = (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName")
+                  ?? bundle.object(forInfoDictionaryKey: "CFBundleName")) as? String
+        else { return item.title }
+        return name
+    }
+
     func icon(for item: LaunchItem) -> NSImage? {
-        guard case .application(let bundleID) = item.kind else { return nil }
-        if let cached = iconCache[bundleID] { return cached }
-        guard let url = appURL(for: bundleID) else { return nil }
+        let url: URL?
+        switch item.kind {
+        case .application(let bundleID): url = appURL(for: bundleID)
+        case .defaultBrowser: url = defaultBrowserURL()
+        case .url, .internalDestination, .system: url = nil
+        }
+        guard let url else { return nil }
+        if let cached = iconCache[url] { return cached }
         let icon = NSWorkspace.shared.icon(forFile: url.path)
-        iconCache[bundleID] = icon
+        iconCache[url] = icon
         return icon
     }
 
@@ -60,6 +93,16 @@ final class AppLauncher {
             }
             Self.logger.info("Launching \(bundleID, privacy: .public)")
             let app = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+            launchedPIDs.insert(app.processIdentifier)
+
+        case .defaultBrowser(let fullScreen):
+            guard let browserURL = defaultBrowserURL() else {
+                throw LaunchError.notInstalled(bundleID: "default browser")
+            }
+            let bundleID = Bundle(url: browserURL)?.bundleIdentifier
+            configuration.arguments = Self.launchArguments(browserBundleID: bundleID, fullScreen: fullScreen)
+            Self.logger.info("Launching default browser \(bundleID ?? "?", privacy: .public) with \(configuration.arguments, privacy: .public)")
+            let app = try await NSWorkspace.shared.openApplication(at: browserURL, configuration: configuration)
             launchedPIDs.insert(app.processIdentifier)
 
         case .url(let url, let browserBundleID?):
@@ -81,6 +124,10 @@ final class AppLauncher {
 
     private func appURL(for bundleID: String) -> URL? {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+    }
+
+    private func defaultBrowserURL() -> URL? {
+        NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!)
     }
 
     private func applicationDidTerminate(pid: pid_t) {

@@ -24,6 +24,7 @@ struct LaunchItemStoreTests {
             LaunchItem(id: "a", title: "App", kind: .application(bundleID: "com.example.app")),
             LaunchItem(id: "u", title: "Web", kind: .url(URL(string: "https://example.com")!, browserBundleID: nil)),
             LaunchItem(id: "b", title: "Web in Chrome", kind: .url(URL(string: "https://example.org")!, browserBundleID: "com.google.Chrome")),
+            LaunchItem(id: "d", title: "Browser", kind: .defaultBrowser(fullScreen: true)),
             LaunchItem(id: "s", title: "Settings", kind: .internalDestination(.settings), iconSymbol: "gear"),
             LaunchItem(id: "x", title: "Exit", kind: .system(.exitToDesktop), iconSymbol: "xmark"),
         ]

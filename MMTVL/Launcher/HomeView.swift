@@ -54,6 +54,7 @@ struct HomeView: View {
         let item = items[index]
         return AppTileView(
             item: item,
+            title: launcher.title(for: item),
             icon: launcher.icon(for: item),
             isFocused: focus.index == index,
             isInstalled: launcher.isInstalled(item),

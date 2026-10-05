@@ -54,6 +54,7 @@ Record every architecture-level decision here. Sub plans may make local decision
 | D12 | Casting: **AirPlay = macOS's built-in AirPlay Receiver** (a setting, no code). Plex = Plex HTPC as a Plex Companion player. YouTube = "Link with TV code" in the TV UI. No Chromecast receiver. | Zero/low code and reliable. |
 | D13 | Prime Video and the generic browser are launched as **external apps** (Prime Video Mac app or Safari/Chrome). | DRM (Widevine/FairPlay) does not work reliably in our WKWebView. |
 | D14 | Multiview: up to **4 tiles** (2-up, 2×2), each its own mpv instance. Audio follows the focused tile. | Fits within the 5-connection limit with one spare for the guide preview. |
+| D15 | Launched apps open **full screen**. M1: Chromium browsers get `--start-fullscreen` (only works on a cold launch). M2: a general path that sets `AXFullScreen` on the app's main window through the Accessibility API, covering Safari, Prime Video and apps that are already running. The browser tile opens the **system default browser** (Brave). | TV use needs no window chrome. Accessibility is already required for D4, so the general path adds no new permission. |
 
 ## 5. Architecture overview
 
@@ -84,7 +85,7 @@ Status values: `Not planned` → `Planned` → `In progress` → `Done` (or `Blo
 |---|---|---|---|---|
 | M0 | Project bootstrap: Xcode project, test target, planning system, CLAUDE.md | — | Done | — |
 | M1 | Launcher shell & kiosk: borderless fullscreen window, home screen tiles, custom focus, launching external apps, Exit to Desktop | M0 | Done | [M1-launcher-shell.md](M1-launcher-shell.md) |
-| M2 | Input layer: remappable bindings, global Home (event tap + Accessibility onboarding), game controllers, cursor auto-hide, launch at login, sleep/wake behavior, signing with personal team | M1 | Not planned | — |
+| M2 | Input layer: remappable bindings, global Home (event tap + Accessibility onboarding), game controllers, cursor auto-hide, launch at login, sleep/wake behavior, signing with personal team, full screen for launched apps via Accessibility (D15) | M1 | Not planned | — |
 | M3 | YouTube: WKWebView `youtube.com/tv`, TV user agent, key mapping, **verify Parent code**, profile fallback if needed, verify Link-with-TV-code casting | M2 | Not planned | — |
 | M4 | IPTV core: Keychain-stored M3U/Xtream source, channel import, single EPG source, grid guide, mpv player, **rewind buffer** | M2 | Not planned | — |
 | M5 | Phone remote: LAN web server, pairing, D-pad/media/volume/text entry | M2 | Not planned | — |

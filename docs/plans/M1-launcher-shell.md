@@ -81,7 +81,7 @@ Default items, in order (one row of 5, then a second row):
 2. `youtube`: YouTube: `.internalDestination(.youtube)`, symbol `play.rectangle.fill`
 3. `iptv`: Live TV: `.internalDestination(.iptv)`, symbol `tv`
 4. `prime`: Prime Video: `.application("com.amazon.aiv.AIVApp")`
-5. `browser`: Safari: `.application("com.apple.Safari")`
+5. `browser`: Browser: `.defaultBrowser(fullScreen: true)`. Opens the system default browser (Brave on both Macs) and shows its own name and icon. *(Changed after completion; originally Safari. See Deviations.)*
 6. `exit`: Exit to Desktop: `.system(.exitToDesktop)`, symbol `rectangle.portrait.and.arrow.right`
 
 ```swift
@@ -173,20 +173,21 @@ Rules: left/right clamp within the row (no wrap). Up/down move to the adjacent r
 ## Manual verification
 
 On the dev Mac (kiosk mode, i.e. without `-windowed`):
-- [ ] Launch: full screen, no Dock/menu bar, clock correct, first tile focused.
-- [ ] Arrows move focus with animation. Focus can't leave the grid. Down/up between rows clamps the column.
-- [ ] Return on Safari launches Safari. Quitting Safari (⌘Q) returns to the launcher with Dock/menu bar hidden.
-- [ ] Launch Safari, ⌘Tab to Finder, quit Safari → launcher does **not** steal focus (L5).
-- [ ] YouTube / Live TV → placeholder. Esc returns to home with focus on the same tile.
-- [ ] Not-installed tile (e.g. Plex on the dev Mac) is dimmed and does nothing harmful.
-- [ ] Exit to Desktop → desktop with Dock/menu bar. Clicking the Dock icon → launcher back, full screen.
-- [ ] ⌘Q quits the app. ⌘Tab works at all times.
-- [ ] Change display resolution in System Settings → launcher re-fits.
-- [ ] Hover moves focus. Click launches.
+- [x] Launch: full screen, no Dock/menu bar, clock correct, first tile focused.
+- [x] Arrows move focus with animation. Focus can't leave the grid. Down/up between rows clamps the column.
+- [x] Return on Safari launches Safari. Quitting Safari (⌘Q) returns to the launcher with Dock/menu bar hidden.
+- [x] Launch Safari, ⌘Tab to Finder, quit Safari → launcher does **not** steal focus (L5).
+- [x] YouTube / Live TV → placeholder. Esc returns to home with focus on the same tile.
+- [x] Not-installed tile (e.g. Plex on the dev Mac) is dimmed and does nothing harmful.
+- [x] Exit to Desktop → desktop with Dock/menu bar. Clicking the Dock icon → launcher back, full screen.
+- [x] ⌘Q quits the app. ⌘Tab works at all times.
+- [x] Change display resolution in System Settings → launcher re-fits.
+- [x] Hover moves focus. Click launches.
 
 On the Mac mini / TV (when available):
 - [ ] Verify bundle IDs for Plex HTPC and Prime Video and fix the defaults if wrong.
 - [ ] Text and tiles are legible from the couch at 4K (HiDPI 1920×1080) and with the AVR in the chain.
+- [ ] The Browser tile shows "Brave Browser" and, when Brave isn't already running, opens it full screen.
 
 ## Risks & fallbacks
 
@@ -207,3 +208,4 @@ On the Mac mini / TV (when available):
 - **2026-10-05, step 6:** Extra Theme tokens: fonts (`clockFont` = `.title2` as planned, tile title/caption, symbol size), `rowsTopFraction`, `unavailableOpacity`, `shakeDistance`, `tileFill`, text colors.
 - **2026-10-05, test hosting:** Tests are hosted in the app, so `xcodebuild test` used to launch MMTVL in kiosk mode and take over the screen. With the user's OK, `AppDelegate` now skips building the window and input wiring when `AppEnvironment.isRunningTests` is true (`XCTestConfigurationFilePath` is set).
 - **2026-10-05, verification notes:** Automated in windowed mode on the dev Mac (keys sent via System Events, results read from the unified log). Verified: arrows/Return/Esc reach `AppRouter`. Safari launches, and quitting it returns MMTVL to the front. Launch Safari → Finder → quit Safari leaves Finder frontmost (L5). Exit to Desktop hides the app, and reopening shows it again. A home screen render through `NSHostingView` matched the design. Kiosk-mode checks (Dock/menu bar hiding, animation feel, resolution change, hover/click) still need a human.
+- **2026-10-05, follow-up (user-approved):** The Safari tile became a **default browser** tile: a new `LaunchItem.Kind.defaultBrowser(fullScreen:)`, resolved with `NSWorkspace.urlForApplication(toOpen:)`. The tile shows the browser's own name and icon. For Chromium browsers (Brave, Chrome, Edge, Vivaldi, Chromium), `AppLauncher` passes `--start-fullscreen`. Chromium ignores the flag when the browser is already running. Checked with an isolated Brave instance (temp `--user-data-dir`): the window goes full screen with the toolbar visible after about 10–15 s on a fresh profile. `--kiosk` (no toolbar at all) was rejected as too locked down for general browsing. Full screen for Safari, Prime Video and already-running apps moves to M2 via Accessibility (master plan D15). Existing installs keep their old `launch-items.json`; delete it to get the new default.

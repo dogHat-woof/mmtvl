@@ -3,6 +3,7 @@ import SwiftUI
 /// One home screen tile: a 5:3 rounded rect with the app icon or an SF Symbol.
 struct AppTileView: View {
     let item: LaunchItem
+    let title: String
     let icon: NSImage?
     let isFocused: Bool
     let isInstalled: Bool
@@ -29,7 +30,7 @@ struct AppTileView: View {
                     }
                 }
 
-            Text(item.title)
+            Text(title)
                 .font(Theme.tileTitleFont)
                 .foregroundStyle(Theme.primaryText)
                 .lineLimit(1)

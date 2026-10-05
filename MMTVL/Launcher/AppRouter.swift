@@ -67,7 +67,7 @@ final class AppRouter {
         let item = items[index]
 
         switch item.kind {
-        case .application, .url:
+        case .application, .url, .defaultBrowser:
             guard launcher.isInstalled(item) else {
                 // L6: not-installed tiles only shake.
                 shakeTriggers[item.id, default: 0] += 1
