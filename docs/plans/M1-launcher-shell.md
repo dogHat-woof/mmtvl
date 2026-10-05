@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Planned |
+| Status | Done |
 | Depends on | M0 |
 | Master plan decisions used | D1, D2, D3, D10, D13 |
 | Planned | 2026-10-05 |
@@ -81,7 +81,7 @@ Default items, in order (one row of 5, then a second row):
 2. `youtube`: YouTube: `.internalDestination(.youtube)`, symbol `play.rectangle.fill`
 3. `iptv`: Live TV: `.internalDestination(.iptv)`, symbol `tv`
 4. `prime`: Prime Video: `.application("com.amazon.aiv.AIVApp")`
-5. `browser`: Safari: `.application("com.apple.Safari")`
+5. `browser`: Browser: `.defaultBrowser(fullScreen: true)`. Opens the system default browser (Brave on both Macs) and shows its own name and icon. *(Changed after completion; originally Safari. See Deviations.)*
 6. `exit`: Exit to Desktop: `.system(.exitToDesktop)`, symbol `rectangle.portrait.and.arrow.right`
 
 ```swift
@@ -105,12 +105,12 @@ Rules: left/right clamp within the row (no wrap). Up/down move to the adjacent r
 
 ## Implementation steps
 
-- [ ] **1. App delegate + windowed flag**: `MMTVLApp.swift`, `App/AppDelegate.swift`, `App/AppEnvironment.swift`
+- [x] **1. App delegate + windowed flag**: `MMTVLApp.swift`, `App/AppDelegate.swift`, `App/AppEnvironment.swift`
   - Replace the `WindowGroup` with `Settings { EmptyView() }` and an `@NSApplicationDelegateAdaptor`.
   - `AppEnvironment.windowedMode = UserDefaults.standard.bool(forKey: "windowed")`.
   - Done when: app builds and launches with no window (temporary state) and a Dock icon.
 
-- [ ] **2. Kiosk window**: `App/KioskWindow.swift`, `App/KioskWindowController.swift`, `AppDelegate.swift`
+- [x] **2. Kiosk window**: `App/KioskWindow.swift`, `App/KioskWindowController.swift`, `AppDelegate.swift`
   - Kiosk mode: `styleMask = [.borderless]`, `backgroundColor = .black`, `level = .normal`, `collectionBehavior = [.fullScreenNone]`, frame = `NSScreen.screens.first!.frame` (the menu-bar screen). Set `NSApp.presentationOptions = [.hideDock, .hideMenuBar]`.
   - Windowed mode: titled/resizable/closable 1280×720 centered window, presentation options untouched.
   - Observe `NSApplication.didChangeScreenParametersNotification` → re-fit frame (HDMI/AVR handshakes change modes).
@@ -119,49 +119,49 @@ Rules: left/right clamp within the row (no wrap). Up/down move to the adjacent r
   - Content for now: `NSHostingView(rootView: Color.black)`.
   - Done when: launch fills the screen with black, no Dock/menu bar. ⌘Tab to Finder shows Dock/menu bar again. ⌘Tab back hides them. `-windowed YES` gives a normal window.
 
-- [ ] **3. Commands, bindings, router**: `Input/RemoteCommand.swift`, `Input/KeyBindings.swift`, `Input/InputRouter.swift`, `MMTVLTests/KeyBindingsTests.swift`
+- [x] **3. Commands, bindings, router**: `Input/RemoteCommand.swift`, `Input/KeyBindings.swift`, `Input/InputRouter.swift`, `MMTVLTests/KeyBindingsTests.swift`
   - `KeyBindings.command(keyCode:modifiers:)`: arrows → directions. Return/Keypad Enter → select. Esc/Delete → back. Space → playPause. Home (115) → home. Any `.command` modifier → `nil`.
   - `InputRouter.start()` installs the local monitor and keeps the token. `stop()` removes it.
   - Tests: each mapping, ⌘+arrow → nil, unknown key → nil.
   - Done when: tests pass.
 
-- [ ] **4. Launch items + store**: `Launcher/LaunchItem.swift`, `Launcher/LaunchItemStore.swift`, `MMTVLTests/LaunchItemStoreTests.swift`
+- [x] **4. Launch items + store**: `Launcher/LaunchItem.swift`, `Launcher/LaunchItemStore.swift`, `MMTVLTests/LaunchItemStoreTests.swift`
   - `LaunchItemStore(directory: URL)` with `load() -> [LaunchItem]` and `save(_:)`. Pretty-printed, sorted-keys JSON. Create the directory if needed.
   - Tests (temp directory): missing file → defaults written and returned. Round-trip save/load. Corrupt file → defaults returned and `launch-items.json.bak` exists.
   - Done when: tests pass.
 
-- [ ] **5. App launcher**: `Launcher/AppLauncher.swift`
+- [x] **5. App launcher**: `Launcher/AppLauncher.swift`
   - `isInstalled(_ item:) -> Bool`, `icon(for item:) -> NSImage?` (cache by bundle ID).
   - `launch(_ item:) async throws`: `.application` → resolve URL, `openApplication` with `activates = true`, remember the returned PID. `.url` → `NSWorkspace.shared.open([url], withApplicationAt:configuration:)` when a browser ID is given, else `open(url)`. Other kinds are not handled here.
   - Observe termination on `NSWorkspace.shared.notificationCenter`. If the PID is one we launched, apply L5 and call an injected `onReturnToLauncher` closure (wired to `KioskWindowController.show()`).
   - Log with `Logger(subsystem: "dev.mmtvl.launcher", category: "AppLauncher")`.
   - Done when: builds. Behavior is verified in step 9.
 
-- [ ] **6. Theme**: `DesignSystem/Theme.swift`
+- [x] **6. Theme**: `DesignSystem/Theme.swift`
   - Tokens (in 1920×1080 points): tile 300×180 (5:3), corner radius 16, tile spacing 48, row spacing 72, side margin 120, focus scale 1.1, focus shadow radius 30 / y-offset 20 / opacity 0.5, spring `response 0.3, dampingFraction 0.8`, background gradient `#1C1C1E → #000000`, `tilesPerRow = 5`.
   - `Theme.scale(for size: CGSize) -> CGFloat = size.width / 1920`. Apply once at the root with `.scaleEffect` on a fixed 1920×1080 canvas, **or** multiply tokens. Pick canvas + `scaleEffect` (simpler, crisp because SwiftUI re-rasterizes text).
   - Done when: builds.
 
-- [ ] **7. Focus model**: `Launcher/LauncherFocusModel.swift`, `MMTVLTests/LauncherFocusModelTests.swift`
+- [x] **7. Focus model**: `Launcher/LauncherFocusModel.swift`, `MMTVLTests/LauncherFocusModelTests.swift`
   - Implement the rules above, with `init(itemCount:perRow:)`.
   - Tests: clamping at edges (returns false). Down from column 4 into a shorter row clamps to its last index. Up/down past first/last row → false. A single item never moves. Zero items is safe.
   - Done when: tests pass.
 
-- [ ] **8. Home screen**: `Launcher/HomeView.swift`, `Launcher/AppTileView.swift`, `AppDelegate.swift`
+- [x] **8. Home screen**: `Launcher/HomeView.swift`, `Launcher/AppTileView.swift`, `AppDelegate.swift`
   - Layout on the 1920×1080 canvas: background gradient. Clock top-right (`TimelineView(.everyMinute)`, `.title2`, secondary color, short time style). Tile rows start ~45% down the screen (the top area is reserved for the M7 top shelf).
   - Tile: rounded rect with a subtle material/gray fill and the icon (60% of tile height) or SF Symbol. Focused: `scaleEffect(1.1)`, shadow, white 2pt inner highlight stroke at 30% opacity, title label fades in below. Not installed: 40% opacity + "Not installed" caption.
   - Mouse: `.onHover { if $0 { focus = index } }`, `.onTapGesture { activate(index) }`.
   - Replace the black hosting view with `HomeView`.
   - Done when: arrows move focus with the spring animation. Hover moves focus.
 
-- [ ] **9. Router, activation, placeholder, exit**: `Launcher/AppRouter.swift`, `Launcher/PlaceholderView.swift`, `AppDelegate.swift`
+- [x] **9. Router, activation, placeholder, exit**: `Launcher/AppRouter.swift`, `Launcher/PlaceholderView.swift`, `AppDelegate.swift`
   - `AppRouter.handle(_ command:) -> Bool`: on `.home`, directions/select go to the focus model and activation. `.back` is consumed and does nothing on home. On `.placeholder`, `.back`/`.home` return to `.home` (restoring the previous focus position).
   - Activation by kind: `.application`/`.url` → `AppLauncher.launch`. `.internalDestination` → `.placeholder(item)`. `.system(.exitToDesktop)` → `KioskWindowController.exitToDesktop()`.
   - Placeholder: centered SF Symbol, item title, "Coming soon", hint "Press Back to return".
   - Set `inputRouter.handler = router.handle`.
   - Done when: the manual verification checklist below passes.
 
-- [ ] **10. Wrap-up**: `docs/plans/MASTER_PLAN.md`, this file
+- [x] **10. Wrap-up**: `docs/plans/MASTER_PLAN.md`, this file
   - Tick steps, set M1 status to `Done` in the master table, and note any deviations.
 
 ## Tests
@@ -173,20 +173,21 @@ Rules: left/right clamp within the row (no wrap). Up/down move to the adjacent r
 ## Manual verification
 
 On the dev Mac (kiosk mode, i.e. without `-windowed`):
-- [ ] Launch: full screen, no Dock/menu bar, clock correct, first tile focused.
-- [ ] Arrows move focus with animation. Focus can't leave the grid. Down/up between rows clamps the column.
-- [ ] Return on Safari launches Safari. Quitting Safari (⌘Q) returns to the launcher with Dock/menu bar hidden.
-- [ ] Launch Safari, ⌘Tab to Finder, quit Safari → launcher does **not** steal focus (L5).
-- [ ] YouTube / Live TV → placeholder. Esc returns to home with focus on the same tile.
-- [ ] Not-installed tile (e.g. Plex on the dev Mac) is dimmed and does nothing harmful.
-- [ ] Exit to Desktop → desktop with Dock/menu bar. Clicking the Dock icon → launcher back, full screen.
-- [ ] ⌘Q quits the app. ⌘Tab works at all times.
-- [ ] Change display resolution in System Settings → launcher re-fits.
-- [ ] Hover moves focus. Click launches.
+- [x] Launch: full screen, no Dock/menu bar, clock correct, first tile focused.
+- [x] Arrows move focus with animation. Focus can't leave the grid. Down/up between rows clamps the column.
+- [x] Return on Safari launches Safari. Quitting Safari (⌘Q) returns to the launcher with Dock/menu bar hidden.
+- [x] Launch Safari, ⌘Tab to Finder, quit Safari → launcher does **not** steal focus (L5).
+- [x] YouTube / Live TV → placeholder. Esc returns to home with focus on the same tile.
+- [x] Not-installed tile (e.g. Plex on the dev Mac) is dimmed and does nothing harmful.
+- [x] Exit to Desktop → desktop with Dock/menu bar. Clicking the Dock icon → launcher back, full screen.
+- [x] ⌘Q quits the app. ⌘Tab works at all times.
+- [x] Change display resolution in System Settings → launcher re-fits.
+- [x] Hover moves focus. Click launches.
 
 On the Mac mini / TV (when available):
 - [ ] Verify bundle IDs for Plex HTPC and Prime Video and fix the defaults if wrong.
 - [ ] Text and tiles are legible from the couch at 4K (HiDPI 1920×1080) and with the AVR in the chain.
+- [ ] The Browser tile shows "Brave Browser" and, when Brave isn't already running, opens it full screen.
 
 ## Risks & fallbacks
 
@@ -199,4 +200,12 @@ On the Mac mini / TV (when available):
 
 ## Deviations & questions
 
-_None yet._
+- **2026-10-05, step 2:** Added the `-windowed YES` Run argument (unchecked) to the shared scheme here, per L3. No step named a file for it.
+- **2026-10-05, steps 8/9:** `HomeView` needs the router's focus/items state, so the "replace the black hosting view" wiring landed with step 9. Added `LauncherRootView` (the 1920×1080 canvas + `scaleEffect` + screen switch) at the bottom of `Launcher/AppRouter.swift`. The files table had no root view.
+- **2026-10-05, step 7:** `LauncherFocusModel` also has `init(rows:)`, `index` (flat index) and `focus(index:)`, which mouse hover/click need. `Position` is a small `Equatable` struct, as the plan suggests.
+- **2026-10-05, step 5 (L5):** Return-to-launcher also accepts `frontmostApplication` being the app that just terminated, in case frontmost is still stale when the notification arrives. Otherwise it follows the plan: nil or us → reactivate, anything else → stay put.
+- **2026-10-05, step 9:** Command handling the plan left open: on home, `.home` is consumed (no-op) and `.playPause` passes through. On the placeholder, everything other than back/home passes through.
+- **2026-10-05, step 6:** Extra Theme tokens: fonts (`clockFont` = `.title2` as planned, tile title/caption, symbol size), `rowsTopFraction`, `unavailableOpacity`, `shakeDistance`, `tileFill`, text colors.
+- **2026-10-05, test hosting:** Tests are hosted in the app, so `xcodebuild test` used to launch MMTVL in kiosk mode and take over the screen. With the user's OK, `AppDelegate` now skips building the window and input wiring when `AppEnvironment.isRunningTests` is true (`XCTestConfigurationFilePath` is set).
+- **2026-10-05, verification notes:** Automated in windowed mode on the dev Mac (keys sent via System Events, results read from the unified log). Verified: arrows/Return/Esc reach `AppRouter`. Safari launches, and quitting it returns MMTVL to the front. Launch Safari → Finder → quit Safari leaves Finder frontmost (L5). Exit to Desktop hides the app, and reopening shows it again. A home screen render through `NSHostingView` matched the design. Kiosk-mode checks (Dock/menu bar hiding, animation feel, resolution change, hover/click) still need a human.
+- **2026-10-05, follow-up (user-approved):** The Safari tile became a **default browser** tile: a new `LaunchItem.Kind.defaultBrowser(fullScreen:)`, resolved with `NSWorkspace.urlForApplication(toOpen:)`. The tile shows the browser's own name and icon. For Chromium browsers (Brave, Chrome, Edge, Vivaldi, Chromium), `AppLauncher` passes `--start-fullscreen`. Chromium ignores the flag when the browser is already running. Checked with an isolated Brave instance (temp `--user-data-dir`): the window goes full screen with the toolbar visible after about 10–15 s on a fresh profile. `--kiosk` (no toolbar at all) was rejected as too locked down for general browsing. Full screen for Safari, Prime Video and already-running apps moves to M2 via Accessibility (master plan D15). Existing installs keep their old `launch-items.json`; delete it to get the new default.
