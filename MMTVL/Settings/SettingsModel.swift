@@ -23,7 +23,10 @@ final class SettingsModel {
     private(set) var iptv: IPTVSettingsStatus
     /// The last paste error; the paste row's detail. Cleared on any push/pop and on a successful paste.
     private(set) var pasteMessage: String?
+    private(set) var phoneRemote: PhoneRemoteSettingsStatus
     @ObservationIgnored let environment: SettingsEnvironment
+    /// The phone pairing code is valid while Pair a Phone shows (M5 L3).
+    @ObservationIgnored private var isPairing = false
 
     init(settings: AppSettings, items: [LaunchItem], environment: SettingsEnvironment) {
         self.settings = settings
@@ -33,6 +36,7 @@ final class SettingsModel {
         loginItemStatus = environment.loginItemStatus()
         hasPIN = environment.hasPIN()
         iptv = environment.iptvStatus()
+        phoneRemote = environment.phoneRemoteStatus()
     }
 
     var page: SettingsPage { stack[stack.count - 1].page }
@@ -54,6 +58,15 @@ final class SettingsModel {
         stack = [PageState(page: .root, focusedRowID: nil)]
         movingTileID = nil
         refreshStatus()
+        syncPairing()
+    }
+
+    /// Settings closed (the router went home): ends phone pairing.
+    func screenDidClose() {
+        guard isPairing else { return }
+        isPairing = false
+        environment.setPhonePairing(false)
+        refreshStatus()
     }
 
     /// L10: re-read on open, after toggles, after a PIN flow and when the app becomes active.
@@ -62,6 +75,7 @@ final class SettingsModel {
         loginItemStatus = environment.loginItemStatus()
         hasPIN = environment.hasPIN()
         iptv = environment.iptvStatus()
+        phoneRemote = environment.phoneRemoteStatus()
     }
 
     /// Returns false only for commands it doesn't use, and for Back on the root page (the router then goes home).
@@ -179,6 +193,10 @@ final class SettingsModel {
         case .removeIPTVSource:
             environment.removeIPTVSource()
             pop()
+        case .forgetAllPhones:
+            environment.forgetAllPhones()
+            refreshStatus()
+            pop()
         }
     }
 
@@ -206,12 +224,23 @@ final class SettingsModel {
             installedApps = nil
             Task { await loadInstalledApps() }
         }
+        syncPairing()
     }
 
     private func pop() {
         guard stack.count > 1 else { return }
         pasteMessage = nil
         stack.removeLast()
+        syncPairing()
+    }
+
+    /// M5 L3: pairing is active exactly while the Pair a Phone page shows.
+    private func syncPairing() {
+        let active = page == .pairPhone
+        guard active != isPairing else { return }
+        isPairing = active
+        environment.setPhonePairing(active)
+        refreshStatus()
     }
 
     private func setFocus(_ id: String?) {

@@ -25,6 +25,8 @@ final class InputRouter {
     func start() {
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .systemDefined]) { [weak self] event in
+            // L6: our own synthetic events (phone text, keys for other apps) pass through untouched.
+            if let cg = event.cgEvent, SyntheticInput.isOwn(cg) { return event }
             guard let self else { return event }
             switch event.type {
             case .keyDown: return self.handleKeyDown(event) ? nil : event

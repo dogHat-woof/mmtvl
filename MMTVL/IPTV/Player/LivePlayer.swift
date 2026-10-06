@@ -43,6 +43,9 @@ final class MPVPlayerController: LivePlayer {
     @ObservationIgnored private var pollTimer: Timer?
     @ObservationIgnored private var liveEdge = LiveEdgeSmoother()
     @ObservationIgnored private let sleep = SleepAssertion()
+    /// MMTVL's own volume (M5 L9), kept across cores and files.
+    @ObservationIgnored private var volumeLevel = 100
+    @ObservationIgnored private var volumeMuted = false
     @ObservationIgnored private let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "MPV")
 
     /// Creates the core and view without playing, so the view can get its GL context early.
@@ -53,6 +56,7 @@ final class MPVPlayerController: LivePlayer {
                 Task { @MainActor in self?.handle(event) }
             }
             self.mpv = mpv
+            if volumeLevel != 100 || volumeMuted { applyVolume() }
             let view = MPVVideoView(mpv: mpv)
             view.videoLayer.onReady = { [weak self] in
                 Task { @MainActor in self?.loadPending() }
@@ -110,7 +114,20 @@ final class MPVPlayerController: LivePlayer {
         seek(to: timeshift.livePosition)
     }
 
+    /// M5 L9: the phone's in-app volume. Not on `LivePlayer`; AppDelegate calls the concrete class.
+    func setVolume(_ level: Int, muted: Bool) {
+        volumeLevel = level
+        volumeMuted = muted
+        applyVolume()
+    }
+
     // MARK: - Private
+
+    private func applyVolume() {
+        guard let mpv else { return }
+        mpv.setString("volume", "\(volumeLevel)")
+        mpv.setString("mute", volumeMuted ? "yes" : "no")
+    }
 
     private func seek(to position: Double) {
         mpv?.command(["seek", String(format: "%.3f", position), "absolute+keyframes"])

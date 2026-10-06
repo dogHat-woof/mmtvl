@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<title>MMTVL Remote</title>
+<link rel="stylesheet" href="remote.css">
+<script src="remote.js" defer></script>
+</head>
+<body>
+<main id="connecting" class="view center">
+  <p class="muted">Connecting to MMTVL…</p>
+</main>
+
+<main id="pairing" class="view center" hidden>
+  <p class="brand">MMTVL Remote</p>
+  <h1>Pair with MMTVL</h1>
+  <p class="muted">On the TV, open Settings → Phone Remote → Pair a Phone, then enter the code.</p>
+  <form id="pair-form" autocomplete="off">
+    <input id="pair-code" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="one-time-code" placeholder="0000" aria-label="Pairing code">
+    <button type="submit" class="pill primary">Pair</button>
+  </form>
+  <p id="pair-error" class="error" role="alert"></p>
+</main>
+
+<main id="remote" class="view" hidden>
+  <header class="top-bar">
+    <span class="dot"></span><span id="front-app">MMTVL</span>
+  </header>
+
+  <div class="dpad">
+    <button type="button" class="dir up" data-command="up" data-repeat aria-label="Up">▲</button>
+    <button type="button" class="dir left" data-command="left" data-repeat aria-label="Left">◀</button>
+    <button type="button" class="ok" data-command="select" aria-label="OK">OK</button>
+    <button type="button" class="dir right" data-command="right" data-repeat aria-label="Right">▶</button>
+    <button type="button" class="dir down" data-command="down" data-repeat aria-label="Down">▼</button>
+  </div>
+
+  <div class="row">
+    <button type="button" class="pill" data-command="back" aria-label="Back">↩&#xFE0E;</button>
+    <button type="button" class="pill" data-command="home" aria-label="Home">⌂&#xFE0E;</button>
+    <button type="button" class="pill" data-command="playPause" aria-label="Play or pause">⏯&#xFE0E;</button>
+  </div>
+  <div class="row">
+    <button type="button" class="pill" data-command="rewind" aria-label="Rewind">⏪&#xFE0E;</button>
+    <button type="button" class="pill" id="keyboard-open" aria-label="Keyboard">⌨&#xFE0E;</button>
+    <button type="button" class="pill" data-command="fastForward" aria-label="Fast forward">⏩&#xFE0E;</button>
+  </div>
+  <div class="row">
+    <button type="button" class="pill" data-volume="down" aria-label="Volume down"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16 9.5a3.5 3.5 0 0 1 0 5" /></svg></button>
+    <button type="button" class="pill" data-volume="mute" aria-label="Mute"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16.5 9.5l5 5M21.5 9.5l-5 5" /></svg></button>
+    <button type="button" class="pill" data-volume="up" aria-label="Volume up"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16 9.5a3.5 3.5 0 0 1 0 5" /><path d="M18.5 7a7 7 0 0 1 0 10" /></svg></button>
+  </div>
+
+  <section id="keyboard" hidden>
+    <form id="text-form" autocomplete="off">
+      <input id="text" type="text" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search" placeholder="Type here" aria-label="Text">
+      <button type="button" id="keyboard-close" class="pill primary">Done</button>
+    </form>
+  </section>
+</main>
+
+<div id="toast" role="status" hidden></div>
+</body>
+</html>

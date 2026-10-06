@@ -31,4 +31,12 @@ struct YouTubeKeyMapTests {
         #expect(script.contains("'hidden'"))
         #expect(script.contains("visibilitychange"))
     }
+
+    @Test func volumeScripts() {
+        #expect(YouTubeKeyMap.volumeScript.contains("window.__mmtvlSetVolume ="))
+        #expect(YouTubeKeyMap.setVolumeScript(level: 85, muted: true)
+            == "window.__mmtvlSetVolume && window.__mmtvlSetVolume(0.85, true); 'ok'")
+        #expect(YouTubeKeyMap.setVolumeScript(level: 100, muted: false)
+            == "window.__mmtvlSetVolume && window.__mmtvlSetVolume(1.0, false); 'ok'")
+    }
 }

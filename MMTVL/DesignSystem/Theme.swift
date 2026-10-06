@@ -69,6 +69,8 @@ enum Theme {
     static let settingsSectionSpacing: CGFloat = 40
     static let settingsRowIconSize: CGFloat = 48
     static let settingsPageImageSize: CGFloat = 280
+    /// The phone pairing QR code (M5); fits the side column and reads from the couch.
+    static let settingsQRCodeSize: CGFloat = 440
 
     static let settingsRowFocusScale: CGFloat = 1.03
     static let focusedRowFill = Color.white

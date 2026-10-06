@@ -21,6 +21,8 @@ nonisolated private func globalEventTapCallback(
     userInfo: UnsafeMutableRawPointer?
 ) -> Unmanaged<CGEvent>? {
     guard let userInfo else { return Unmanaged.passUnretained(event) }
+    // L6: our own synthetic events pass through untouched.
+    if SyntheticInput.isOwn(event) { return Unmanaged.passUnretained(event) }
 
     let tapEvent: TapEvent
     switch type {

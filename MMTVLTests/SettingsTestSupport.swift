@@ -22,6 +22,9 @@ final class SettingsRecorder {
     var iptvRefreshes = 0
     var iptvRemovals = 0
     var playlistGuideUses = 0
+    var phoneRemote = PhoneRemoteSettingsStatus()
+    var pairingCalls: [Bool] = []
+    var forgets = 0
 
     init(trusted: Bool, loginStatus: LoginItemStatus) {
         self.trusted = trusted
@@ -64,7 +67,10 @@ func makeSettingsModel(
         },
         useIPTVPlaylistGuide: { recorder.playlistGuideUses += 1 },
         refreshIPTV: { recorder.iptvRefreshes += 1 },
-        removeIPTVSource: { recorder.iptvRemovals += 1 }
+        removeIPTVSource: { recorder.iptvRemovals += 1 },
+        phoneRemoteStatus: { recorder.phoneRemote },
+        setPhonePairing: { recorder.pairingCalls.append($0) },
+        forgetAllPhones: { recorder.forgets += 1 }
     )
     return (SettingsModel(settings: settings, items: items, environment: environment), recorder)
 }
