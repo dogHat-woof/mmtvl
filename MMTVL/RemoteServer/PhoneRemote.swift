@@ -27,6 +27,8 @@ struct PhoneRemoteEnvironment {
     var makeCode: () -> String
     /// PhoneToken.make.
     var makeToken: () -> String
+    /// M7b: PhonePointer.perform (trackpad).
+    var pointer: (PointerAction) -> Void
 }
 
 /// The phone remote coordinator (D24): auth, pairing, command routing, text, volume and status pushes.
@@ -62,7 +64,12 @@ final class PhoneRemote {
         /// nil = unauthenticated.
         var phoneID: String?
         var lastText = ""
+        /// M7b L13: when this session last got the Accessibility toast for pointer messages.
+        var lastAccessToast: Date?
     }
+
+    /// L13: pointer messages arrive ~60 times a second; the toast repeats at most this often.
+    static let pointerToastInterval: TimeInterval = 5
 
     init(transport: RemoteTransport, store: PairedPhoneStore, environment: PhoneRemoteEnvironment) {
         self.transport = transport
@@ -107,6 +114,17 @@ final class PhoneRemote {
             case .sentKeys: transport.send(.volume(level: nil, muted: nil), to: session)
             case .unavailable(let message): transport.send(.toast(message), to: session)
             }
+        case .pointer(let action):
+            guard state.phoneID != nil else { return }
+            guard environment.canPostEvents() else {
+                let now = environment.now()
+                if state.lastAccessToast.map({ now.timeIntervalSince($0) >= Self.pointerToastInterval }) ?? true {
+                    state.lastAccessToast = now
+                    transport.send(.toast(Self.accessibilityMessage), to: session)
+                }
+                return
+            }
+            environment.pointer(action)
         }
     }
 

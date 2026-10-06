@@ -11,6 +11,8 @@ nonisolated enum ClientMessage: Equatable, Sendable {
     case text(String)
     case submit
     case volume(VolumeAction)
+    /// M7b L11: the trackpad.
+    case pointer(PointerAction)
 
     /// nil for malformed JSON, an unknown type, a missing field or an unknown command/action.
     static func decode(_ data: Data) -> ClientMessage? {
@@ -31,6 +33,12 @@ nonisolated enum ClientMessage: Equatable, Sendable {
             return .submit
         case "volume":
             return wire.action.flatMap(VolumeAction.init(rawValue:)).map { .volume($0) }
+        case "pointer":
+            return wire.delta.map { .pointer(.move(dx: $0.dx, dy: $0.dy)) }
+        case "scroll":
+            return wire.delta.map { .pointer(.scroll(dx: $0.dx, dy: $0.dy)) }
+        case "click":
+            return wire.button.flatMap(PointerButton.init(rawValue:)).map { .pointer(.click($0)) }
         default:
             return nil
         }
@@ -94,4 +102,17 @@ nonisolated private struct RemoteWireMessage: Codable {
     var launcherActive: Bool?
     var level: Double?
     var muted: Bool?
+    /// M7b L11: trackpad deltas (CSS pixels) and click button.
+    var dx: Double?
+    var dy: Double?
+    var button: String?
+
+    /// Both deltas present, finite and at most `PointerMath.maxDelta` in magnitude.
+    var delta: (dx: Double, dy: Double)? {
+        guard let dx, let dy,
+              dx.isFinite, dy.isFinite,
+              abs(dx) <= PointerMath.maxDelta, abs(dy) <= PointerMath.maxDelta
+        else { return nil }
+        return (dx, dy)
+    }
 }

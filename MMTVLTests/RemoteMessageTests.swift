@@ -19,6 +19,23 @@ struct RemoteMessageTests {
         #expect(decode(#"{"type":"volume","action":"mute"}"#) == .volume(.mute))
     }
 
+    @Test func decodesPointerMessages() {
+        #expect(decode(#"{"type":"pointer","dx":3.5,"dy":-2}"#) == .pointer(.move(dx: 3.5, dy: -2)))
+        #expect(decode(#"{"type":"scroll","dx":0,"dy":12}"#) == .pointer(.scroll(dx: 0, dy: 12)))
+        #expect(decode(#"{"type":"click","button":"left"}"#) == .pointer(.click(.left)))
+        #expect(decode(#"{"type":"click","button":"right"}"#) == .pointer(.click(.right)))
+        #expect(decode(#"{"type":"pointer","dx":1000,"dy":-1000}"#) == .pointer(.move(dx: 1000, dy: -1000)))
+    }
+
+    @Test func rejectsInvalidPointerMessages() {
+        #expect(decode(#"{"type":"pointer","dx":3}"#) == nil)
+        #expect(decode(#"{"type":"scroll","dy":3}"#) == nil)
+        #expect(decode(#"{"type":"pointer","dx":5000,"dy":0}"#) == nil)
+        #expect(decode(#"{"type":"scroll","dx":0,"dy":-1000.5}"#) == nil)
+        #expect(decode(#"{"type":"click","button":"middle"}"#) == nil)
+        #expect(decode(#"{"type":"click"}"#) == nil)
+    }
+
     @Test func rejectsInvalidClientMessages() {
         #expect(decode(#"{"type":"jump"}"#) == nil)
         #expect(decode(#"{"type":"command","command":"jump"}"#) == nil)

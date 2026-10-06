@@ -675,7 +675,7 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
     - Escape during mirroring → full screen comes back within ~3 s (or Escape does nothing).
     - Settings → Casting → Android shows Ready / Mirroring live.
 
-- [ ] **9. Trackpad: Mac side**: `Input/PhonePointer.swift` (new), `Input/SyntheticInput.swift`, `RemoteServer/RemoteMessage.swift`, `RemoteServer/PhoneRemote.swift`, `App/AppDelegate.swift`, `MMTVLTests/PointerMathTests.swift` (new), `MMTVLTests/RemoteMessageTests.swift`, `MMTVLTests/PhoneRemoteTests.swift`
+- [x] **9. Trackpad: Mac side**: `Input/PhonePointer.swift` (new), `Input/SyntheticInput.swift`, `RemoteServer/RemoteMessage.swift`, `RemoteServer/PhoneRemote.swift`, `App/AppDelegate.swift`, `MMTVLTests/PointerMathTests.swift` (new), `MMTVLTests/RemoteMessageTests.swift`, `MMTVLTests/PhoneRemoteTests.swift`
   - `RemoteWireMessage` gains `dx: Double?`, `dy: Double?`, `button: String?`. `ClientMessage.pointer(PointerAction)` decoded from types `pointer` (`.move`), `scroll` (`.scroll`) — both need finite `dx` and `dy` with `abs ≤ PointerMath.maxDelta` — and `click` (`PointerButton(rawValue:)`).
   - `PhoneRemoteEnvironment.pointer: (PointerAction) -> Void`. `receive`: authenticated only; `environment.canPostEvents()` false → the Accessibility toast at most every 5 s per session (store `lastAccessToast: Date?` in `Session`, use `environment.now()`), else `environment.pointer(action)`.
   - `SyntheticInput`: `pointerLocation`, `movePointer(to:delta:)`, `click(_:at:clickCount:)`, `scroll(wheel1:wheel2:)`, `activeDisplayBounds()` per *Research*, all through `makeSource()`/`post(_:)` so they carry the marker.

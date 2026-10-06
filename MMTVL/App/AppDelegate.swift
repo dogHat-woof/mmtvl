@@ -28,6 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var volume: VolumeController?
     private var appActivationObserver: NSObjectProtocol?
     private var castReceiver: CastReceiver?
+    /// M7b D31: the phone trackpad.
+    private let phonePointer = PhonePointer()
     /// M7b D32: Android screen mirroring through Reflector.
     private var reflector: ReflectorMonitor?
     /// M7b L15: the last AirPlay probe; refreshed when Settings → Casting opens.
@@ -191,7 +193,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             volume: { [weak volume] action in volume?.perform(action) ?? .unavailable("Volume can't be changed here") },
             now: { Date() },
             makeCode: { PairingCode.random() },
-            makeToken: { PhoneToken.make() }
+            makeToken: { PhoneToken.make() },
+            pointer: { [weak self] in self?.phonePointer.perform($0) }
         ))
         server.onMessage = { [weak phoneRemote] id, data in phoneRemote?.receive(data, from: id) }
         server.onSessionClosed = { [weak phoneRemote] id in phoneRemote?.sessionClosed(id) }
