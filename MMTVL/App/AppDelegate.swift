@@ -28,6 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var volume: VolumeController?
     private var appActivationObserver: NSObjectProtocol?
     private var castReceiver: CastReceiver?
+    /// M7b D32: Android screen mirroring through Reflector.
+    private var reflector: ReflectorMonitor?
     /// M7b L15: the last AirPlay probe; refreshed when Settings → Casting opens.
     private var airPlayState: AirPlayReceiverState = .unknown
 
@@ -103,7 +105,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             router?.settings.refreshStatus()
             router?.shelfContentChanged()
         }
-        inputRouter.handler = router.handle
+        // M7b L21: Home on MMTVL also ends a mirroring session.
+        inputRouter.handler = { [weak self, weak router] command in
+            if command == .home { self?.endMirroringIfNeeded() }
+            return router?.handle(command) ?? false
+        }
         inputRouter.onScrollWheel = { [weak router] deltaY, precise in router?.scrollWheel(deltaY: deltaY, precise: precise) }
         inputRouter.onGlobalCommand = { [weak self] command in self?.handleGlobal(command) }
         // Reads the current setting, which Settings can change live.
@@ -127,6 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setUpCasting()
 
         windowController.show()
+        setUpReflector()
 
         // M4 L4/L5: channels are fetched at every launch; the guide only when stale.
         if iptvLibrary.hasPlaylist {
@@ -213,9 +220,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// M7b L4: a cast takes over the TV from any screen or app, without the PIN.
     private func castToTV(query: String?) {
+        endMirroringIfNeeded()
         launcher.homePressed()
         router?.castYouTube(query: query)
         windowController?.show()
+    }
+
+    /// M7b D32, L18–L22: keep Reflector running hidden and follow its mirroring sessions.
+    private func setUpReflector() {
+        let reflector = ReflectorMonitor(autoStart: settings.reflectorAutoStart)
+        reflector.onSessionBegan = { [weak self] in
+            // L20: leave Live TV/YouTube like Home (no PIN), then bring the mirrored screen forward.
+            guard let self else { return }
+            launcher.homePressed()
+            router?.goHome()
+            NSRunningApplication.runningApplications(withBundleIdentifier: ReflectorMonitor.bundleID).first?.activate()
+        }
+        reflector.onSessionEnded = { [weak self] in
+            // L22: back to the home screen unless the user switched to another app on purpose.
+            let front = NSWorkspace.shared.frontmostApplication
+            guard front == nil || front?.bundleIdentifier == ReflectorMonitor.bundleID
+                    || front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+            else { return }
+            self?.router?.goHome()
+            self?.windowController?.show()
+        }
+        reflector.onStatusChange = { [weak self] in self?.router?.settings.refreshStatus() }
+        self.reflector = reflector
+        reflector.start()
+    }
+
+    /// L21: Home or a YouTube cast during mirroring ends it first.
+    private func endMirroringIfNeeded() {
+        guard let reflector, reflector.isMirroring else { return }
+        reflector.endMirroring()
     }
 
     private func startPhoneRemote() {
@@ -281,6 +319,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         status.airPlay = airPlayState
+        if let reflector, reflector.isInstalled {
+            status.reflector = reflector.isMirroring ? .mirroring : reflector.isRunning ? .ready : .notRunning
+        }
         let plexHTPC = "tv.plex.htpc"
         if !NSRunningApplication.runningApplications(withBundleIdentifier: plexHTPC).isEmpty {
             status.plexHTPC = .running
@@ -409,6 +450,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleGlobal(_ command: RemoteCommand) {
         // Only Home is global by default; ignore others for now.
         guard command == .home else { return }
+        // M7b L21: Home during mirroring ends it.
+        endMirroringIfNeeded()
         // D18: the other app keeps running. An app still starting won't take the screen back when it's up.
         launcher.homePressed()
         router?.goHome()
@@ -437,6 +480,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 startPhoneRemote()
             }
             castReceiver?.restart()
+            reflector?.systemDidWake()
         }
     }
 
@@ -483,6 +527,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 castReceiver?.stop()
             }
         }
+        reflector?.autoStart = new.reflectorAutoStart
         if kiosk && new.launchAtLogin != old.launchAtLogin {
             LoginItem.apply(enabled: new.launchAtLogin)
         }

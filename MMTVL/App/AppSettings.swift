@@ -24,6 +24,8 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
     var youtubeCastEnabled = true
     /// M7b L3: the DIAL device uuid, made once at launch.
     var castDeviceID: String?
+    /// M7b L18: keep Reflector 4 running hidden (Settings → Casting → Android).
+    var reflectorAutoStart = true
 
     var volumeMode: VolumeMode { VolumeMode(rawValue: phoneRemoteVolume) ?? .auto }
     var validatedPhoneRemotePort: Int { (1024...65534).contains(phoneRemotePort) ? phoneRemotePort : 8765 }
@@ -47,5 +49,7 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
         youtubeCastEnabled = try container.decodeIfPresent(Bool.self, forKey: .youtubeCastEnabled)
             ?? defaults.youtubeCastEnabled
         castDeviceID = try container.decodeIfPresent(String.self, forKey: .castDeviceID)
+        reflectorAutoStart = try container.decodeIfPresent(Bool.self, forKey: .reflectorAutoStart)
+            ?? defaults.reflectorAutoStart
     }
 }

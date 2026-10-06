@@ -92,4 +92,11 @@ struct AppSettingsTests {
         let decoded = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(custom))
         #expect(decoded == custom)
     }
+
+    @Test func reflectorAutoStartDefaultsToTrue() throws {
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(settings.reflectorAutoStart)
+        let off = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"reflectorAutoStart": false}"#.utf8))
+        #expect(!off.reflectorAutoStart)
+    }
 }

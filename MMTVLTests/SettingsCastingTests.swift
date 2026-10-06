@@ -12,7 +12,7 @@ struct SettingsCastingTests {
         #expect(model.page == .casting)
         #expect(model.pageTitle == "Casting")
         #expect(recorder.castingRefreshes == 1)
-        #expect(model.sections.map(\.id) == ["cast.youtube", "cast.airplay", "cast.plex"])
+        #expect(model.sections.map(\.id) == ["cast.youtube", "cast.airplay", "cast.android", "cast.plex"])
     }
 
     @Test func youtubeRowFollowsTheReceiver() {
@@ -69,5 +69,38 @@ struct SettingsCastingTests {
         model.refreshStatus()
         #expect(model.row(id: "cast.plex.htpc")?.value == "Running")
         #expect(!model.focusableRowIDs.contains("cast.plex.htpc"))
+    }
+
+    // MARK: Android (step 8)
+
+    @Test func androidRowsFollowReflector() {
+        let (model, recorder) = makeSettingsModel()
+        model.perform(.push(.casting))
+        #expect(model.row(id: "cast.android.reflector")?.value == "Not Installed")
+        #expect(model.row(id: "cast.android.reflector")?.detail == "Install Reflector 4 from airsquirrels.com")
+        #expect(model.row(id: "cast.android.reflector")?.action == nil)
+        #expect(model.row(id: "cast.android.autostart") == nil)
+
+        let cases: [(CastingSettingsStatus.Reflector, String)] = [
+            (.notRunning, "Not Running"), (.ready, "Ready"), (.mirroring, "Mirroring"),
+        ]
+        for (state, value) in cases {
+            recorder.casting.reflector = state
+            model.refreshStatus()
+            #expect(model.row(id: "cast.android.reflector")?.value == value)
+            #expect(model.row(id: "cast.android.reflector")?.detail == nil)
+            #expect(model.row(id: "cast.android.autostart")?.value == "On")
+        }
+    }
+
+    @Test func autostartToggleApplies() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.casting.reflector = .ready
+        model.refreshStatus()
+        model.perform(.push(.casting))
+        #expect(model.row(id: "cast.android.autostart")?.action == .toggle(.reflectorAutoStart))
+        model.perform(.toggle(.reflectorAutoStart))
+        #expect(recorder.appliedSettings.last?.reflectorAutoStart == false)
+        #expect(model.row(id: "cast.android.autostart")?.value == "Off")
     }
 }

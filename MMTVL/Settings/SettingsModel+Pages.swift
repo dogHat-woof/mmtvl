@@ -723,6 +723,21 @@ extension SettingsModel {
         case .off: "Off"
         case .unknown: "Unknown"
         }
+        let reflectorValue = switch casting.reflector {
+        case .notInstalled: "Not Installed"
+        case .notRunning: "Not Running"
+        case .ready: "Ready"
+        case .mirroring: "Mirroring"
+        }
+        var androidRows = [
+            SettingsRow(id: "cast.android.reflector", title: "Reflector", value: reflectorValue,
+                        detail: casting.reflector == .notInstalled ? "Install Reflector 4 from airsquirrels.com" : nil),
+        ]
+        if casting.reflector != .notInstalled {
+            androidRows.append(SettingsRow(id: "cast.android.autostart", title: "Start Reflector with MMTVL",
+                                           value: Self.onOff(settings.reflectorAutoStart),
+                                           action: .toggle(.reflectorAutoStart)))
+        }
         let plexValue = switch casting.plexHTPC {
         case .running: "Running"
         case .notRunning: "Not Running"
@@ -739,6 +754,8 @@ extension SettingsModel {
                 SettingsRow(id: "cast.airplay.receiver", title: "AirPlay Receiver", value: airPlayValue,
                             detail: "Opens AirDrop & Handoff in System Settings", action: .openAirPlaySettings),
             ], footer: "Turn on AirPlay Receiver and set Allow AirPlay for to \"Anyone on the Same Network\", or \"Current User\" if every phone uses your Apple Account. iPhones then list this Mac under Screen Mirroring and in AirPlay menus."),
+            SettingsSection(id: "cast.android", title: "Android", rows: androidRows,
+                            footer: "On an Android phone: Quick Settings → Cast → MMTVL Screen Mirroring. For YouTube, use Cast in the YouTube app and pick MMTVL instead. Home on the remote ends mirroring. In Reflector's Preferences: turn AirPlay off and Google Cast on, Always on Top off, Display Fullscreen on, Show Client Name off, no connection prompt, and name it MMTVL Screen Mirroring."),
             SettingsSection(id: "cast.plex", title: "Plex", rows: [
                 SettingsRow(id: "cast.plex.htpc", title: "Plex HTPC", value: plexValue),
             ], footer: "Phones cast to Plex HTPC while it runs, signed in to your Plex account: in the Plex app, tap Cast and choose Plex HTPC. Home leaves it running; after a restart, open it once."),

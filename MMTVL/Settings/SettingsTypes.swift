@@ -131,6 +131,8 @@ nonisolated enum SettingKey: String, CaseIterable, Sendable {
     case channelUpMovesUpList
     /// M7b L5.
     case youtubeCastEnabled
+    /// M7b L18.
+    case reflectorAutoStart
 
     var keyPath: WritableKeyPath<AppSettings, Bool> {
         switch self {
@@ -141,6 +143,7 @@ nonisolated enum SettingKey: String, CaseIterable, Sendable {
         case .phoneRemoteEnabled: \.phoneRemoteEnabled
         case .channelUpMovesUpList: \.channelUpMovesUpList
         case .youtubeCastEnabled: \.youtubeCastEnabled
+        case .reflectorAutoStart: \.reflectorAutoStart
         }
     }
 }

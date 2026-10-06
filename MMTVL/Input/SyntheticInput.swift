@@ -32,11 +32,21 @@ nonisolated enum SyntheticInput {
 
     /// keyDown + keyUp with no modifier flags.
     static func postKey(_ keyCode: CGKeyCode) {
+        postKey(keyCode, flags: [])
+    }
+
+    /// keyDown + keyUp with `flags` (e.g. `.maskCommand`, M7b L21). With `pid`, posted to that app only.
+    static func postKey(_ keyCode: CGKeyCode, flags: CGEventFlags, toPid pid: pid_t? = nil) {
         let source = makeSource()
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: down) else { continue }
-            event.flags = []
-            post(event)
+            event.flags = flags
+            if let pid {
+                event.setIntegerValueField(.eventSourceUserData, value: marker)
+                event.postToPid(pid)
+            } else {
+                post(event)
+            }
         }
     }
 
