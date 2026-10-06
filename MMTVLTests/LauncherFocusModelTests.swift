@@ -85,7 +85,7 @@ struct LauncherFocusModelTests {
 
     @Test func nonDirectionalCommandsDoNotMove() {
         var model = LauncherFocusModel(itemCount: 6, perRow: 5)
-        for command in [RemoteCommand.select, .back, .home, .playPause] {
+        for command in [RemoteCommand.select, .back, .home, .playPause, .fastForward, .rewind] {
             let changed = model.move(command)
             #expect(!changed)
         }

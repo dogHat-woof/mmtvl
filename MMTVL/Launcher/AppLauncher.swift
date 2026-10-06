@@ -14,7 +14,7 @@ final class AppLauncher {
     var onReturnToLauncher: (() -> Void)?
 
     /// Chromium browsers honor `--start-fullscreen`, but only when they aren't already running.
-    /// Other browsers (Safari) get full screen via Accessibility in M2.
+    /// Other browsers (Safari), and already-running ones, get full screen via Accessibility (`WindowFullScreener`).
     nonisolated static let chromiumBundleIDs: Set<String> = [
         "com.brave.Browser",
         "com.google.Chrome",
@@ -28,6 +28,7 @@ final class AppLauncher {
         return ["--start-fullscreen"]
     }
 
+    private let fullScreener = WindowFullScreener()
     private var launchedPIDs: Set<pid_t> = []
     private var iconCache: [URL: NSImage] = [:]
     private var terminationObserver: NSObjectProtocol?
@@ -94,6 +95,7 @@ final class AppLauncher {
             Self.logger.info("Launching \(bundleID, privacy: .public)")
             let app = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
             launchedPIDs.insert(app.processIdentifier)
+            makeFullScreenIfWanted(item, pid: app.processIdentifier)
 
         case .defaultBrowser(let fullScreen):
             guard let browserURL = defaultBrowserURL() else {
@@ -104,6 +106,7 @@ final class AppLauncher {
             Self.logger.info("Launching default browser \(bundleID ?? "?", privacy: .public) with \(configuration.arguments, privacy: .public)")
             let app = try await NSWorkspace.shared.openApplication(at: browserURL, configuration: configuration)
             launchedPIDs.insert(app.processIdentifier)
+            makeFullScreenIfWanted(item, pid: app.processIdentifier)
 
         case .url(let url, let browserBundleID?):
             guard let browserURL = appURL(for: browserBundleID) else {
@@ -120,6 +123,12 @@ final class AppLauncher {
         case .internalDestination, .system:
             throw LaunchError.unsupportedKind
         }
+    }
+
+    /// D15: also covers apps that were already running, where `--start-fullscreen` has no effect.
+    private func makeFullScreenIfWanted(_ item: LaunchItem, pid: pid_t) {
+        guard item.wantsFullScreen && AccessibilityPermission.isTrusted else { return }
+        Task { await fullScreener.makeFullScreen(pid: pid) }
     }
 
     private func appURL(for bundleID: String) -> URL? {

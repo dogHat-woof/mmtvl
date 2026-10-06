@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Planned |
+| Status | Done |
 | Depends on | M1 |
 | Master plan decisions used | D3, D4, D10, D15, D16, D17, D18 |
 | Planned | 2026-10-05 |
@@ -395,24 +395,24 @@ func startGlobalInput() {
 
 ## Implementation steps
 
-- [ ] **1. Personal-team signing**: `MMTVL.xcodeproj/project.pbxproj`
+- [x] **1. Personal-team signing**: `MMTVL.xcodeproj/project.pbxproj`
   - In all four target build configurations (app Debug/Release, tests Debug/Release), set `CODE_SIGN_IDENTITY = "Apple Development";` (replacing `"-"`) and add `DEVELOPMENT_TEAM = H846CY8RB4;`. Keep `CODE_SIGN_STYLE = Automatic`.
   - Clear the stale ad-hoc TCC entry: `tccutil reset Accessibility dev.mmtvl.launcher` (harmless if none exists).
   - Done when: the build succeeds, `codesign -dv build/Build/Products/Debug/MMTVL.app 2>&1 | grep TeamIdentifier` prints `H846CY8RB4`, and all tests pass. If xcodebuild asks for a provisioning profile, add `-allowProvisioningUpdates` to the commands in CLAUDE.md and note it under Deviations. (The planner's scratch build didn't need it.)
 
-- [ ] **2. JSON config + settings**: `App/JSONConfigFile.swift`, `App/AppSettings.swift`, `Launcher/LaunchItemStore.swift`, `MMTVLTests/JSONConfigFileTests.swift`, `MMTVLTests/AppSettingsTests.swift`
+- [x] **2. JSON config + settings**: `App/JSONConfigFile.swift`, `App/AppSettings.swift`, `Launcher/LaunchItemStore.swift`, `MMTVLTests/JSONConfigFileTests.swift`, `MMTVLTests/AppSettingsTests.swift`
   - Implement `JSONConfigFile` (see Key types). Move the logic out of `LaunchItemStore`: it keeps `fileName`, `defaultDirectory`, `directory`, `fileURL`, `load()`, `save(_:)`, but delegates to `JSONConfigFile<[LaunchItem]>`.
   - Implement `AppSettings` with a custom `init(from:)` using `decodeIfPresent` for every key.
   - Tests: JSONConfigFile with missing / round-trip / corrupt → `.bak` (on a small `Codable` test struct). AppSettings: `{}` decodes to defaults; `{"launchAtLogin": true}` keeps the other defaults.
   - Done when: all tests pass, including the unchanged `LaunchItemStoreTests`.
 
-- [ ] **3. RemoteCommand Codable + new cases**: `Input/RemoteCommand.swift`, `Launcher/AppRouter.swift`, `Launcher/LauncherFocusModel.swift`, `MMTVLTests/LauncherFocusModelTests.swift`
+- [x] **3. RemoteCommand Codable + new cases**: `Input/RemoteCommand.swift`, `Launcher/AppRouter.swift`, `Launcher/LauncherFocusModel.swift`, `MMTVLTests/LauncherFocusModelTests.swift`
   - Make `RemoteCommand` `String`-backed with `Codable` and `CaseIterable`, and add `fastForward` and `rewind`.
   - Fix the exhaustive switches: the new cases return `false` in `LauncherFocusModel.move` and in both `AppRouter.handle` screens.
   - Add the new cases to `nonDirectionalCommandsDoNotMove`.
   - Done when: it builds and tests pass.
 
-- [ ] **4. Bindings model + defaults**: `Input/InputBinding.swift`, `Input/KeyBindings.swift`, `MMTVLTests/KeyBindingsTests.swift`
+- [x] **4. Bindings model + defaults**: `Input/InputBinding.swift`, `Input/KeyBindings.swift`, `MMTVLTests/KeyBindingsTests.swift`
   - Implement the types and the default table exactly as above. `InputBinding.init(from:)` uses `decodeIfPresent` for `isGlobal` (default false) and `label`.
   - Rewrite `KeyBindingsTests` against `KeyBindings.defaults`:
     - Every key mapping from M1 still works.
@@ -426,7 +426,7 @@ func startGlobalInput() {
     - Encoding then decoding `defaultBindings` round-trips.
   - Done when: tests pass. (`InputRouter` still compiles: update its call to `bindings.command(...)` using a stored `KeyBindings.defaults` for now.)
 
-- [ ] **5. Router dispatch + media keys (local)**: `Input/MediaKeyEvent.swift`, `Input/InputRouter.swift`, `App/AppDelegate.swift`, `MMTVLTests/MediaKeyEventTests.swift`
+- [x] **5. Router dispatch + media keys (local)**: `Input/MediaKeyEvent.swift`, `Input/InputRouter.swift`, `App/AppDelegate.swift`, `MMTVLTests/MediaKeyEventTests.swift`
   - Implement `MediaKeyEvent.parse`.
   - Refactor `InputRouter` to `init(bindings:)`, add `dispatch(_:isGlobal:)`, add `onGlobalCommand` and `onCommandDispatched`, and extend the local monitor to `[.keyDown, .systemDefined]` with unbound-key logging.
   - In `AppDelegate`, load `settings.json` and `key-bindings.json` through `JSONConfigFile` (see Wiring), and build `InputRouter(bindings:)`.
@@ -438,7 +438,7 @@ func startGlobalInput() {
     - Key code 0 (volume up) → nil.
   - Done when: tests pass. Launching in windowed mode creates both JSON files, arrows still work, and pressing an unbound key (e.g. `Q`) logs `Unbound key 12` (`/usr/bin/log stream --predicate 'subsystem == "dev.mmtvl.launcher"' --level info`).
 
-- [ ] **6. Accessibility helper + onboarding screen**: `Input/AccessibilityPermission.swift`, `Launcher/AccessibilityOnboardingView.swift`, `Launcher/AppRouter.swift`
+- [x] **6. Accessibility helper + onboarding screen**: `Input/AccessibilityPermission.swift`, `Launcher/AccessibilityOnboardingView.swift`, `Launcher/AppRouter.swift`
   - `request()`: `AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)`, then `NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)`.
   - `waitUntilTrusted()`: loop `while !isTrusted { try? await Task.sleep(for: .seconds(1)) }`, honoring cancellation.
   - View: on the 1920×1080 canvas (Theme tokens). It shows:
@@ -451,7 +451,7 @@ func startGlobalInput() {
   - Router: add the screen case, `showAccessibilityOnboarding()`, `goHome()`, `onRequestAccessibility`, and handling as specified. `LauncherRootView` renders the new screen.
   - Done when: it builds. A temporary call to `router.showAccessibilityOnboarding()` (removed before ticking) shows the screen, and Back returns home.
 
-- [ ] **7. Global event tap**: `Input/GlobalEventTap.swift`, `App/AppDelegate.swift`
+- [x] **7. Global event tap**: `Input/GlobalEventTap.swift`, `App/AppDelegate.swift`
   - Implement as specified, including the nonisolated C callback, `TapEvent` extraction, `decide`, re-enable on disable, and async dispatch.
   - `AppDelegate`: add `handleGlobal(_:)` and `startGlobalInput()` (see Wiring), and call it only when `kiosk && settings.globalInputEnabled`.
   - `KioskWindowController.show()`: call `NSApp.unhide(nil)` before activating. After Exit to Desktop the app is hidden, and global Home must bring it back. (M1 only came back through the Dock, which unhides automatically.)
@@ -462,17 +462,17 @@ func startGlobalInput() {
     - Play/pause while Safari plays a YouTube video still pauses it.
   - The executor checks: build, tests, and that with Accessibility **revoked**, launch shows the onboarding screen and the log says the tap could not be created.
 
-- [ ] **8. Onboarding → tap without relaunch**: `App/AppDelegate.swift`
+- [x] **8. Onboarding → tap without relaunch**: `App/AppDelegate.swift`
   - Wire `router.onRequestAccessibility` and the `waitUntilTrusted` task from `startGlobalInput()`.
   - Done when (human): with Accessibility revoked (`tccutil reset Accessibility dev.mmtvl.launcher`), launch shows onboarding. Select opens the prompt and System Settings. Toggling MMTVL on brings the launcher back to the home screen within about 2 s, and fn+← works from Finder. If the tap doesn't receive events until relaunch, follow the *Risks* fallback and record it.
 
-- [ ] **9. Full screen for launched apps**: `Launcher/WindowFullScreener.swift`, `Launcher/LaunchItem.swift`, `Launcher/AppLauncher.swift`, `MMTVLTests/AppLauncherTests.swift`
+- [x] **9. Full screen for launched apps**: `Launcher/WindowFullScreener.swift`, `Launcher/LaunchItem.swift`, `Launcher/AppLauncher.swift`, `MMTVLTests/AppLauncherTests.swift`
   - Add `launchFullScreen` and `wantsFullScreen`. Set `prime` to `launchFullScreen: true`.
   - In `AppLauncher.launch`, after a successful `.application` or `.defaultBrowser` launch, if `item.wantsFullScreen && AccessibilityPermission.isTrusted`, start `Task { await fullScreener.makeFullScreen(pid: app.processIdentifier) }`. Keep the Chromium `--start-fullscreen` flag.
   - Tests: `wantsFullScreen` for `.application` with nil/true/false, and for `.defaultBrowser(fullScreen: true)` with `launchFullScreen` nil and false. Old JSON without `launchFullScreen` decodes.
   - Done when: tests pass. (Human: with Brave already running and windowed, the Browser tile makes Brave's window full screen within a few seconds.)
 
-- [ ] **10. Game controllers**: `Input/ThumbstickDirection.swift`, `Input/ControllerInput.swift`, `App/AppDelegate.swift`, `MMTVLTests/ThumbstickDirectionTests.swift`
+- [x] **10. Game controllers**: `Input/ThumbstickDirection.swift`, `Input/ControllerInput.swift`, `App/AppDelegate.swift`, `MMTVLTests/ThumbstickDirectionTests.swift`
   - Implement as specified. Start it in `AppDelegate` when `settings.controllersEnabled`, with `monitorInBackground: kiosk`. Log connect/disconnect with `vendorName` and the profile type.
   - Tests:
     - (0.7, 0.1) from nil → right.
@@ -483,12 +483,12 @@ func startGlobalInput() {
     - (-0.7, 0.65) → left (dominant axis).
   - Done when: tests pass. (Human, with any Bluetooth controller: D-pad, stick and A/B navigate; holding the D-pad repeats; Home from inside Safari returns to the launcher.)
 
-- [ ] **11. Cursor auto-hide + hover guard**: `App/KioskWindowController.swift`, `App/AppDelegate.swift`, `Launcher/AppRouter.swift`
+- [x] **11. Cursor auto-hide + hover guard**: `App/KioskWindowController.swift`, `App/AppDelegate.swift`, `Launcher/AppRouter.swift`
   - `KioskWindowController.init(rootView:windowed:hidesCursor:)`: `show()` calls `NSCursor.setHiddenUntilMouseMoves(true)` when `hidesCursor`.
   - Wire `onCommandDispatched` (see Wiring) and implement the hover guard.
   - Done when (human): pressing an arrow hides the cursor and moving the mouse shows it. With the cursor parked over a tile, opening and closing a placeholder with the keyboard leaves focus where the keyboard put it.
 
-- [ ] **12. Launch at login**: `App/LoginItem.swift`, `App/AppDelegate.swift`
+- [x] **12. Launch at login**: `App/LoginItem.swift`, `App/AppDelegate.swift`
   - `LoginItem.apply(enabled:)`:
     - If enabled and status isn't `.enabled`, `try SMAppService.mainApp.register()`.
     - If not enabled and status is `.enabled`, `try SMAppService.mainApp.unregister()`.
@@ -497,11 +497,11 @@ func startGlobalInput() {
   - Kiosk mode only.
   - Done when: it builds. With `launchAtLogin: true` in `settings.json`, a kiosk launch makes MMTVL appear in Login Items. Setting it back to false and relaunching removes it. (The executor may verify via the log status; leave the dev Mac with it **off**.)
 
-- [ ] **13. Wake handling**: `Input/GlobalEventTap.swift` (`ensureEnabled`), `App/AppDelegate.swift`
+- [x] **13. Wake handling**: `Input/GlobalEventTap.swift` (`ensureEnabled`), `App/AppDelegate.swift`
   - `observeWake()` as specified. Kiosk only.
   - Done when (human): in kiosk mode, open Safari, sleep the Mac (Apple menu → Sleep), and wake it. Within about 2 s the launcher home is in front, Safari is still running, and fn+← still works.
 
-- [ ] **14. Wrap-up**: `docs/plans/MASTER_PLAN.md`, this file, `CLAUDE.md`
+- [x] **14. Wrap-up**: `docs/plans/MASTER_PLAN.md`, this file, `CLAUDE.md`
   - In CLAUDE.md: document `settings.json` and `key-bindings.json` (with the key-code discovery tip via `log stream`), and that signing uses team H846CY8RB4.
   - Tick steps, set M2 to `Done`, and note deviations.
 
@@ -523,18 +523,18 @@ func startGlobalInput() {
 ## Manual verification
 
 On the dev Mac (kiosk mode unless noted):
-- [ ] First kiosk launch without Accessibility shows the onboarding screen. Back dismisses it. Select prompts, and granting it brings the launcher back.
-- [ ] After a rebuild (`xcodebuild … build`) and relaunch, Accessibility is still granted (no onboarding).
-- [ ] fn+← (Home) from Safari, Finder and the desktop (after Exit to Desktop) shows the launcher home. The other app is still running.
-- [ ] ⌘Q / ⌘Tab still work everywhere. fn+← does nothing extra in `-windowed` mode.
-- [ ] Media play/pause with the launcher in front doesn't open Music. With Safari playing video in front, it still pauses the video.
-- [ ] Unbound keys show up in `log stream` with their key code while MMTVL is front, and never while another app is front.
-- [ ] Editing `key-bindings.json` (e.g. bind F13 = key code 105 to `home`, global) and relaunching makes F13 work.
-- [ ] Prime Video (if installed) and the Browser tile open full screen, including when the browser was already running.
-- [ ] Cursor hides on remote input and reappears on mouse movement. Hover doesn't steal focus after keyboard use.
-- [ ] Game controller (if available): navigation, select/back, hold-to-repeat, Home from another app. The Game Overlay doesn't appear (or Menu works as Home if it does).
-- [ ] Sleep/wake returns to the launcher home screen.
-- [ ] `launchAtLogin: true` registers the login item; `false` removes it. Leave it off on the dev Mac.
+- [x] First kiosk launch without Accessibility shows the onboarding screen. Back dismisses it. Select prompts, and granting it brings the launcher back.
+- [x] After a rebuild (`xcodebuild … build`) and relaunch, Accessibility is still granted (no onboarding).
+- [x] fn+← (Home) from Safari, Finder and the desktop (after Exit to Desktop) shows the launcher home. The other app is still running.
+- [x] ⌘Q / ⌘Tab still work everywhere. fn+← does nothing extra in `-windowed` mode.
+- [x] Media play/pause with the launcher in front doesn't open Music. With Safari playing video in front, it still pauses the video.
+- [x] Unbound keys show up in `log stream` with their key code while MMTVL is front, and never while another app is front.
+- [x] Editing `key-bindings.json` (e.g. bind F13 = key code 105 to `home`, global) and relaunching makes F13 work.
+- [x] Prime Video (if installed) and the Browser tile open full screen, including when the browser was already running.
+- [x] Cursor hides on remote input and reappears on mouse movement. Hover doesn't steal focus after keyboard use.
+- [x] Game controller (if available): navigation, select/back, hold-to-repeat, Home from another app. The Game Overlay doesn't appear (or Menu works as Home if it does).
+- [x] Sleep/wake returns to the launcher home screen.
+- [x] `launchAtLogin: true` registers the login item; `false` removes it. Leave it off on the dev Mac. (Verified by the executor through the log; left off.)
 
 On the Mac mini / TV (when available):
 - [ ] Install to `/Applications`, set `launchAtLogin: true`, approve in Login Items, and enable automatic login for the user (System Settings → Users & Groups). Reboot → the launcher is up without touching anything.
@@ -558,4 +558,14 @@ On the Mac mini / TV (when available):
 
 ## Deviations & questions
 
-_None yet._
+All entries 2026-10-05, from `/build-plan`. None changes a master-plan decision.
+
+- **Steps 7–11, 13: human checks.** The "done when" checks that need a person (global Home from other apps, media keys vs. Music/Safari, onboarding → grant without relaunch, AX full screen, controller, cursor/hover, sleep/wake) were run by the user on the dev Mac and passed (2026-10-05). The Mac mini / TV checks remain open. Executor checks that were run: step 5 (windowed launch creates `settings.json` + `key-bindings.json`; `Q` logs `Unbound key 12 modifiers []`; an arrow key isn't logged as unbound), step 6 (temporary onboarding call shows the screen; Escape returns home), step 7 (kiosk launch without Accessibility logs `Event tap could not be created`, which leads to onboarding), step 12 (`launchAtLogin: true` → log `Login item status: enabled`; `false` → `notRegistered`; left **off**).
+- **Step 1:** `-allowProvisioningUpdates` was not needed.
+- **Step 2 (mechanical):** the file-scope `Logger` in `JSONConfigFile.swift` must be `nonisolated private let` under MainActor default isolation. The test target also defaults to MainActor, so the test's `Codable` struct is marked `nonisolated`.
+- **Step 4 (small):** every default binding gets a `label` (e.g. "Return", "Controller a"), not just Home, to make the JSON easier to edit by hand.
+- **Step 5 (interpretation):** the local monitor swallows a bound media key (down, repeat and up) whether or not the screen handled the command. This matches the tap's rule (L5) and keeps Music from starting.
+- **Step 8 (small):** after `waitUntilTrusted()` the task re-checks `isTrusted`, so cancellation doesn't start the tap.
+- **Step 9 (small):** an extra test checks that the `prime` default wants full screen.
+- **Step 10 (interpretation):** controllers already connected when `start()` runs go through the same connect path (log, `shouldMonitorBackgroundEvents`, configure), because no `GCControllerDidConnect` arrives for them. A connect has already happened in that case, so the SDL ordering concern still holds. The D-pad repeat is cancelled on release of the *repeating* button (or a new press, or disconnect), not on release of any other button.
+- **Step 13 (mechanical):** the wake work lives in `systemDidWake()` so `assumeIsolated` doesn't return an unused `Task` (compiler warning).
