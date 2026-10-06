@@ -9,6 +9,8 @@ protocol YouTubeHosting: AnyObject {
     func send(_ command: RemoteCommand)
     /// Pauses all media (Home, wake). No-op before the first open.
     func pause()
+    /// Opens YouTube on `https://www.youtube.com/tv?<query>` (a cold cast, M7b L2), creating the web view if needed.
+    func launch(query: String)
     /// Leanback exited (window.close / webViewDidClose). May be called several times in a row.
     var onExit: (() -> Void)? { get set }
 }
@@ -39,6 +41,18 @@ final class YouTubeController: YouTubeHosting {
 
     func open() {
         guard webView == nil else { return }
+        makeWebViewIfNeeded()
+        load()
+    }
+
+    func launch(query: String) {
+        makeWebViewIfNeeded()
+        Self.logger.info("Opening YouTube for a cast")
+        load(YouTubeConfig.launchURL(query: query))
+    }
+
+    private func makeWebViewIfNeeded() {
+        guard webView == nil else { return }
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.mediaTypesRequiringUserActionForPlayback = []
@@ -63,7 +77,6 @@ final class YouTubeController: YouTubeHosting {
         #endif
         self.webView = webView
         Self.logger.info("Opening YouTube with user agent \(self.userAgent, privacy: .public)")
-        load()
     }
 
     func send(_ command: RemoteCommand) {
@@ -116,9 +129,9 @@ final class YouTubeController: YouTubeHosting {
         reload()
     }
 
-    private func load() {
+    private func load(_ url: URL = YouTubeConfig.startURL) {
         phase = .loading
-        webView?.load(URLRequest(url: YouTubeConfig.startURL))
+        webView?.load(URLRequest(url: url))
     }
 
     // MARK: Delegate callbacks

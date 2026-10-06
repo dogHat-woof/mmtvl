@@ -362,6 +362,18 @@ final class AppRouter {
         screen = .youtube
     }
 
+    /// M7b L4: a YouTube cast takes over the TV from any screen. No PIN, even for a protected YouTube tile
+    /// (user choice). nil query = keep the page (leanback already paired).
+    func castYouTube(query: String?) {
+        if screen != .youtube { goHome() }
+        if let query {
+            youtube.launch(query: query)
+        } else {
+            youtube.open()
+        }
+        screen = .youtube
+    }
+
     /// nil = the last channel or Multiview; else that channel full screen (a top shelf card, M7 L13).
     func openLiveTV(channelID: Channel.ID? = nil) {
         liveTV.open(channelID: channelID)

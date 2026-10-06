@@ -20,6 +20,10 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
     var keyBindingsRevision = KeyBindings.currentRevision
     /// M7 L22: Channel Up zaps up the list like the Up arrow; false = the higher channel number.
     var channelUpMovesUpList = true
+    /// M7b L5: answer YouTube DIAL casts (Settings → Casting).
+    var youtubeCastEnabled = true
+    /// M7b L3: the DIAL device uuid, made once at launch.
+    var castDeviceID: String?
 
     var volumeMode: VolumeMode { VolumeMode(rawValue: phoneRemoteVolume) ?? .auto }
     var validatedPhoneRemotePort: Int { (1024...65534).contains(phoneRemotePort) ? phoneRemotePort : 8765 }
@@ -40,5 +44,8 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
         keyBindingsRevision = try container.decodeIfPresent(Int.self, forKey: .keyBindingsRevision) ?? 1
         channelUpMovesUpList = try container.decodeIfPresent(Bool.self, forKey: .channelUpMovesUpList)
             ?? defaults.channelUpMovesUpList
+        youtubeCastEnabled = try container.decodeIfPresent(Bool.self, forKey: .youtubeCastEnabled)
+            ?? defaults.youtubeCastEnabled
+        castDeviceID = try container.decodeIfPresent(String.self, forKey: .castDeviceID)
     }
 }

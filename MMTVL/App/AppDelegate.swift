@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var phoneRemote: PhoneRemote?
     private var volume: VolumeController?
     private var appActivationObserver: NSObjectProtocol?
+    private var castReceiver: CastReceiver?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !AppEnvironment.isRunningTests else { return }
@@ -35,6 +36,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settingsFile = JSONConfigFile(url: directory.appending(path: AppSettings.fileName), defaultValue: AppSettings())
         self.settingsFile = settingsFile
         settings = settingsFile.load()
+        if settings.castDeviceID == nil {
+            // M7b L3: the DIAL device uuid, made once.
+            settings.castDeviceID = UUID().uuidString.lowercased()
+            do {
+                try settingsFile.save(settings)
+            } catch {
+                Self.logger.error("Failed to save settings: \(error.localizedDescription, privacy: .public)")
+            }
+        }
         let bindingsFile = JSONConfigFile(url: directory.appending(path: KeyBindings.fileName),
                                           defaultValue: KeyBindings.defaultBindings)
         self.bindingsFile = bindingsFile
@@ -111,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             observeWake()
         }
         setUpPhoneRemote(inputRouter: inputRouter, router: router)
+        setUpCasting()
 
         windowController.show()
 
@@ -180,6 +191,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.phoneRemote = phoneRemote
         if settings.phoneRemoteEnabled { startPhoneRemote() }
         observeAppActivation()
+    }
+
+    /// M7b D30: the YouTube DIAL receiver, in kiosk and -windowed mode alike.
+    private func setUpCasting() {
+        let bridge = CastBridge(
+            isAppReady: { false },
+            forward: { _ in nil },
+            launch: { [weak self] query in self?.castToTV(query: query) },
+            didConnect: { [weak self] in self?.castToTV(query: nil) }
+        )
+        let receiver = CastReceiver(deviceID: settings.castDeviceID ?? UUID().uuidString.lowercased(),
+                                    friendlyName: "MMTVL", bridge: bridge)
+        receiver.onStateChange = { [weak self] in self?.router?.settings.refreshStatus() }
+        castReceiver = receiver
+        if settings.youtubeCastEnabled { receiver.start() }
+    }
+
+    /// M7b L4: a cast takes over the TV from any screen or app, without the PIN.
+    private func castToTV(query: String?) {
+        launcher.homePressed()
+        router?.castYouTube(query: query)
+        windowController?.show()
     }
 
     private func startPhoneRemote() {
@@ -372,6 +405,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if settings.phoneRemoteEnabled, case .failed = remoteServer?.state {
                 startPhoneRemote()
             }
+            castReceiver?.restart()
         }
     }
 
@@ -409,6 +443,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 startPhoneRemote()
             } else {
                 stopPhoneRemote()
+            }
+        }
+        if new.youtubeCastEnabled != old.youtubeCastEnabled {
+            if new.youtubeCastEnabled {
+                castReceiver?.start()
+            } else {
+                castReceiver?.stop()
             }
         }
         if kiosk && new.launchAtLogin != old.launchAtLogin {

@@ -80,4 +80,16 @@ struct AppSettingsTests {
         let flipped = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"channelUpMovesUpList": false}"#.utf8))
         #expect(!flipped.channelUpMovesUpList)
     }
+
+    @Test func castingDefaults() throws {
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(settings.youtubeCastEnabled)
+        #expect(settings.castDeviceID == nil)
+        let custom = try JSONDecoder().decode(AppSettings.self,
+                                              from: Data(#"{"youtubeCastEnabled": false, "castDeviceID": "abc"}"#.utf8))
+        #expect(!custom.youtubeCastEnabled)
+        #expect(custom.castDeviceID == "abc")
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(custom))
+        #expect(decoded == custom)
+    }
 }
