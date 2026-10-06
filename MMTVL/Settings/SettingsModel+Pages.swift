@@ -10,6 +10,9 @@ extension SettingsModel {
         case .confirmClearYouTube: confirmClearYouTubeSections
         case .liveTV: liveTVSections
         case .confirmRemoveIPTV: confirmRemoveIPTVSections
+        case .phoneRemote: phoneRemoteSections
+        case .pairPhone: pairPhoneSections
+        case .confirmForgetPhones: confirmForgetPhonesSections
         }
     }
 
@@ -23,6 +26,9 @@ extension SettingsModel {
         case .confirmClearYouTube: "Sign Out of YouTube?"
         case .liveTV: "Live TV"
         case .confirmRemoveIPTV: "Remove Live TV Source?"
+        case .phoneRemote: "Phone Remote"
+        case .pairPhone: "Pair a Phone"
+        case .confirmForgetPhones: "Forget All Phones?"
         }
     }
 
@@ -36,16 +42,21 @@ extension SettingsModel {
         case .confirmClearYouTube: .symbol("play.rectangle")
         case .liveTV: .symbol("tv")
         case .confirmRemoveIPTV: .symbol("tv.slash")
+        case .phoneRemote: .symbol("iphone")
+        case .pairPhone: phoneRemote.pairingURL.map(RowImage.qrCode) ?? .symbol("iphone")
+        case .confirmForgetPhones: .symbol("iphone.slash")
         }
     }
 
     var hint: String {
         switch page {
-        case .root, .tile, .liveTV: "Select: choose · Back: return"
+        case .root, .tile, .liveTV, .phoneRemote: "Select: choose · Back: return"
+        case .pairPhone: "Back: done"
         case .homeScreen:
             movingTileID == nil ? "Select: edit tile · Back: return" : "Up/Down: move · Select or Back: done"
         case .addTile: "Select: add · Back: return"
-        case .confirmRestoreDefaults, .confirmClearYouTube, .confirmRemoveIPTV: "Select: choose · Back: cancel"
+        case .confirmRestoreDefaults, .confirmClearYouTube, .confirmRemoveIPTV, .confirmForgetPhones:
+            "Select: choose · Back: cancel"
         }
     }
 
@@ -88,6 +99,8 @@ extension SettingsModel {
                             value: Self.onOff(settings.controllersEnabled), action: .toggle(.controllersEnabled)),
                 SettingsRow(id: "cursorAutoHide", title: "Hide Pointer During Remote Use",
                             value: Self.onOff(settings.cursorAutoHide), action: .toggle(.cursorAutoHide)),
+                SettingsRow(id: "phoneRemote", title: "Phone Remote", value: Self.onOff(settings.phoneRemoteEnabled),
+                            showsDisclosure: true, action: .push(.phoneRemote)),
             ]),
             SettingsSection(id: "permissions", title: "Permissions", rows: [
                 SettingsRow(id: "accessibility", title: "Accessibility",
@@ -265,6 +278,69 @@ extension SettingsModel {
                 SettingsRow(id: "confirm.cancel", title: "Cancel", action: .pop),
                 SettingsRow(id: "confirm.removeIPTV", title: "Remove", action: .removeIPTVSource),
             ], footer: "Forgets the playlist and guide addresses and deletes the downloaded guide."),
+        ]
+    }
+
+    /// M5.
+    private var phoneRemoteSections: [SettingsSection] {
+        var serverRows = [
+            SettingsRow(id: "phone.enabled", title: "Phone Remote", value: Self.onOff(settings.phoneRemoteEnabled),
+                        detail: phoneRemote.problem, action: .toggle(.phoneRemoteEnabled)),
+        ]
+        if settings.phoneRemoteEnabled {
+            serverRows.append(SettingsRow(id: "phone.address", title: "Address",
+                                          value: phoneRemote.address ?? "No network connection"))
+            if phoneRemote.isRunning {
+                serverRows.append(SettingsRow(id: "phone.pair", title: "Pair a Phone", showsDisclosure: true,
+                                              action: .push(.pairPhone)))
+            }
+        }
+
+        var phoneRows = [
+            SettingsRow(id: "phone.count", title: "Paired Phones", value: "\(phoneRemote.pairedCount)",
+                        detail: phoneRemote.connectedCount > 0 ? "\(phoneRemote.connectedCount) connected now" : nil),
+        ]
+        if phoneRemote.pairedCount > 0 {
+            phoneRows.append(SettingsRow(id: "phone.forget", title: "Forget All Phones", showsDisclosure: true,
+                                         action: .push(.confirmForgetPhones)))
+        }
+
+        return [
+            SettingsSection(id: "phone.server", rows: serverRows,
+                            footer: "Open the address in the phone's browser. The phone must be on the same network as this Mac."),
+            SettingsSection(id: "phone.phones", title: "Phones", rows: phoneRows),
+            SettingsSection(id: "phone.access", title: "Typing & Other Apps", rows: [
+                SettingsRow(id: "phone.accessibility", title: "Accessibility",
+                            value: phoneRemote.canControlOtherApps ? "Allowed" : "Not Allowed",
+                            detail: "Needed to type from the phone and to control Plex, Prime Video and the browser",
+                            action: .requestAccessibility),
+            ], footer: "Volume buttons use SoundSource when it's running, else the Mac's volume when the output allows it, else MMTVL's own volume."),
+        ]
+    }
+
+    /// M5 L3: the code is valid while this page shows.
+    private var pairPhoneSections: [SettingsSection] {
+        var rows = [
+            SettingsRow(id: "pair.code", title: "Pairing Code", value: phoneRemote.pairingCode ?? "—"),
+            SettingsRow(id: "pair.address", title: phoneRemote.address ?? "No network connection",
+                        detail: "Or open this address on the phone and enter the code"),
+        ]
+        if let name = phoneRemote.lastPairedName {
+            rows.append(SettingsRow(id: "pair.done", title: "Paired \"\(name)\"", image: .symbol("checkmark.circle")))
+        }
+        rows.append(SettingsRow(id: "pair.close", title: "Done", action: .pop))
+        return [
+            SettingsSection(id: "pair", rows: rows,
+                            footer: "Scan the code with the phone's camera. Pairing ends when you leave this page."),
+        ]
+    }
+
+    private var confirmForgetPhonesSections: [SettingsSection] {
+        [
+            SettingsSection(id: "confirm", rows: [
+                SettingsRow(id: "confirm.cancel", title: "Cancel", action: .pop),
+                SettingsRow(id: "confirm.forget", title: "Forget All Phones", action: .forgetAllPhones),
+            ], footer: "Every phone will need to pair again."),
         ]
     }
 

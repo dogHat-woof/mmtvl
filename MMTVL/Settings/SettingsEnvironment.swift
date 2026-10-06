@@ -33,4 +33,8 @@ struct SettingsEnvironment {
     var useIPTVPlaylistGuide: () -> Void
     var refreshIPTV: () -> Void
     var removeIPTVSource: () -> Void
+    var phoneRemoteStatus: () -> PhoneRemoteSettingsStatus
+    /// `PhoneRemote.setPairing(_:)`: true while Pair a Phone shows (M5 L3).
+    var setPhonePairing: (Bool) -> Void
+    var forgetAllPhones: () -> Void
 }

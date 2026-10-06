@@ -1,9 +1,12 @@
 import AppKit
+import Carbon.HIToolbox
+import Network
 import SwiftUI
 import os
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "AppDelegate")
+    private static let phoneLogger = Logger(subsystem: "dev.mmtvl.launcher", category: "PhoneRemote")
 
     private let launcher = AppLauncher()
     private var youtube: YouTubeController?
@@ -18,6 +21,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var eventTap: GlobalEventTap?
     private var controllers: ControllerInput?
     private var wakeObserver: NSObjectProtocol?
+    private var remoteServer: RemoteServer?
+    private var phoneRemote: PhoneRemote?
+    private var volume: VolumeController?
+    private var livePlayer: MPVPlayerController?
+    private var appActivationObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !AppEnvironment.isRunningTests else { return }
@@ -48,7 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settingsModel = SettingsModel(settings: settings, items: items, environment: makeSettingsEnvironment(kiosk: kiosk))
         let youtube = YouTubeController(userAgent: YouTubeConfig.userAgent(override: settings.youtubeUserAgent))
         self.youtube = youtube
-        let liveTV = LiveTVModel(player: MPVPlayerController(), library: iptvLibrary)
+        let livePlayer = MPVPlayerController()
+        self.livePlayer = livePlayer
+        let liveTV = LiveTVModel(player: livePlayer, library: iptvLibrary)
         self.liveTV = liveTV
         let router = AppRouter(items: items, launcher: launcher, settings: settingsModel, youtube: youtube,
                                liveTV: liveTV, pinStore: .keychain)
@@ -87,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             LoginItem.apply(enabled: settings.launchAtLogin)
             observeWake()
         }
+        setUpPhoneRemote(inputRouter: inputRouter, router: router)
 
         windowController.show()
 
@@ -97,6 +108,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await iptvLibrary.refreshGuideIfStale()
             }
         }
+    }
+
+    /// M5: the phone remote server, its coordinator and the volume routes (D24, D25).
+    private func setUpPhoneRemote(inputRouter: InputRouter, router: AppRouter) {
+        let volume = VolumeController(
+            mode: { [weak self] in self?.settings.volumeMode ?? .auto },
+            isLauncherActive: { NSApp.isActive },
+            applyAppVolume: { [weak self] volume in
+                self?.livePlayer?.setVolume(volume.level, muted: volume.muted)
+                self?.youtube?.setVolume(volume.level, muted: volume.muted)
+            }
+        )
+        self.volume = volume
+        let server = RemoteServer()
+        let phoneRemote = PhoneRemote(transport: server, store: .keychain, environment: PhoneRemoteEnvironment(
+            isLauncherActive: { NSApp.isActive },
+            dispatch: { [weak inputRouter] command, isGlobal in inputRouter?.dispatch(command, isGlobal: isGlobal) },
+            canPostEvents: { SyntheticInput.canPost },
+            postExternal: { key in
+                switch key {
+                case .key(let code): SyntheticInput.postKey(code)
+                case .media(let media): SyntheticInput.postMediaKey(media)
+                }
+            },
+            typeEdit: { edit in
+                SyntheticInput.deleteBackward(edit.deletions)
+                SyntheticInput.type(edit.insertion)
+            },
+            postReturn: { SyntheticInput.postKey(CGKeyCode(kVK_Return)) },
+            launcherAcceptsText: { [weak router] in router?.screen == .youtube },
+            frontAppName: { NSWorkspace.shared.frontmostApplication?.localizedName ?? "Mac" },
+            volume: { [weak volume] action in volume?.perform(action) ?? .unavailable("Volume can't be changed here") },
+            now: { Date() },
+            makeCode: { PairingCode.random() },
+            makeToken: { PhoneToken.make() }
+        ))
+        server.onMessage = { [weak phoneRemote] id, data in phoneRemote?.receive(data, from: id) }
+        server.onSessionClosed = { [weak phoneRemote] id in phoneRemote?.sessionClosed(id) }
+        server.onStateChange = { [weak router] in router?.settings.refreshStatus() }
+        phoneRemote.onStatusChange = { [weak router] in router?.settings.refreshStatus() }
+        remoteServer = server
+        self.phoneRemote = phoneRemote
+        if settings.phoneRemoteEnabled { startPhoneRemote() }
+        observeAppActivation()
+    }
+
+    private func startPhoneRemote() {
+        let port = settings.validatedPhoneRemotePort
+        guard let httpPort = NWEndpoint.Port(rawValue: UInt16(port)),
+              let socketPort = NWEndpoint.Port(rawValue: UInt16(port + 1))
+        else { return }
+        Self.phoneLogger.info("Phone remote on port \(port)")
+        remoteServer?.start(httpPort: httpPort, socketPort: socketPort)
+    }
+
+    private func stopPhoneRemote() {
+        remoteServer?.stop()
+        phoneRemote?.reset()
+        Self.phoneLogger.info("Phone remote stopped")
+    }
+
+    /// L16: the phone shows which app is in front.
+    private func observeAppActivation() {
+        appActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.phoneRemote?.frontAppChanged() }
+        }
+    }
+
+    /// What Settings → Phone Remote shows.
+    private func phoneRemoteSettingsStatus() -> PhoneRemoteSettingsStatus {
+        var status = PhoneRemoteSettingsStatus()
+        switch remoteServer?.state ?? .stopped {
+        case .stopped: break
+        case .starting: status.problem = "Starting…"
+        case .running: status.isRunning = true
+        case .failed(let message): status.problem = message
+        }
+        if let ip = LocalAddress.primaryIPv4() {
+            status.address = "http://\(ip):\(settings.validatedPhoneRemotePort)"
+        }
+        if let phoneRemote {
+            status.pairingCode = phoneRemote.pairing?.code
+            if let address = status.address, let code = status.pairingCode {
+                status.pairingURL = "\(address)/#pair=\(code)"
+            }
+            status.lastPairedName = phoneRemote.lastPairedName
+            status.pairedCount = phoneRemote.pairedCount
+            status.connectedCount = phoneRemote.connectedCount
+        }
+        status.canControlOtherApps = SyntheticInput.canPost
+        return status
     }
 
     private func makeIPTVLibrary(directory: URL) -> IPTVLibrary {
@@ -202,6 +308,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             router?.goHome()
             windowController?.show()
             eventTap?.ensureEnabled()
+            if settings.phoneRemoteEnabled, case .failed = remoteServer?.state {
+                startPhoneRemote()
+            }
         }
     }
 
@@ -233,6 +342,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         windowController?.hidesCursor = new.cursorAutoHide
+        if new.phoneRemoteEnabled != old.phoneRemoteEnabled {
+            if new.phoneRemoteEnabled {
+                startPhoneRemote()
+            } else {
+                stopPhoneRemote()
+            }
+        }
         if kiosk && new.launchAtLogin != old.launchAtLogin {
             LoginItem.apply(enabled: new.launchAtLogin)
         }
@@ -269,6 +385,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func requestAccessibility() {
         AccessibilityPermission.request()
+        // Harmless when granted; prompts if PostEvent is ever separate from Accessibility (M5).
+        SyntheticInput.requestAccess()
         startAccessibilityWait()
     }
 
@@ -339,7 +457,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let library = self?.iptvLibrary else { return }
                 self?.liveTV?.leave()
                 Task { await library.removeSource() }
-            }
+            },
+            phoneRemoteStatus: { [weak self] in self?.phoneRemoteSettingsStatus() ?? PhoneRemoteSettingsStatus() },
+            setPhonePairing: { [weak self] in self?.phoneRemote?.setPairing($0) },
+            forgetAllPhones: { [weak self] in self?.phoneRemote?.forgetAll() }
         )
     }
 

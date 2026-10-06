@@ -93,7 +93,24 @@ struct RowImageView: View {
             }
         case .app(let url):
             iconImage(launcher.icon(forApplicationAt: url))
+        case .qrCode(let string):
+            if let qrCode = QRCodeImage.make(string) {
+                qrCodeImage(qrCode)
+            } else {
+                symbol("qrcode")
+            }
         }
+    }
+
+    /// Ignores `size`. White padding keeps the quiet zone the QR spec asks for.
+    private func qrCodeImage(_ image: CGImage) -> some View {
+        Image(decorative: image, scale: 1)
+            .interpolation(.none)
+            .resizable()
+            .scaledToFit()
+            .padding(Theme.settingsQRCodeSize * 0.08)
+            .frame(width: Theme.settingsQRCodeSize, height: Theme.settingsQRCodeSize)
+            .background(RoundedRectangle(cornerRadius: 24).fill(.white))
     }
 
     private func symbol(_ name: String) -> some View {

@@ -28,6 +28,9 @@ final class YouTubeController: YouTubeHosting {
     @ObservationIgnored var onExit: (() -> Void)?
     @ObservationIgnored private let userAgent: String
     @ObservationIgnored private let delegate = YouTubeWebDelegate()
+    /// MMTVL's own volume (M5 L9); re-applied after every load.
+    @ObservationIgnored private var volumeLevel = 100
+    @ObservationIgnored private var volumeMuted = false
 
     init(userAgent: String) {
         self.userAgent = userAgent
@@ -39,7 +42,7 @@ final class YouTubeController: YouTubeHosting {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.mediaTypesRequiringUserActionForPlayback = []
-        for source in [YouTubeKeyMap.exitHookScript, YouTubeKeyMap.alwaysVisibleScript] {
+        for source in [YouTubeKeyMap.exitHookScript, YouTubeKeyMap.alwaysVisibleScript, YouTubeKeyMap.volumeScript] {
             configuration.userContentController.addUserScript(WKUserScript(
                 source: source,
                 injectionTime: .atDocumentStart,
@@ -82,6 +85,21 @@ final class YouTubeController: YouTubeHosting {
         webView?.pauseAllMediaPlayback(completionHandler: nil)
     }
 
+    /// M5 L9: the phone's in-app volume. Not on `YouTubeHosting`; AppDelegate calls the concrete class.
+    func setVolume(_ level: Int, muted: Bool) {
+        volumeLevel = level
+        volumeMuted = muted
+        applyVolume()
+    }
+
+    private func applyVolume() {
+        webView?.evaluateJavaScript(YouTubeKeyMap.setVolumeScript(level: volumeLevel, muted: volumeMuted)) { _, error in
+            if let error {
+                Self.logger.error("Setting the volume failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
     /// Loads the start URL again (resets the leanback route). No-op before the first open.
     func reload() {
         guard webView != nil else { return }
@@ -107,6 +125,8 @@ final class YouTubeController: YouTubeHosting {
 
     fileprivate func didFinishLoading() {
         phase = .ready
+        // A reload resets the page's values.
+        if volumeLevel != 100 || volumeMuted { applyVolume() }
     }
 
     fileprivate func didFail(_ error: Error) {

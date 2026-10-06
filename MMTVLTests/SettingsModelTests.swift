@@ -16,6 +16,8 @@ struct SettingsModelTests {
         model.press(.up)
         #expect(model.focusedRowID == "globalInput")
         model.press(.down, .down, .down)
+        #expect(model.focusedRowID == "phoneRemote")
+        model.press(.down)
         #expect(model.focusedRowID == "accessibility")
     }
 
@@ -31,7 +33,7 @@ struct SettingsModelTests {
     @Test func accessibilityRowRequestsAccess() {
         let (model, recorder) = makeSettingsModel(trusted: false)
         #expect(model.row(id: "accessibility")?.value == "Not Allowed")
-        model.press(.down, .down, .down, .select)
+        model.press(.down, .down, .down, .down, .select)
         #expect(recorder.accessibilityRequests == 1)
     }
 

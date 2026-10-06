@@ -40,4 +40,22 @@ nonisolated enum YouTubeKeyMap {
             document.addEventListener(type, (e) => e.stopImmediatePropagation(), true);
         }
         """
+
+    /// Injected at document start, main frame only (M5 L9): MMTVL's own volume for every media element,
+    /// also ones created later (media events don't bubble, so a capture listener on `document`).
+    static let volumeScript = """
+        (() => {
+          let level = 1, muted = false;
+          const apply = (v) => { v.volume = level; v.muted = muted; };
+          window.__mmtvlSetVolume = (l, m) => { level = l; muted = m; document.querySelectorAll('video, audio').forEach(apply); };
+          for (const t of ['play', 'loadedmetadata']) {
+            document.addEventListener(t, (e) => { if (e.target instanceof HTMLMediaElement) apply(e.target); }, true);
+          }
+        })();
+        """
+
+    /// Sets the page volume (level 0…100). Ends in `'ok'` like `dispatchScript`.
+    static func setVolumeScript(level: Int, muted: Bool) -> String {
+        "window.__mmtvlSetVolume && window.__mmtvlSetVolume(\(Double(level) / 100), \(muted)); 'ok'"
+    }
 }

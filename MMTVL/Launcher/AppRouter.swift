@@ -170,6 +170,7 @@ final class AppRouter {
             liveTV.leave()
         }
         closePINEntry()
+        if screen == .settings { settings.screenDidClose() }
         screen = .home
     }
 

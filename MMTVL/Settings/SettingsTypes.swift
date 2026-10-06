@@ -3,6 +3,7 @@ import Foundation
 nonisolated enum SettingsPage: Hashable, Sendable {
     case root, homeScreen, tile(id: String), addTile, confirmRestoreDefaults, confirmClearYouTube
     case liveTV, confirmRemoveIPTV
+    case phoneRemote, pairPhone, confirmForgetPhones
 }
 
 /// Which Live TV address a paste row fills (M4 L2).
@@ -25,9 +26,27 @@ nonisolated struct IPTVSettingsStatus: Equatable, Sendable {
     enum GuideKind: Equatable, Sendable { case none, playlist(String), custom(String) }
 }
 
+/// What the Phone Remote rows show (M5). Built by the app from `RemoteServer` and `PhoneRemote`.
+nonisolated struct PhoneRemoteSettingsStatus: Equatable, Sendable {
+    var isRunning = false
+    /// "Port 8765 is in use", "No network connection", "Starting…"; nil when fine.
+    var problem: String?
+    /// "http://192.168.1.20:8765"; nil without a LAN address.
+    var address: String?
+    /// While Pair a Phone shows.
+    var pairingCode: String?
+    /// address + "/#pair=" + code.
+    var pairingURL: String?
+    var lastPairedName: String?
+    var pairedCount = 0
+    var connectedCount = 0
+    /// SyntheticInput.canPost.
+    var canControlOtherApps = false
+}
+
 /// The `settings.json` toggles.
 nonisolated enum SettingKey: String, CaseIterable, Sendable {
-    case globalInputEnabled, controllersEnabled, cursorAutoHide, launchAtLogin
+    case globalInputEnabled, controllersEnabled, cursorAutoHide, launchAtLogin, phoneRemoteEnabled
 
     var keyPath: WritableKeyPath<AppSettings, Bool> {
         switch self {
@@ -35,6 +54,7 @@ nonisolated enum SettingKey: String, CaseIterable, Sendable {
         case .controllersEnabled: \.controllersEnabled
         case .cursorAutoHide: \.cursorAutoHide
         case .launchAtLogin: \.launchAtLogin
+        case .phoneRemoteEnabled: \.phoneRemoteEnabled
         }
     }
 }
@@ -64,6 +84,7 @@ nonisolated enum SettingsAction: Hashable, Sendable {
     case useIPTVPlaylistGuide
     case refreshIPTV
     case removeIPTVSource
+    case forgetAllPhones
 }
 
 nonisolated enum RowImage: Hashable, Sendable {
@@ -73,6 +94,8 @@ nonisolated enum RowImage: Hashable, Sendable {
     case item(LaunchItem)
     /// `AppLauncher.icon(forApplicationAt:)`.
     case app(URL)
+    /// A QR code for the string (M5 pairing), drawn at `Theme.settingsQRCodeSize`.
+    case qrCode(String)
 }
 
 nonisolated struct SettingsRow: Identifiable, Hashable, Sendable {

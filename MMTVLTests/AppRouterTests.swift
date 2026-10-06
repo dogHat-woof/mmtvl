@@ -33,6 +33,20 @@ struct AppRouterTests {
         _ = router.handle(.select)
     }
 
+    @Test func goHomeFromSettingsEndsPhonePairing() {
+        let items = LaunchItem.defaults
+        let (settings, recorder) = makeSettingsModel(items: items)
+        let router = AppRouter(items: items, launcher: AppLauncher(), settings: settings, youtube: FakeYouTube(),
+                               liveTV: FakeLiveTV(), pinStore: .inMemory())
+        openSettingsFromTile(router)
+        router.settings.perform(.push(.phoneRemote))
+        router.settings.perform(.push(.pairPhone))
+        #expect(recorder.pairingCalls == [true])
+        router.goHome()
+        #expect(router.screen == .home)
+        #expect(recorder.pairingCalls == [true, false])
+    }
+
     @Test func settingsTileOpensSettings() {
         let router = makeRouter()
         openSettingsFromTile(router)
