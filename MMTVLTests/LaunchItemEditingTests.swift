@@ -94,3 +94,27 @@ struct LaunchItemEditingTests {
         #expect(hidden.ensuringSettingsTile() == LaunchItem.defaults)
     }
 }
+
+struct LaunchItemPINTests {
+    @Test func settingRequiresPINStoresTrueOrNil() {
+        let on = LaunchItem.defaults.settingRequiresPIN(true, id: "browser")
+        #expect(on.first { $0.id == "browser" }?.requiresPIN == true)
+        let off = on.settingRequiresPIN(false, id: "browser")
+        #expect(off.first { $0.id == "browser" }?.requiresPIN == nil)
+    }
+
+    @Test func pinProtection() {
+        let items = LaunchItem.defaults.settingRequiresPIN(true, id: "browser")
+        func item(_ id: String) -> LaunchItem { items.first { $0.id == id }! }
+        #expect(item("settings").isPINProtected)
+        #expect(item("exit").isPINProtected)
+        #expect(item("browser").isPINProtected)
+        #expect(!item("plex").isPINProtected)
+    }
+
+    @Test func oldJSONWithoutRequiresPINDecodes() throws {
+        let json = #"[{"id":"plex","title":"Plex","kind":{"application":{"bundleID":"tv.plex.htpc"}}}]"#
+        let items = try JSONDecoder().decode([LaunchItem].self, from: Data(json.utf8))
+        #expect(items.first?.requiresPIN == nil)
+    }
+}

@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "AppDelegate")
 
     private let launcher = AppLauncher()
+    private var youtube: YouTubeController?
     private var settings = AppSettings()
     private var settingsFile: JSONConfigFile<AppSettings>?
     private var accessibilityWaitTask: Task<Void, Never>?
@@ -41,9 +42,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         let settingsModel = SettingsModel(settings: settings, items: items, environment: makeSettingsEnvironment(kiosk: kiosk))
-        let router = AppRouter(items: items, launcher: launcher, settings: settingsModel)
+        let youtube = YouTubeController(userAgent: YouTubeConfig.userAgent(override: settings.youtubeUserAgent))
+        self.youtube = youtube
+        let router = AppRouter(items: items, launcher: launcher, settings: settingsModel, youtube: youtube, pinStore: .keychain)
         let windowController = KioskWindowController(
-            rootView: LauncherRootView(router: router),
+            rootView: LauncherRootView(router: router, youtube: youtube),
             hidesCursor: settings.cursorAutoHide
         )
         self.inputRouter = inputRouter
@@ -53,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         router.onExitToDesktop = { [weak windowController] in windowController?.exitToDesktop() }
         router.onRequestAccessibility = { [weak self] in self?.requestAccessibility() }
         launcher.onReturnToLauncher = { [weak windowController] in windowController?.show() }
+        // Leanback's own exit; it may fire several times, going home is idempotent.
+        youtube.onExit = { [weak router] in
+            if router?.screen == .youtube { router?.goHome() }
+        }
         inputRouter.handler = router.handle
         inputRouter.onGlobalCommand = { [weak self] command in self?.handleGlobal(command) }
         // Reads the current setting, which Settings can change live.
@@ -219,7 +226,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.windowController?.exitToDesktop()
             },
             tileTitle: { [launcher] in launcher.title(for: $0) },
-            isInstalled: { [launcher] in launcher.isInstalled($0) }
+            isInstalled: { [launcher] in launcher.isInstalled($0) },
+            hasPIN: { PINStore.keychain.load() != nil },
+            startPINFlow: { [weak self] in self?.router?.requestPIN($0) },
+            reloadYouTube: { [weak self] in self?.youtube?.reload() },
+            clearYouTubeData: { [weak self] in
+                Task { await self?.youtube?.clearData() }
+            }
         )
     }
 

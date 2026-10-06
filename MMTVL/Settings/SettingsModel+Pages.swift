@@ -7,6 +7,7 @@ extension SettingsModel {
         case .tile(let id): tileSections(id: id)
         case .addTile: addTileSections
         case .confirmRestoreDefaults: confirmRestoreSections
+        case .confirmClearYouTube: confirmClearYouTubeSections
         }
     }
 
@@ -17,6 +18,7 @@ extension SettingsModel {
         case .tile(let id): item(id: id).map(environment.tileTitle) ?? "Tile"
         case .addTile: "Add Tile"
         case .confirmRestoreDefaults: "Restore Default Tiles?"
+        case .confirmClearYouTube: "Sign Out of YouTube?"
         }
     }
 
@@ -27,6 +29,7 @@ extension SettingsModel {
         case .tile(let id): item(id: id).map(RowImage.item) ?? .symbol("app.dashed")
         case .addTile: .symbol("plus.app")
         case .confirmRestoreDefaults: .symbol("arrow.counterclockwise")
+        case .confirmClearYouTube: .symbol("play.rectangle")
         }
     }
 
@@ -36,7 +39,7 @@ extension SettingsModel {
         case .homeScreen:
             movingTileID == nil ? "Select: edit tile · Back: return" : "Up/Down: move · Select or Back: done"
         case .addTile: "Select: add · Back: return"
-        case .confirmRestoreDefaults: "Select: choose · Back: cancel"
+        case .confirmRestoreDefaults, .confirmClearYouTube: "Select: choose · Back: cancel"
         }
     }
 
@@ -91,11 +94,33 @@ extension SettingsModel {
                 SettingsRow(id: "editHome", title: "Edit Home Screen", showsDisclosure: true,
                             action: .push(.homeScreen)),
             ]),
+            pinSection,
+            SettingsSection(id: "youtube", title: "YouTube", rows: [
+                SettingsRow(id: "youtube.reload", title: "Reload YouTube", action: .reloadYouTube),
+                SettingsRow(id: "youtube.clear", title: "Sign Out & Clear YouTube Data", showsDisclosure: true,
+                            action: .push(.confirmClearYouTube)),
+            ], footer: "To keep kids in their own profile, set a Parent code in YouTube → Settings → Parent code."),
             SettingsSection(id: "system", title: "System", rows: [
                 SettingsRow(id: "relaunch", title: "Relaunch MMTVL", action: .relaunch),
                 SettingsRow(id: "exit", title: "Exit to Desktop", action: .exitToDesktop),
             ], footer: "MMTVL \(environment.versionString) · Saved in ~/Library/Application Support/MMTVL"),
         ]
+    }
+
+    /// D20.
+    private var pinSection: SettingsSection {
+        let rows = hasPIN
+            ? [
+                SettingsRow(id: "pin.change", title: "Change PIN", action: .startPIN(.change)),
+                SettingsRow(id: "pin.off", title: "Turn Off PIN", action: .startPIN(.turnOff)),
+            ]
+            : [
+                SettingsRow(id: "pin.set", title: "Set PIN",
+                            detail: "Guards Settings, Exit to Desktop and tiles set to Require PIN",
+                            action: .startPIN(.setNew)),
+            ]
+        return SettingsSection(id: "pin", title: "PIN", rows: rows,
+                               footer: hasPIN ? "The PIN guards Settings, Exit to Desktop and tiles set to Require PIN." : nil)
     }
 
     private var homeScreenSections: [SettingsSection] {
@@ -130,7 +155,7 @@ extension SettingsModel {
         if item.isSettingsTile {
             return [SettingsSection(id: "options", rows: [
                 SettingsRow(id: "tile.move", title: "Move", action: .startMove(id: id)),
-            ], footer: "Settings is always on the Home screen.")]
+            ], footer: "Settings is always on the Home screen and asks for the PIN when one is set.")]
         }
         var rows = [
             SettingsRow(id: "tile.visible", title: "Show on Home Screen", value: Self.onOff(item.isVisible),
@@ -142,12 +167,19 @@ extension SettingsModel {
                                     detail: isAccessibilityTrusted ? nil : "Needs Accessibility access",
                                     action: .toggleTileFullScreen(id: id)))
         }
+        if !item.isExitToDesktop {
+            rows.append(SettingsRow(id: "tile.requiresPIN", title: "Require PIN",
+                                    value: Self.onOff(item.requiresPIN == true),
+                                    detail: hasPIN ? nil : "Set a PIN in Settings first",
+                                    action: .toggleTileRequiresPIN(id: id)))
+        }
         let isDefault = LaunchItem.defaults.contains { $0.id == id }
         rows.append(SettingsRow(id: "tile.move", title: "Move", action: .startMove(id: id)))
         rows.append(SettingsRow(id: "tile.remove", title: "Remove from Home Screen",
                                 detail: isDefault ? "You can add it back from Add Tile" : nil,
                                 action: .removeTile(id: id)))
-        return [SettingsSection(id: "options", rows: rows)]
+        let footer = item.isExitToDesktop ? "Exit to Desktop always asks for the PIN when one is set." : nil
+        return [SettingsSection(id: "options", rows: rows, footer: footer)]
     }
 
     private var confirmRestoreSections: [SettingsSection] {
@@ -156,6 +188,15 @@ extension SettingsModel {
                 SettingsRow(id: "confirm.cancel", title: "Cancel", action: .pop),
                 SettingsRow(id: "confirm.restore", title: "Restore Defaults", action: .restoreDefaults),
             ], footer: "Replaces every tile with the defaults. Added apps, hidden tiles and the order are reset."),
+        ]
+    }
+
+    private var confirmClearYouTubeSections: [SettingsSection] {
+        [
+            SettingsSection(id: "confirm", rows: [
+                SettingsRow(id: "confirm.cancel", title: "Cancel", action: .pop),
+                SettingsRow(id: "confirm.clearYouTube", title: "Sign Out & Clear", action: .clearYouTubeData),
+            ], footer: "Signs every account out of YouTube on this Mac and deletes its watch data. YouTube's Parent code may be removed too."),
         ]
     }
 

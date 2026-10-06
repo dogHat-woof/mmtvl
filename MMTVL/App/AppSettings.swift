@@ -8,6 +8,8 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
     var cursorAutoHide = true
     /// Kiosk mode only.
     var launchAtLogin = false
+    /// Hand-edited override of the YouTube TV user agent (L6, M3). nil = `YouTubeConfig.defaultUserAgent`.
+    var youtubeUserAgent: String?
 
     init() {}
 
@@ -18,5 +20,6 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
         controllersEnabled = try container.decodeIfPresent(Bool.self, forKey: .controllersEnabled) ?? defaults.controllersEnabled
         cursorAutoHide = try container.decodeIfPresent(Bool.self, forKey: .cursorAutoHide) ?? defaults.cursorAutoHide
         launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? defaults.launchAtLogin
+        youtubeUserAgent = try container.decodeIfPresent(String.self, forKey: .youtubeUserAgent)
     }
 }

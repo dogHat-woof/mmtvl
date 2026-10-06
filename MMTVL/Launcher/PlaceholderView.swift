@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// "Coming soon" screen for internal destinations (YouTube → M3, IPTV → M4).
+/// "Coming soon" screen for internal destinations (IPTV → M4).
 struct PlaceholderView: View {
     let item: LaunchItem
 

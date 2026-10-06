@@ -19,4 +19,12 @@ struct SettingsEnvironment {
     var tileTitle: (LaunchItem) -> String
     /// `AppLauncher.isInstalled(_:)`.
     var isInstalled: (LaunchItem) -> Bool
+    /// A launcher PIN is stored (D20).
+    var hasPIN: () -> Bool
+    /// `AppRouter.requestPIN(_:)`.
+    var startPINFlow: (PINPurpose) -> Void
+    /// `YouTubeController.reload()`.
+    var reloadYouTube: () -> Void
+    /// `YouTubeController.clearData()`, fire and forget.
+    var clearYouTubeData: () -> Void
 }
