@@ -134,7 +134,7 @@ Status values: `Not planned` → `Planned` → `In progress` → `Done` (or `Blo
 | Q11 | Can Plex HTPC be opened on a specific item (its `plex` URL scheme, or Plex Companion `playMedia`)? Unverified; M7 only launches Plex from a Continue Watching card. | Nothing (a later improvement) |
 | Q12 | Does the Plex PIN link flow (plex.tv calls it "legacy") keep working, and does the user's router allow `plex.direct` names (DNS-rebinding protection)? Checked in M7 steps 11–12; fallbacks in the M7 plan. | M7 Plex shelf |
 | Q13 | Do the current iOS and Android YouTube apps list MMTVL as a DIAL device and pair through it (cold and warm path)? Leanback still supports `h5vcc.dial` (verified in the 2026-10-05 bundle) and VacuumTube ships it, but MMTVL is untested with real phones. Checked in M7b step 5. | M7b YouTube casting |
-| Q14 | Can the new Plex mobile app (2025.10+) cast to Plex HTPC? Plex's Companion article excludes those versions. Checked in M7b step 10; nothing to build either way. | Nothing |
+| Q14 | Can the new Plex mobile app (2025.10+) cast to Plex HTPC? Plex's Companion article excludes those versions. Checked in M7b step 12; nothing to build either way. | Nothing |
 | Q15 | Reflector 4 on macOS 26/27 (last release 2024-12): does it come forward and go full screen over MMTVL, does closing its window or ⌘W end the phone's cast, does it share UDP 1900 with MMTVL's DIAL responder, and does it keep working beside macOS's AirPlay Receiver with its own AirPlay off? Checked in M7b step 7. | M7b Android mirroring |
 
 ## How planning works
