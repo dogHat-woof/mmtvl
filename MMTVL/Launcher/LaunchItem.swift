@@ -16,6 +16,13 @@ nonisolated struct LaunchItem: Codable, Identifiable, Hashable, Sendable {
     var title: String
     var kind: Kind
     var iconSymbol: String?   // SF Symbol for internal/system items
+    var launchFullScreen: Bool?   // nil = the kind's default; Optional so older files decode
+
+    /// Whether `AppLauncher` makes the app's window full screen after launching (D15).
+    var wantsFullScreen: Bool {
+        if case .defaultBrowser(let fullScreen) = kind { return launchFullScreen ?? fullScreen }
+        return launchFullScreen ?? false
+    }
 }
 
 extension LaunchItem {
@@ -24,7 +31,7 @@ extension LaunchItem {
         LaunchItem(id: "plex", title: "Plex", kind: .application(bundleID: "tv.plex.htpc")),
         LaunchItem(id: "youtube", title: "YouTube", kind: .internalDestination(.youtube), iconSymbol: "play.rectangle.fill"),
         LaunchItem(id: "iptv", title: "Live TV", kind: .internalDestination(.iptv), iconSymbol: "tv"),
-        LaunchItem(id: "prime", title: "Prime Video", kind: .application(bundleID: "com.amazon.aiv.AIVApp")),
+        LaunchItem(id: "prime", title: "Prime Video", kind: .application(bundleID: "com.amazon.aiv.AIVApp"), launchFullScreen: true),
         LaunchItem(id: "browser", title: "Browser", kind: .defaultBrowser(fullScreen: true)),
         LaunchItem(id: "exit", title: "Exit to Desktop", kind: .system(.exitToDesktop), iconSymbol: "rectangle.portrait.and.arrow.right"),
     ]

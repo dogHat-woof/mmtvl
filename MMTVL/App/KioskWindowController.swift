@@ -10,10 +10,12 @@ final class KioskWindowController {
 
     let window: NSWindow
     private let windowed: Bool
+    private let hidesCursor: Bool
     private var screenObserver: NSObjectProtocol?
 
-    init(rootView: some View, windowed: Bool = AppEnvironment.windowedMode) {
+    init(rootView: some View, windowed: Bool = AppEnvironment.windowedMode, hidesCursor: Bool = false) {
         self.windowed = windowed
+        self.hidesCursor = hidesCursor
         if windowed {
             window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 1280, height: 720),
@@ -65,10 +67,15 @@ final class KioskWindowController {
         if !windowed {
             refit()
         }
+        // After Exit to Desktop the app is hidden; global Home must bring it back.
+        NSApp.unhide(nil)
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(window.contentView)
         NSApp.activate()
         applyPresentationOptions()
+        if hidesCursor {
+            NSCursor.setHiddenUntilMouseMoves(true)
+        }
     }
 
     func exitToDesktop() {

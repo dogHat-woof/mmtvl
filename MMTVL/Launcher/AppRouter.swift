@@ -9,6 +9,7 @@ final class AppRouter {
     enum Screen: Equatable {
         case home
         case placeholder(LaunchItem)
+        case accessibilityOnboarding
     }
 
     private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "AppRouter")
@@ -20,7 +21,10 @@ final class AppRouter {
     private(set) var shakeTriggers: [LaunchItem.ID: Int] = [:]
 
     @ObservationIgnored let launcher: AppLauncher
+    /// L8: hover only moves focus after the pointer moved since the last consumed command.
+    @ObservationIgnored private var pointerLocationAtLastCommand: NSPoint?
     @ObservationIgnored var onExitToDesktop: (() -> Void)?
+    @ObservationIgnored var onRequestAccessibility: (() -> Void)?
 
     init(items: [LaunchItem], launcher: AppLauncher) {
         self.items = items
@@ -30,6 +34,14 @@ final class AppRouter {
 
     /// Returns true if the command was consumed.
     func handle(_ command: RemoteCommand) -> Bool {
+        let consumed = route(command)
+        if consumed {
+            pointerLocationAtLastCommand = NSEvent.mouseLocation
+        }
+        return consumed
+    }
+
+    private func route(_ command: RemoteCommand) -> Bool {
         switch screen {
         case .home:
             switch command {
@@ -41,23 +53,44 @@ final class AppRouter {
                 return true
             case .back, .home:
                 return true
-            case .playPause:
+            case .playPause, .fastForward, .rewind:
                 return false
             }
 
         case .placeholder:
             switch command {
             case .back, .home:
-                screen = .home
+                goHome()
                 return true
-            case .up, .down, .left, .right, .select, .playPause:
+            case .up, .down, .left, .right, .select, .playPause, .fastForward, .rewind:
+                return false
+            }
+
+        case .accessibilityOnboarding:
+            switch command {
+            case .select:
+                onRequestAccessibility?()
+                return true
+            case .back, .home:
+                goHome()
+                return true
+            case .up, .down, .left, .right, .playPause, .fastForward, .rewind:
                 return false
             }
         }
     }
 
+    /// Shows the home screen, keeping the focus position.
+    func goHome() {
+        screen = .home
+    }
+
+    func showAccessibilityOnboarding() {
+        screen = .accessibilityOnboarding
+    }
+
     func hover(_ index: Int) {
-        guard screen == .home else { return }
+        guard screen == .home, NSEvent.mouseLocation != pointerLocationAtLastCommand else { return }
         withAnimation(Theme.focusAnimation) { _ = focus.focus(index: index) }
     }
 
@@ -118,6 +151,11 @@ struct LauncherRootView: View {
             )
         case .placeholder(let item):
             PlaceholderView(item: item)
+        case .accessibilityOnboarding:
+            AccessibilityOnboardingView(
+                onOpenSettings: { router.onRequestAccessibility?() },
+                onNotNow: router.goHome
+            )
         }
     }
 }
