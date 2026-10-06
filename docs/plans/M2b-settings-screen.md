@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Planned |
+| Status | Done |
 | Depends on | M2 |
 | Master plan decisions used | D1, D2, D3, D4, D10, D15, D16, D17, D19 |
 | Planned | 2026-10-05 |
@@ -498,7 +498,7 @@ func applicationDidBecomeActive(_ notification: Notification) { router?.settings
 
 ## Implementation steps
 
-- [ ] **1. Tile model: hidden flag, Settings tile, edit helpers**: `Launcher/LaunchItem.swift`, `Launcher/LaunchItem+Editing.swift`, `MMTVLTests/LaunchItemEditingTests.swift`
+- [x] **1. Tile model: hidden flag, Settings tile, edit helpers**: `Launcher/LaunchItem.swift`, `Launcher/LaunchItem+Editing.swift`, `MMTVLTests/LaunchItemEditingTests.swift`
   - Add `isHidden`, `isVisible`, `supportsFullScreen` and `kindDescription` (see Key types). Insert the `settings` default before `exit`.
   - Implement the `[LaunchItem]` helpers.
   - Tests (`LaunchItemEditingTests`), on a small fixture array `[a(app), b(app), c(internal), exit(system)]`:
@@ -516,7 +516,7 @@ func applicationDidBecomeActive(_ notification: Notification) { router?.settings
     - `LaunchItem.defaults` contains `settings` right before `exit`.
   - Done when: it builds and all tests pass (the existing `LaunchItemStoreTests` and `AppLauncherTests` unchanged).
 
-- [ ] **2. Home focus model**: `Launcher/HomeFocusModel.swift`, `MMTVLTests/HomeFocusModelTests.swift`
+- [x] **2. Home focus model**: `Launcher/HomeFocusModel.swift`, `MMTVLTests/HomeFocusModelTests.swift`
   - Implement as specified, delegating grid moves to `LauncherFocusModel`.
   - Tests (7 tiles, 5 per row):
     - Starts on tile 0, gear not focused.
@@ -529,7 +529,7 @@ func applicationDidBecomeActive(_ notification: Notification) { router?.settings
     - Non-directional commands → false.
   - Done when: tests pass.
 
-- [ ] **3. Gear on the home screen; mutable tiles in the router**: `Launcher/AppRouter.swift`, `Launcher/HomeView.swift`, `Launcher/GearButtonView.swift`, `DesignSystem/Theme.swift`
+- [x] **3. Gear on the home screen; mutable tiles in the router**: `Launcher/AppRouter.swift`, `Launcher/HomeView.swift`, `Launcher/GearButtonView.swift`, `DesignSystem/Theme.swift`
   - Theme tokens (MARK: Settings): `gearButtonSize: CGFloat = 72`, `gearSymbolSize: CGFloat = 36`, `headerSpacing: CGFloat = 32`.
   - Router: `items`/`visibleItems`, `HomeFocusModel`, `setItems(_:)`, `hoverGear()`, `activateGear()`, the factored hover guard, and the new `.home` routing. Add `openSettings()` **temporarily** as `screen = .placeholder(LaunchItem.defaults.first { $0.id == "settings" }!)`. Step 8 replaces it. `activate(_:)` uses `visibleItems`, and `.internalDestination(.settings)` calls `openSettings()`.
   - Don't add the `settings` init parameter yet.
@@ -539,7 +539,7 @@ func applicationDidBecomeActive(_ notification: Notification) { router?.settings
     - Windowed launch: Up from the top row lights the gear, Down returns to the same tile, Select on the gear shows the "Settings — Coming soon" placeholder, and Back returns.
     - Hovering the gear focuses it, and clicking it opens the placeholder.
 
-- [ ] **4. Live-apply plumbing**: `Input/ControllerInput.swift`, `App/KioskWindowController.swift`, `App/LoginItem.swift`, `App/AppDelegate.swift`
+- [x] **4. Live-apply plumbing**: `Input/ControllerInput.swift`, `App/KioskWindowController.swift`, `App/LoginItem.swift`, `App/AppDelegate.swift`
   - `ControllerInput.stop()`:
     - Also call `GCController.controllers().forEach(unconfigure)`. `unconfigure` sets `pressedChangedHandler = nil` on every element `configure` binds, for extended and micro gamepads alike, and `leftThumbstick.valueChangedHandler = nil`.
     - Set `GCController.shouldMonitorBackgroundEvents = false`.
@@ -554,7 +554,7 @@ func applicationDidBecomeActive(_ notification: Notification) { router?.settings
     - `applySettings`/`applyItems` are unused until step 8; private unused methods don't warn.
   - Done when: it builds and tests pass. Kiosk launch behaves exactly as in M2: onboarding when not trusted, fn+← from Finder works, and the controller works if available.
 
-- [ ] **5. App scanner, relauncher, icon by URL**: `Launcher/InstalledApps.swift`, `App/AppRelauncher.swift`, `Launcher/AppLauncher.swift`, `MMTVLTests/InstalledAppsTests.swift`, `MMTVLTests/AppRelauncherTests.swift`
+- [x] **5. App scanner, relauncher, icon by URL**: `Launcher/InstalledApps.swift`, `App/AppRelauncher.swift`, `Launcher/AppLauncher.swift`, `MMTVLTests/InstalledAppsTests.swift`, `MMTVLTests/AppRelauncherTests.swift`
   - Implement `InstalledApps` and `AppRelauncher` as specified.
   - `AppLauncher.icon(forApplicationAt url: URL) -> NSImage` uses `iconCache`. `icon(for:)` calls it.
   - `InstalledAppsTests` builds a temp directory (`FileManager.default.temporaryDirectory/UUID`, removed afterwards) containing:
@@ -571,7 +571,7 @@ func applicationDidBecomeActive(_ notification: Notification) { router?.settings
   - `AppRelauncherTests`: `processArguments(pid: 42, appPath: "/A.app", arguments: ["-windowed", "YES"]) == ["-c", AppRelauncher.script, "sh", "42", "/A.app", "-windowed", "YES"]`.
   - Done when: tests pass. Manual (temporary code, removed before ticking): call `AppRelauncher.relaunch()` from a temporary binding (e.g. in `applicationDidFinishLaunching` behind `UserDefaults.standard.bool(forKey: "testRelaunch")`, removed afterwards), or verify it in step 8 via the Relaunch row instead. Either way, record the result. Expected: the app quits and a new instance opens within about 1 s, in the same mode (windowed stays windowed). If the new instance never appears, see *Risks*.
 
-- [ ] **6. Settings model: types, root page, focus, toggles**: `Settings/SettingsTypes.swift`, `Settings/SettingsEnvironment.swift`, `Settings/SettingsModel.swift`, `Settings/SettingsModel+Pages.swift`, `MMTVLTests/SettingsModelTests.swift`, `MMTVLTests/ListFocusTests.swift`
+- [x] **6. Settings model: types, root page, focus, toggles**: `Settings/SettingsTypes.swift`, `Settings/SettingsEnvironment.swift`, `Settings/SettingsModel.swift`, `Settings/SettingsModel+Pages.swift`, `MMTVLTests/SettingsModelTests.swift`, `MMTVLTests/ListFocusTests.swift`
   - Implement the types, `ListFocus`, the environment, and `SettingsModel` with the `.root` page fully.
   - For the other pages, return **empty sections with their titles** for now. Implement `perform` for `.toggle`, `.requestAccessibility`, `.openLoginItemsSettings`, `.push`, `.pop`, `.relaunch` and `.exitToDesktop`. The tile actions can be empty `break`s until step 9 (mark them `// step 9`).
   - Tests use a `makeModel(kiosk:trusted:loginStatus:)` helper that builds a `SettingsEnvironment` whose closures record calls into local arrays/flags (a small `final class Recorder` in the test file).
@@ -591,7 +591,7 @@ func applicationDidBecomeActive(_ notification: Notification) { router?.settings
     - `.home` → false.
   - Done when: tests pass (the model isn't on screen yet).
 
-- [ ] **7. Settings views**: `Settings/SettingsView.swift`, `Settings/SettingsRowView.swift`, `DesignSystem/Theme.swift`
+- [x] **7. Settings views**: `Settings/SettingsView.swift`, `Settings/SettingsRowView.swift`, `DesignSystem/Theme.swift`
   - Theme tokens:
     - Fonts: `settingsTitleFont = Font.system(size: 48, weight: .semibold)`, `settingsSectionFont = Font.system(size: 24, weight: .semibold)`, `settingsRowFont = Font.system(size: 30, weight: .medium)`, `settingsDetailFont = Font.system(size: 22)`, `settingsHintFont = Font.system(size: 22)`.
     - Layout: `settingsSideColumnWidth: CGFloat = 600`, `settingsListWidth: CGFloat = 1000`, `settingsColumnSpacing: CGFloat = 80`, `settingsRowMinHeight: CGFloat = 80`, `settingsRowCornerRadius: CGFloat = 12`, `settingsRowSpacing: CGFloat = 8`, `settingsSectionSpacing: CGFloat = 40`, `settingsRowIconSize: CGFloat = 48`, `settingsPageImageSize: CGFloat = 280`.
@@ -621,7 +621,7 @@ func applicationDidBecomeActive(_ notification: Notification) { router?.settings
     - When focused rows turn white, a symbol image in a row uses `focusedRowText`. Pass a `foreground` color in.
   - Done when: it builds. Optionally render it with a temporary `#Preview` using a fake environment, and remove that before ticking.
 
-- [ ] **8. Wire Settings into the app**: `Launcher/AppRouter.swift`, `App/AppDelegate.swift`, `MMTVLTests/AppRouterTests.swift`
+- [x] **8. Wire Settings into the app**: `Launcher/AppRouter.swift`, `App/AppDelegate.swift`, `MMTVLTests/AppRouterTests.swift`
   - Router: add `case settings`, the `settings` init parameter, real `openSettings()`, `.settings` routing, and `hoverSettingsRow(_:)`. `LauncherRootView` renders `SettingsView(model: router.settings, launcher: router.launcher, onHoverRow: router.hoverSettingsRow, onActivateRow: router.settings.activate)`.
   - AppDelegate: build the `SettingsModel` before the router, with a `SettingsEnvironment` whose closures capture `[weak self]` or `launcher`:
     - `isKiosk: kiosk`
@@ -652,7 +652,7 @@ func applicationDidBecomeActive(_ notification: Notification) { router?.settings
     - Exit to Desktop works.
     - With the cursor parked over the list, keyboard scrolling doesn't jump focus.
 
-- [ ] **9. Home Screen editing pages**: `Settings/SettingsModel+Pages.swift`, `Settings/SettingsModel.swift`, `MMTVLTests/SettingsModelTests.swift`
+- [x] **9. Home Screen editing pages**: `Settings/SettingsModel+Pages.swift`, `Settings/SettingsModel.swift`, `MMTVLTests/SettingsModelTests.swift`
   - Implement the `.homeScreen`, `.tile(id)` and `.confirmRestoreDefaults` pages, move mode in `handle`, `activate(rowID:)` ending move mode, and the `perform` cases `.toggleTileVisible`, `.toggleTileFullScreen`, `.startMove`, `.removeTile` and `.restoreDefaults`.
   - Tests:
     - homeScreen lists every item (hidden too) with `"tile.<id>"` ids. A hidden item has value "Hidden" and `isDimmed`.
@@ -670,7 +670,7 @@ func applicationDidBecomeActive(_ notification: Notification) { router?.settings
     - Restore Defaults works.
     - `launch-items.json` reflects every change.
 
-- [ ] **10. Add Tile page**: `Settings/SettingsModel+Pages.swift`, `Settings/SettingsModel.swift`, `MMTVLTests/SettingsModelTests.swift`
+- [x] **10. Add Tile page**: `Settings/SettingsModel+Pages.swift`, `Settings/SettingsModel.swift`, `MMTVLTests/SettingsModelTests.swift`
   - Implement the `.addTile` page, `loadInstalledApps()`, and `.addDefaultTile` / `.addApp`.
   - Tests, with a fake `scanInstalledApps` returning `[InstalledApp(bundleID: "tv.plex.htpc", …), InstalledApp(bundleID: "com.example.new", name: "New", …)]` and items = defaults minus `settings`:
     - Before loading, `apps.loading` is present.
@@ -684,7 +684,7 @@ func applicationDidBecomeActive(_ notification: Notification) { router?.settings
     - The Settings tile can be added on the existing install, and selecting it opens Settings.
     - Removing the added tile works.
 
-- [ ] **11. Wrap-up**: `CLAUDE.md`, `docs/plans/MASTER_PLAN.md`, this file
+- [x] **11. Wrap-up**: `CLAUDE.md`, `docs/plans/MASTER_PLAN.md`, this file
   - CLAUDE.md:
     - Under the config bullets, note that the Settings screen (gear by the clock / Settings tile) edits `settings.json` and `launch-items.json` live, and that hand edits made while MMTVL runs are overwritten. Edit them with MMTVL quit.
     - Document the `launch-items.json` per-item keys `launchFullScreen` and `isHidden`.
@@ -743,3 +743,19 @@ On the Mac mini / TV (when available):
 ## Deviations & questions
 
 Executors append here when the plan is wrong or ambiguous: the date, the step, what happened, and what they need. Do not silently diverge.
+
+All entries 2026-10-05, from `/build-plan`. None changes a master-plan decision.
+
+- **Human checks.** The executor drove the app with synthesized keys (System Events) and screenshots on the dev Mac and checked:
+  - Windowed: gear focus (Up/Down), Settings root page, toggles writing `settings.json`, hide/move/restore tiles (home order and `launch-items.json` match), Add Tile (app list with icons; Calculator added, launched and removed; Settings tile re-added and opening Settings).
+  - Kiosk: global Home from Finder after the step 4 refactor; Global Home & Media Keys off → fn+← leaves Finder in front, on → returns to MMTVL, with no relaunch; Relaunch MMTVL (new PID, kiosk window back); Exit to Desktop hides MMTVL and Home makes it visible again.
+  - Not checked; they need a person or hardware: mouse hover and click (gear, rows, the hover guard while scrolling), game controllers on/off, the pointer-hiding toggle, the Accessibility revoke → grant flow from Settings, launch-at-login approval, and Open Full Screen on a real browser tile (the dev Mac's `launch-items.json` has the browser as a plain Safari app).
+  - The executor restored the dev Mac's original `launch-items.json` afterwards; `settings.json` is unchanged (all defaults).
+- **Environment note:** an older MMTVL instance launched from Xcode's DerivedData (PID 25613) was running during the checks. It has its own event tap, so it also reacts to global Home, which muddied the "Home brings MMTVL back to the front" check after Exit to Desktop (MMTVL became visible, but the old instance was frontmost). Quit it and re-check.
+- **Step 4 (small):** `LoginItem.describe` now goes through the new `LoginItemStatus` mapping, so an unknown future status logs as `notFound` instead of `unknown(<raw>)`.
+- **Step 5:** the relaunch check was done in step 8 through the Relaunch row (allowed by the plan). It worked from an AppKit `NSApp.terminate`, which closes the research item marked unverified.
+- **Step 6 (mechanical):** the fake environment went straight into `MMTVLTests/SettingsTestSupport.swift` (`SettingsRecorder`, `makeSettingsModel`, a `press(_:)` helper) instead of moving it there in step 8. `SettingsModel` also exposes `row(id:)`, `item(id:)` and `static tileRowID(_:)` helpers for the pages and tests.
+- **Step 7 (visual fixes found in steps 8 and 10):**
+  - `.scrollIndicators(.never)` instead of `.hidden`: with "Show scroll bars: Always" (or a mouse connected), `.hidden` still showed the bar.
+  - The list gets `.clipped()` and the page title gets 24 pt bottom padding, so scrolled rows no longer draw over the title.
+

@@ -10,7 +10,8 @@ final class KioskWindowController {
 
     let window: NSWindow
     private let windowed: Bool
-    private let hidesCursor: Bool
+    /// Settings can change this live.
+    var hidesCursor: Bool
     private var screenObserver: NSObjectProtocol?
 
     init(rootView: some View, windowed: Bool = AppEnvironment.windowedMode, hidesCursor: Bool = false) {

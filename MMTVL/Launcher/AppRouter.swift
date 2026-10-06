@@ -10,26 +10,53 @@ final class AppRouter {
         case home
         case placeholder(LaunchItem)
         case accessibilityOnboarding
+        case settings
     }
 
     private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "AppRouter")
 
     private(set) var screen: Screen = .home
-    let items: [LaunchItem]
-    /// Kept while a placeholder is shown, so Back restores the previous focus position.
-    private(set) var focus: LauncherFocusModel
+    /// All tiles in stored order, hidden ones included.
+    private(set) var items: [LaunchItem]
+    /// The tiles shown on the home screen; `focus` and `activate(_:)` index into these.
+    private(set) var visibleItems: [LaunchItem]
+    /// Kept while another screen is shown, so Back restores the previous focus position.
+    private(set) var focus: HomeFocusModel
     private(set) var shakeTriggers: [LaunchItem.ID: Int] = [:]
 
     @ObservationIgnored let launcher: AppLauncher
+    let settings: SettingsModel
     /// L8: hover only moves focus after the pointer moved since the last consumed command.
     @ObservationIgnored private var pointerLocationAtLastCommand: NSPoint?
     @ObservationIgnored var onExitToDesktop: (() -> Void)?
     @ObservationIgnored var onRequestAccessibility: (() -> Void)?
 
-    init(items: [LaunchItem], launcher: AppLauncher) {
+    init(items: [LaunchItem], launcher: AppLauncher, settings: SettingsModel) {
         self.items = items
         self.launcher = launcher
-        focus = LauncherFocusModel(itemCount: items.count, perRow: Theme.tilesPerRow)
+        self.settings = settings
+        let visibleItems = items.visible
+        self.visibleItems = visibleItems
+        focus = HomeFocusModel(tileCount: visibleItems.count, perRow: Theme.tilesPerRow)
+    }
+
+    /// Replaces the tiles (Settings edits), keeping focus on the same tile where possible.
+    func setItems(_ newItems: [LaunchItem]) {
+        let oldIndex = focus.tileIndex
+        let focusedID = oldIndex.map { visibleItems[$0].id }
+        let gearWasFocused = focus.isGearFocused
+
+        items = newItems
+        visibleItems = newItems.visible
+        var newFocus = HomeFocusModel(tileCount: visibleItems.count, perRow: Theme.tilesPerRow)
+        if gearWasFocused {
+            newFocus.focusGear()
+        } else if let focusedID, let index = visibleItems.firstIndex(where: { $0.id == focusedID }) {
+            newFocus.focusTile(index: index)
+        } else if let oldIndex, !visibleItems.isEmpty {
+            newFocus.focusTile(index: min(oldIndex, visibleItems.count - 1))
+        }
+        focus = newFocus
     }
 
     /// Returns true if the command was consumed.
@@ -49,9 +76,16 @@ final class AppRouter {
                 withAnimation(Theme.focusAnimation) { _ = focus.move(command) }
                 return true
             case .select:
-                if let index = focus.index { activate(index) }
+                if focus.isGearFocused {
+                    openSettings()
+                } else if let index = focus.tileIndex {
+                    activate(index)
+                }
                 return true
-            case .back, .home:
+            case .back:
+                withAnimation(Theme.focusAnimation) { _ = focus.leaveGear() }
+                return true
+            case .home:
                 return true
             case .playPause, .fastForward, .rewind:
                 return false
@@ -77,6 +111,19 @@ final class AppRouter {
             case .up, .down, .left, .right, .playPause, .fastForward, .rewind:
                 return false
             }
+
+        case .settings:
+            if command == .home {
+                goHome()
+                return true
+            }
+            if settings.handle(command) { return true }
+            if command == .back {
+                // Back on the root page.
+                goHome()
+                return true
+            }
+            return false
         }
     }
 
@@ -89,15 +136,39 @@ final class AppRouter {
         screen = .accessibilityOnboarding
     }
 
-    func hover(_ index: Int) {
-        guard screen == .home, NSEvent.mouseLocation != pointerLocationAtLastCommand else { return }
-        withAnimation(Theme.focusAnimation) { _ = focus.focus(index: index) }
+    func openSettings() {
+        settings.reset()
+        screen = .settings
     }
 
+    private var pointerMovedSinceLastCommand: Bool {
+        NSEvent.mouseLocation != pointerLocationAtLastCommand
+    }
+
+    func hover(_ index: Int) {
+        guard screen == .home, pointerMovedSinceLastCommand else { return }
+        withAnimation(Theme.focusAnimation) { _ = focus.focusTile(index: index) }
+    }
+
+    func hoverGear() {
+        guard screen == .home, pointerMovedSinceLastCommand else { return }
+        withAnimation(Theme.focusAnimation) { _ = focus.focusGear() }
+    }
+
+    func activateGear() {
+        openSettings()
+    }
+
+    func hoverSettingsRow(_ id: String) {
+        guard screen == .settings, pointerMovedSinceLastCommand else { return }
+        settings.focus(rowID: id)
+    }
+
+    /// `index` is into `visibleItems`.
     func activate(_ index: Int) {
-        guard items.indices.contains(index) else { return }
-        focus.focus(index: index)
-        let item = items[index]
+        guard visibleItems.indices.contains(index) else { return }
+        focus.focusTile(index: index)
+        let item = visibleItems[index]
 
         switch item.kind {
         case .application, .url, .defaultBrowser:
@@ -114,6 +185,8 @@ final class AppRouter {
                     shakeTriggers[item.id, default: 0] += 1
                 }
             }
+        case .internalDestination(.settings):
+            openSettings()
         case .internalDestination:
             screen = .placeholder(item)
         case .system(.exitToDesktop):
@@ -142,12 +215,14 @@ struct LauncherRootView: View {
         switch router.screen {
         case .home:
             HomeView(
-                items: router.items,
+                items: router.visibleItems,
                 focus: router.focus,
                 launcher: router.launcher,
                 shakeTriggers: router.shakeTriggers,
                 onHover: router.hover,
-                onActivate: router.activate
+                onActivate: router.activate,
+                onHoverGear: router.hoverGear,
+                onActivateGear: router.activateGear
             )
         case .placeholder(let item):
             PlaceholderView(item: item)
@@ -155,6 +230,13 @@ struct LauncherRootView: View {
             AccessibilityOnboardingView(
                 onOpenSettings: { router.onRequestAccessibility?() },
                 onNotNow: router.goHome
+            )
+        case .settings:
+            SettingsView(
+                model: router.settings,
+                launcher: router.launcher,
+                onHoverRow: router.hoverSettingsRow,
+                onActivateRow: router.settings.activate
             )
         }
     }

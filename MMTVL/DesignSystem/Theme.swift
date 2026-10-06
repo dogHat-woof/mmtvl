@@ -51,6 +51,34 @@ enum Theme {
     static let unavailableOpacity: Double = 0.4
     static let shakeDistance: CGFloat = 12
 
+    // MARK: Settings
+
+    static let gearButtonSize: CGFloat = 72
+    static let gearSymbolSize: CGFloat = 36
+    static let headerSpacing: CGFloat = 32
+
+    // Literal sizes on purpose: the semantic macOS fonts are too small on the 1920-point TV canvas.
+    static let settingsTitleFont = Font.system(size: 48, weight: .semibold)
+    static let settingsSectionFont = Font.system(size: 24, weight: .semibold)
+    static let settingsRowFont = Font.system(size: 30, weight: .medium)
+    static let settingsDetailFont = Font.system(size: 22)
+    static let settingsHintFont = Font.system(size: 22)
+
+    static let settingsSideColumnWidth: CGFloat = 600
+    static let settingsListWidth: CGFloat = 1000
+    static let settingsColumnSpacing: CGFloat = 80
+    static let settingsRowMinHeight: CGFloat = 80
+    static let settingsRowCornerRadius: CGFloat = 12
+    static let settingsRowSpacing: CGFloat = 8
+    static let settingsSectionSpacing: CGFloat = 40
+    static let settingsRowIconSize: CGFloat = 48
+    static let settingsPageImageSize: CGFloat = 280
+
+    static let settingsRowFocusScale: CGFloat = 1.03
+    static let focusedRowFill = Color.white
+    static let focusedRowText = Color.black
+    static let focusedRowSecondaryText = Color.black.opacity(0.6)
+
     // MARK: Animation
 
     static let focusAnimation = Animation.spring(response: 0.3, dampingFraction: 0.8)
