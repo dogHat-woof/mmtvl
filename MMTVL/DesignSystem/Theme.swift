@@ -92,6 +92,37 @@ enum Theme {
     static let pinKeypadRowSpacing: CGFloat = 24
     static let pinColumnSpacing: CGFloat = 80
 
+    // MARK: Live TV player (M4)
+
+    static let liveBannerTitleFont = Font.system(size: 40, weight: .semibold)
+    static let liveBannerProgrammeFont = Font.system(size: 30, weight: .medium)
+    static let liveBannerDetailFont = Font.system(size: 22)
+    static let liveBannerLogoSize: CGFloat = 96
+    static let liveBarHeight: CGFloat = 8
+    static let liveOverlayGradient = LinearGradient(colors: [.clear, .black.opacity(0.85)], startPoint: .top, endPoint: .bottom)
+
+    // MARK: Live TV guide (M4)
+
+    static let guidePreviewRect = CGRect(x: 1160, y: 60, width: 640, height: 360)
+    static let guideInfoRect = CGRect(x: 120, y: 60, width: 980, height: 360)
+    static let guideGridTop: CGFloat = 460
+    static let guideTimeHeaderHeight: CGFloat = 48
+    static let guideRowHeight: CGFloat = 80
+    /// Gap between cells and rows.
+    static let guideCellSpacing: CGFloat = 4
+    static let guideChannelColumnWidth: CGFloat = 340
+    static let guideGridLeading: CGFloat = 472
+    static let guideGridWidth: CGFloat = 1328
+    static let guideGroupPanelWidth: CGFloat = 420
+    static let guideInfoTitleFont = Font.system(size: 44, weight: .semibold)
+    static let guideInfoDetailFont = Font.system(size: 24)
+    static let guideCellFont = Font.system(size: 24, weight: .medium)
+    static let guideCellTimeFont = Font.system(size: 18)
+    static let guideChannelFont = Font.system(size: 24, weight: .medium)
+    static let guideCellCornerRadius: CGFloat = 10
+    static let guideNowLine = Color(red: 1, green: 0.27, blue: 0.23)
+    static let guideLogoSize: CGFloat = 48
+
     // MARK: Animation
 
     static let focusAnimation = Animation.spring(response: 0.3, dampingFraction: 0.8)

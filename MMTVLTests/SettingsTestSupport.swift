@@ -16,6 +16,12 @@ final class SettingsRecorder {
     var pinFlows: [PINPurpose] = []
     var youtubeReloads = 0
     var youtubeClears = 0
+    var iptv = IPTVSettingsStatus()
+    var pasteResult: String? = nil
+    var pastes: [IPTVURLKind] = []
+    var iptvRefreshes = 0
+    var iptvRemovals = 0
+    var playlistGuideUses = 0
 
     init(trusted: Bool, loginStatus: LoginItemStatus) {
         self.trusted = trusted
@@ -50,7 +56,15 @@ func makeSettingsModel(
         hasPIN: { recorder.hasPIN },
         startPINFlow: { recorder.pinFlows.append($0) },
         reloadYouTube: { recorder.youtubeReloads += 1 },
-        clearYouTubeData: { recorder.youtubeClears += 1 }
+        clearYouTubeData: { recorder.youtubeClears += 1 },
+        iptvStatus: { recorder.iptv },
+        pasteIPTVURL: { kind in
+            recorder.pastes.append(kind)
+            return recorder.pasteResult
+        },
+        useIPTVPlaylistGuide: { recorder.playlistGuideUses += 1 },
+        refreshIPTV: { recorder.iptvRefreshes += 1 },
+        removeIPTVSource: { recorder.iptvRemovals += 1 }
     )
     return (SettingsModel(settings: settings, items: items, environment: environment), recorder)
 }

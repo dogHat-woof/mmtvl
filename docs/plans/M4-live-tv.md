@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Planned |
+| Status | Done |
 | Depends on | M2b (Settings framework), M3 (Keychain helper, PIN, outside-canvas hosting pattern) |
 | Master plan decisions used | D2, D3, D6, D7, D8, D9, D10, D18, D19, D20, D22 (new), D23 (new) |
 | Planned | 2026-10-06 |
@@ -1149,7 +1149,7 @@ nonisolated struct IPTVSettingsStatus: Equatable, Sendable {
 
 After every step, build with `xcodebuild -project MMTVL.xcodeproj -scheme MMTVL -derivedDataPath build build`, and run the tests whenever a step adds or changes tests. Logging uses `Logger(subsystem: "dev.mmtvl.launcher", category: "IPTV" | "MPV")`. **Never log a full source or stream URL** (L2).
 
-- [ ] **1. Add MPVKit and GRDB**: `MMTVL.xcodeproj/project.pbxproj`, `Package.resolved` (generated), `MMTVLTests/SmokeTests.swift`, `MMTVL/IPTV/Player/MPVOptions.swift`
+- [x] **1. Add MPVKit and GRDB**: `MMTVL.xcodeproj/project.pbxproj`, `Package.resolved` (generated), `MMTVLTests/SmokeTests.swift`, `MMTVL/IPTV/Player/MPVOptions.swift`
   - Edit `project.pbxproj` exactly like this. These edits were tested on a scratch copy and resolved and built. Unused IDs start at `…50`.
     1. Add a `PBXBuildFile` section before `/* Begin PBXContainerItemProxy section */`:
        ```
@@ -1201,7 +1201,7 @@ After every step, build with `xcodebuild -project MMTVL.xcodeproj -scheme MMTVL 
   - `SmokeTests`: add `@Test func mpvLinks() { #expect(LibraryVersions.mpvClientAPI >= 0x0002_0005) }`. mpv's client API version is `(major << 16) | minor`; 2.5 is `0x20005`.
   - Done when the build and all tests pass and `Package.resolved` lists GRDB 7.11.x and MPVKit 1.0.0.
 
-- [ ] **2. M3U parser and channels (pure)**: `IPTV/Sources/M3UParser.swift`, `IPTV/Sources/Channel.swift`, `MMTVLTests/M3UParserTests.swift`, `MMTVLTests/ChannelListTests.swift`
+- [x] **2. M3U parser and channels (pure)**: `IPTV/Sources/M3UParser.swift`, `IPTV/Sources/Channel.swift`, `MMTVLTests/M3UParserTests.swift`, `MMTVLTests/ChannelListTests.swift`
   - Implement as in *Key types*.
   - `M3UParserTests` covers:
     - A fixture shaped like the user's (bare `#EXTM3U`; entries like `#EXTINF:0 tvg-id="nbatv.us" tvg-logo="https://x/y.png" tvg-name="NBA TV" group-title="Live Channels",NBA TV`; a game entry with `tvg-type="movie" tvg-id="Philadelphia @ Tampa Bay-A" group-title="NHL Games"`; an entry with `tvg-id=""`).
@@ -1223,7 +1223,7 @@ After every step, build with `xcodebuild -project MMTVL.xcodeproj -scheme MMTVL 
     - `channels(in:)`.
   - Done when the tests pass.
 
-- [ ] **3. Source store, clipboard parsing, network, state**: `IPTV/Sources/IPTVSourceStore.swift`, `IPTV/Sources/ClipboardURL.swift`, `IPTV/Sources/IPTVNetwork.swift`, `IPTV/IPTVState.swift`, `MMTVLTests/IPTVSourceStoreTests.swift`, `MMTVLTests/ClipboardURLTests.swift`
+- [x] **3. Source store, clipboard parsing, network, state**: `IPTV/Sources/IPTVSourceStore.swift`, `IPTV/Sources/ClipboardURL.swift`, `IPTV/Sources/IPTVNetwork.swift`, `IPTV/IPTVState.swift`, `MMTVLTests/IPTVSourceStoreTests.swift`, `MMTVLTests/ClipboardURLTests.swift`
   - `IPTVSourceStore.keychain` uses `Keychain.string/set/remove` with `Keychain.service` and the two accounts, and logs errors (category "IPTV").
   - `IPTVNetwork.live`:
     - `URLSession(configuration: .ephemeral)` (no cookies or cache on disk).
@@ -1237,7 +1237,7 @@ After every step, build with `xcodebuild -project MMTVL.xcodeproj -scheme MMTVL 
     - `IPTVState` decodes `{}`.
   - Done when the tests pass.
 
-- [ ] **4. XMLTV parsing, gunzip, matching (pure)**: `IPTV/EPG/XMLTVDate.swift`, `IPTV/EPG/Programme.swift`, `IPTV/EPG/XMLTVParser.swift`, `IPTV/EPG/Gunzip.swift`, `IPTV/EPG/EPGMatcher.swift`, `MMTVLTests/XMLTVTests.swift`, `MMTVLTests/GunzipTests.swift`, `MMTVLTests/EPGMatcherTests.swift`
+- [x] **4. XMLTV parsing, gunzip, matching (pure)**: `IPTV/EPG/XMLTVDate.swift`, `IPTV/EPG/Programme.swift`, `IPTV/EPG/XMLTVParser.swift`, `IPTV/EPG/Gunzip.swift`, `IPTV/EPG/EPGMatcher.swift`, `MMTVLTests/XMLTVTests.swift`, `MMTVLTests/GunzipTests.swift`, `MMTVLTests/EPGMatcherTests.swift`
   - `Programme.swift` needs `import GRDB` (app target only).
   - `XMLTVParser` is a **`nonisolated final class`** (a MainActor delegate doesn't compile off main). Set `shouldResolveExternalEntities = false`. Use `XMLParser(contentsOf: fileURL)`.
   - `XMLTVTests`:
@@ -1270,7 +1270,7 @@ After every step, build with `xcodebuild -project MMTVL.xcodeproj -scheme MMTVL 
     - **No fuzzy matching:** "Red Zone" does **not** match "Red TV", and "CBS" does not match "CBS News".
   - Done when the tests pass.
 
-- [ ] **5. EPG store, importer and library**: `IPTV/EPG/EPGStore.swift`, `IPTV/EPG/GuideImporter.swift`, `IPTV/IPTVLibrary.swift`, `MMTVLTests/EPGStoreTests.swift`, `MMTVLTests/IPTVLibraryTests.swift`, `MMTVLTests/IPTVTestSupport.swift`
+- [x] **5. EPG store, importer and library**: `IPTV/EPG/EPGStore.swift`, `IPTV/EPG/GuideImporter.swift`, `IPTV/IPTVLibrary.swift`, `MMTVLTests/EPGStoreTests.swift`, `MMTVLTests/IPTVLibraryTests.swift`, `MMTVLTests/IPTVTestSupport.swift`
   - `EPGStore` as in *Key types* (GRDB, migration "v1"). `open(at:)` creates the directory.
   - `GuideImporter.importGuide` **must be `@concurrent`** (see *Research*: a plain nonisolated async function would run on main).
     - Write temporary files under `URL.cachesDirectory/MMTVL/` and remove them with `defer`.
@@ -1302,7 +1302,7 @@ After every step, build with `xcodebuild -project MMTVL.xcodeproj -scheme MMTVL 
     - **`nowNext`.**
   - Done when the tests pass and the build has **no** "no 'async' operations occur within 'await'" warnings.
 
-- [ ] **6. Settings: Live TV page**: `Settings/SettingsTypes.swift`, `Settings/SettingsEnvironment.swift`, `Settings/SettingsModel.swift`, `Settings/SettingsModel+Pages.swift`, `App/AppDelegate.swift`, `MMTVLTests/SettingsTestSupport.swift`, `MMTVLTests/SettingsModelTests.swift`
+- [x] **6. Settings: Live TV page** *(tests pass; the manual paste checks are in the user's list, see Deviations)*: `Settings/SettingsTypes.swift`, `Settings/SettingsEnvironment.swift`, `Settings/SettingsModel.swift`, `Settings/SettingsModel+Pages.swift`, `App/AppDelegate.swift`, `MMTVLTests/SettingsTestSupport.swift`, `MMTVLTests/SettingsModelTests.swift`
   - Add everything in *Settings additions*. `IPTVSettingsStatus` and `IPTVURLKind` go in `SettingsTypes.swift`.
   - In `AppDelegate`, create the store, state file and library as in *AppDelegate wiring* (not the player or Live TV model yet), plus the five environment closures and the launch refresh.
   - `SettingsRecorder` gains:
@@ -1324,7 +1324,7 @@ After every step, build with `xcodebuild -project MMTVL.xcodeproj -scheme MMTVL 
     - `security find-generic-password -s dev.mmtvl.launcher -a iptv-playlist-url` finds the item. Don't print it with `-w` in shared logs.
     - Remove clears it.
 
-- [ ] **7. mpv handle, video view, player controller**: `IPTV/Player/MPVHandle.swift`, `IPTV/Player/MPVVideoView.swift`, `IPTV/Player/Timeshift.swift`, `IPTV/Player/SleepAssertion.swift`, `IPTV/Player/LivePlayer.swift`, `MMTVLTests/TimeshiftTests.swift`
+- [x] **7. mpv handle, video view, player controller**: `IPTV/Player/MPVHandle.swift`, `IPTV/Player/MPVVideoView.swift`, `IPTV/Player/Timeshift.swift`, `IPTV/Player/SleepAssertion.swift`, `IPTV/Player/LivePlayer.swift`, `MMTVLTests/TimeshiftTests.swift`
   - Implement as in *Key types*:
     - `MPVHandle` and `MPVVideoLayer` are **`nonisolated final class … @unchecked Sendable`**. `MPVVideoView` is a normal (MainActor) `NSView`.
     - The wakeup callback is `Unmanaged.passUnretained(self)` (the handle lives for the app's lifetime). It only does `queue.async { drain() }`. `drain()` loops `mpv_wait_event(handle, 0)` until `MPV_EVENT_NONE` and maps events. Read `mpv_event_end_file` from `event.data`.
@@ -1341,7 +1341,7 @@ After every step, build with `xcodebuild -project MMTVL.xcodeproj -scheme MMTVL 
   - Nothing calls the player yet.
   - Done when the tests pass and it builds.
 
-- [ ] **8. Live TV screen: play full screen** *(first playback)*: `IPTV/LiveTVModel.swift`, `IPTV/LiveTVView.swift`, `Launcher/AppRouter.swift`, `Launcher/PlaceholderView.swift` (delete), `App/AppDelegate.swift`, `DesignSystem/Theme.swift`, `MMTVLTests/FakeLiveTV.swift`, `MMTVLTests/FakePlayer.swift`, `MMTVLTests/AppRouterTests.swift`, `MMTVLTests/LiveTVModelTests.swift`
+- [x] **8. Live TV screen: play full screen** *(first playback; tests pass; the on-screen playback checks are in the user's list, see Deviations)*: `IPTV/LiveTVModel.swift`, `IPTV/LiveTVView.swift`, `Launcher/AppRouter.swift`, `Launcher/PlaceholderView.swift` (delete), `App/AppDelegate.swift`, `DesignSystem/Theme.swift`, `MMTVLTests/FakeLiveTV.swift`, `MMTVLTests/FakePlayer.swift`, `MMTVLTests/AppRouterTests.swift`, `MMTVLTests/LiveTVModelTests.swift`
   - **Model:** `LiveTVModel` with modes `.setupNeeded`, `.loading`, `.unavailable`, `.player` and the player-mode commands (Up/Down zap, Back, playPause, Left/Right/RW/FF seeks), banner, bar and L13. The guide arrives in step 10, so in this step:
     - Select in the player only retries on an error.
     - `open()` with no matching last channel plays the **first** channel. Step 10 changes this to the guide.
@@ -1378,7 +1378,7 @@ After every step, build with `xcodebuild -project MMTVL.xcodeproj -scheme MMTVL 
       - **Leave and re-enter 3 times → video still shows.** This checks the `releaseCGLContext` / `copyCGLContext` handling; if it's black, see Risks.
       - In Terminal, while playing, `pmset -g assertions | grep MMTVL` shows "MMTVL Live TV"; when paused, it's gone.
 
-- [ ] **9. Guide timeline and model (pure)**: `IPTV/Guide/GuideTimeline.swift`, `IPTV/Guide/GuideModel.swift`, `MMTVLTests/GuideTimelineTests.swift`, `MMTVLTests/GuideModelTests.swift`
+- [x] **9. Guide timeline and model (pure)**: `IPTV/Guide/GuideTimeline.swift`, `IPTV/Guide/GuideModel.swift`, `MMTVLTests/GuideTimelineTests.swift`, `MMTVLTests/GuideModelTests.swift`
   - Implement as in *Key types*.
   - `GuideTimelineTests`:
     - `halfHourFloor(14:47) == 14:30`.
@@ -1397,7 +1397,7 @@ After every step, build with `xcodebuild -project MMTVL.xcodeproj -scheme MMTVL 
     - Up/Down keep `focusTime`: from a future programme on row 0, Down focuses the cell covering the same time on row 1.
   - Done when the tests pass.
 
-- [ ] **10. Guide view and integration**: `IPTV/Guide/GuideView.swift`, `IPTV/LiveTVModel.swift`, `IPTV/LiveTVView.swift`, `DesignSystem/Theme.swift`, `MMTVLTests/LiveTVModelTests.swift`
+- [x] **10. Guide view and integration** *(tests pass; the on-screen guide checks are in the user's list, see Deviations)*: `IPTV/Guide/GuideView.swift`, `IPTV/LiveTVModel.swift`, `IPTV/LiveTVView.swift`, `DesignSystem/Theme.swift`, `MMTVLTests/LiveTVModelTests.swift`
   - Add the guide mode to `LiveTVModel` (Select → `openGuide()`; guide command handling; `loadProgrammes`; `guideDataChanged()`; `setChannels`). `open()` with no last channel → `.guide`.
   - Add `GuideView` and the Theme `guide*` tokens. The video frame moves to `guidePreviewRect` in guide mode (L16).
   - `LiveTVModelTests`:
@@ -1418,7 +1418,7 @@ After every step, build with `xcodebuild -project MMTVL.xcodeproj -scheme MMTVL 
       - Select plays a channel full screen.
       - Overlays draw **above** the video in both modes.
 
-- [ ] **11. Docs wrap-up**: `CLAUDE.md`, `docs/plans/MASTER_PLAN.md`, this file
+- [x] **11. Docs wrap-up** *(M4 stays In progress until the user's manual checks pass, see Deviations)*: `CLAUDE.md`, `docs/plans/MASTER_PLAN.md`, this file
   - **CLAUDE.md:**
     - Keychain accounts `iptv-playlist-url` and `iptv-guide-url`.
     - `iptv-state.json` (last channel/group, guide import bookkeeping; hand edits are allowed while MMTVL is quit).
@@ -1431,7 +1431,7 @@ After every step, build with `xcodebuild -project MMTVL.xcodeproj -scheme MMTVL 
   - Tick this plan's boxes and fill in the Manual verification results.
   - Done when the docs match the code.
 
-- [ ] **12. Full test run and kiosk pass**: no files
+- [x] **12. Full test run and kiosk pass**: no files
   - `xcodebuild … test` passes.
   - Run every *Manual verification* item in kiosk mode, ideally on the Mac mini and TV.
   - Done when they're all ticked or recorded in Deviations.
@@ -1472,19 +1472,19 @@ Tests never touch the network or mpv. The only exceptions are the real-Keychain 
 
 Run in kiosk mode unless noted, ideally on the Mac mini and TV:
 
-- [ ] Settings → Live TV: paste the playlist URL from the iPhone (Universal Clipboard) → the channel count shows. Record whether macOS asked for paste permission.
-- [ ] Paste the US2 guide URL; the guide line shows a programme count. With `epg-overrides.json` installed, about 58 of the 97 live channels show programmes (e.g. NBA TV, MLB Network, Fox Sports 1, MSG).
-- [ ] The Live TV tile resumes the last channel full screen in under ~3 s. The first time ever, it opens the guide.
-- [ ] Up/Down change channel with the banner (now/next). Picture and sound are fine at the TV's resolution, with no stutter.
-- [ ] **Rewind:** after 6+ minutes on a channel, hold Left/Rewind back **5 minutes**. It plays from there, and the bar shows "−5:xx". Fast-forward returns to "LIVE".
-- [ ] Pause for 2 minutes, resume → it continues from the paused frame, behind live.
-- [ ] The guide: preview video top right, the grid, the now line, the group list, Select plays. The overlays are readable from the couch.
-- [ ] Home from the player and from the guide → the home screen, with playback stopped. The tile resumes.
-- [ ] Sleep/wake while playing → home, stopped. The display didn't sleep during a long playback without input (the assertion).
-- [ ] A Require PIN set on the Live TV tile asks for the PIN.
-- [ ] Network down while playing → retries, then "Can't play this channel"; Select retries after reconnecting.
-- [ ] A controller works the player and guide (D-pad, A, B, X = play/pause, shoulders = ±30 s).
-- [ ] Activity Monitor: MMTVL memory while playing stays under about 1.2 GB, and CPU is low (hardware decoding).
+- [x] Settings → Live TV: paste the playlist URL from the iPhone (Universal Clipboard) → the channel count shows. Record whether macOS asked for paste permission.
+- [x] Paste the US2 guide URL; the guide line shows a programme count. With `epg-overrides.json` installed, about 58 of the 97 live channels show programmes (e.g. NBA TV, MLB Network, Fox Sports 1, MSG).
+- [x] The Live TV tile resumes the last channel full screen in under ~3 s. The first time ever, it opens the guide.
+- [x] Up/Down change channel with the banner (now/next). Picture and sound are fine at the TV's resolution, with no stutter.
+- [x] **Rewind:** after 6+ minutes on a channel, hold Left/Rewind back **5 minutes**. It plays from there, and the bar shows "−5:xx". Fast-forward returns to "LIVE".
+- [x] Pause for 2 minutes, resume → it continues from the paused frame, behind live.
+- [x] The guide: preview video top right, the grid, the now line, the group list, Select plays. The overlays are readable from the couch.
+- [x] Home from the player and from the guide → the home screen, with playback stopped. The tile resumes.
+- [x] Sleep/wake while playing → home, stopped. The display didn't sleep during a long playback without input (the assertion).
+- [x] A Require PIN set on the Live TV tile asks for the PIN.
+- [x] Network down while playing → retries, then "Can't play this channel"; Select retries after reconnecting.
+- [x] A controller works the player and guide (D-pad, A, B, X = play/pause, shoulders = ±30 s).
+- [x] Activity Monitor: MMTVL memory while playing stays under about 1.2 GB, and CPU is low (hardware decoding).
 
 ## Risks & fallbacks
 
@@ -1510,3 +1510,33 @@ Executors append here when the plan is wrong or ambiguous: the date, the step, w
 
 - **2026-10-06 (planner):** the user's provider was examined with redacted scripts and the spike (see *Research*).
 - **2026-10-06 (planner):** the user chose guide-source US2 as the guide. Matching was measured against it, which added L17 (`epg-overrides.json`) and the `+`/`&` normalization to L6. Coverage is 58/97 live channels. The FanDuel regionals and international channels need a second guide source (M6), or the much larger ALL_SOURCES1 file.
+- **2026-10-06, steps 3–6 (executor): small mechanical fixes.**
+  - `IPTVNetwork` is `nonisolated struct … : Sendable` (the plan showed a plain struct); the `@concurrent` importer takes it off main.
+  - `GuideImporter` unzips to `Caches/MMTVL/guide-<UUID>.xml` instead of a fixed `guide.xml`, so overlapping imports (tests run in parallel) never share a file. It is still deleted afterwards.
+  - `IPTVLibrary.refreshGuide()` returns early (status unchanged) while there are no channels. Otherwise an import racing the playlist fetch (Live TV's `open()` starts both) would match nothing, store an empty guide and mark it fresh for 12 h.
+  - The library caches the two Keychain URLs in memory (read at init, updated on set/remove), so `hasPlaylist` doesn't hit the Keychain on every Settings refresh. It also exposes `playlistHost` for Settings.
+  - The test fake is `IPTVNetwork.fake(texts:files:) -> (IPTVNetwork, FakeNetworkState)`; `FakeNetworkState` holds the call counters and can inject errors.
+  - The library is created before `SettingsModel`, so Settings' first status already reflects it.
+- **2026-10-06, step 6 (executor): launch refresh follows L5.** *AppDelegate wiring* says `refreshAll()` at launch, which forces a guide download on every launch; L5 says the guide refreshes at launch only when stale. The launch task is `refreshPlaylist()` then `refreshGuideIfStale()`. Refresh Now still forces both.
+- **2026-10-06, step 6 (executor): manual paste checks handed to the user.** The executor doesn't have the playlist URL, so pasting it, the paste-permission alert, Refresh Now and Remove are in the user's list. Settings → Live TV rows, paste errors and the confirm page are covered by `SettingsLiveTVTests`.
+- **2026-10-06, step 7 (executor):**
+  - The build shows OpenGL deprecation warnings in `MPVVideoView.swift` (`CAOpenGLLayer`, `gl*`, `CGL*`), unlike the scratch build. Left as the plan says.
+  - Swift 6's region checker rejects capturing the layer in `DispatchQueue.main.async` ("sending risks data races"), even though it is `@unchecked Sendable`, and then warns that `nonisolated(unsafe)` is unnecessary. A private `@unchecked Sendable` struct (`LayerRef`) carries it instead.
+  - `Timeshift.label` rounds to the nearest second, so the spike sample (58.95 s behind) reads "−0:59" as the plan's test expects.
+- **2026-10-06, steps 8 and 10 (executor):**
+  - `LiveTVModel.open()` sets `.loading` whenever a playlist exists (not only when channels are empty), so a reopen never flashes the previous screen while the playlist is checked.
+  - `GuideView` takes `model`, `currentChannel` and `phase` (no `library`); `LiveTVRootView` forwards `guideRevision` and `channels` changes to `model.guideDataChanged()` / `model.channelsChanged()`. `GuideModel` keeps all channels privately, which group changes and `setChannels` need.
+  - The step 8 interim "play the first channel" was replaced by the guide in step 10, as planned. The step 8 tests that relied on it now store a last channel.
+  - A cancelled guide query (leaving Live TV mid-load) is no longer logged as an error.
+  - Extra Theme tokens: `liveBannerLogoSize` (96) and `guideLogoSize` (48), the sizes the plan gives as literals.
+- **2026-10-06, steps 6, 8, 10, 12 (executor): on-screen checks handed to the user.** The executor ran a windowed launch (no playlist set): MMTVL started, created `guide.sqlite` and `iptv-state.json`, and quit cleanly. It didn't drive the UI (synthesized keys reached Terminal in M3) and has no playlist URL, so every playback, guide and paste check is in the user's list. Step 12 and the master-plan status wait for those; M4 stays **In progress**. 280 tests pass.
+
+- **2026-10-06 (user): manual checks work, except the behind-live badge.** While rewound, the top-right "−m:ss" badge counted down over about 5 s and jumped back, over and over.
+  - **Cause:** mpv's `cache-end` advances in whole HLS segments (about 4 s) as each one downloads, while `time-pos` advances smoothly, so L8's `cache-end − time-pos − 15` is a sawtooth.
+  - **Fix (executor):** a new `LiveEdgeSmoother` (`IPTV/Player/LiveEdgeSmoother.swift`) estimates the live edge from the latest peak of `cache-end − now` over 12 s and moves it with the clock. While playing, it ignores lag changes under 0.75 s.
+  - `Timeshift` gained `liveEdge`, which `behindLive`, `isLive` and `label` use. Seek targets and jump-to-live still use the raw `cache-end` (L8), so no seek goes past the cache. The smoother resets on every `loadfile`.
+  - `LiveEdgeSmootherTests` cover a steady label while rewound, natural lag reading as LIVE, the paused count-up, seeks and seek targets. 285 tests pass.
+  - Waiting for the user to re-check on the stream.
+- **2026-10-06 (user choice): the behind-live badge no longer stays on screen** (changes L11). It now shows with the timeshift bar, for 5 s after a seek and while paused, then fades with it. Nothing on screen marks that playback is behind live once the bar hides; the bar comes back on the next seek or pause.
+- **2026-10-06 (user): the steady, fading badge is confirmed ("it's good").** The user said "those worked" in answer to the full 34-item checklist (the step 6/8/10 checks and *Manual verification*). The only problem found was the badge, now fixed. Steps 12 and the manual list are ticked; M4 is **Done**. 285 tests pass.
+

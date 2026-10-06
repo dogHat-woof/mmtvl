@@ -342,3 +342,111 @@ struct SettingsYouTubeTests {
         #expect(model.page == .root)
     }
 }
+
+struct SettingsLiveTVTests {
+    private static let status = IPTVSettingsStatus(
+        hasPlaylist: true, playlistHost: "iptv.example", channelCount: 118, playlistLine: "Updated 10:42 PM",
+        guideKind: .custom("guide-source.online"), guideLine: "1,234 programmes · Updated 10:43 PM")
+
+    @Test func rootRowShowsSetupState() {
+        let (model, recorder) = makeSettingsModel()
+        #expect(model.row(id: "liveTV")?.value == "Not Set Up")
+        recorder.iptv = Self.status
+        model.refreshStatus()
+        #expect(model.row(id: "liveTV")?.value == "118 Channels")
+        model.perform(model.row(id: "liveTV")!.action!)
+        #expect(model.page == .liveTV)
+    }
+
+    @Test func pageWithoutPlaylistOnlyPastes() {
+        let (model, recorder) = makeSettingsModel()
+        model.perform(.push(.liveTV))
+        #expect(model.focusableRowIDs == ["iptv.playlist.paste"])
+        #expect(model.row(id: "iptv.playlist.paste")?.title == "Paste Playlist URL")
+        #expect(model.row(id: "iptv.guide.paste") == nil)
+        model.press(.select)
+        #expect(recorder.pastes == [.playlist])
+    }
+
+    @Test func pasteErrorShowsUntilNavigation() {
+        let (model, recorder) = makeSettingsModel()
+        model.perform(.push(.liveTV))
+        let defaultDetail = model.row(id: "iptv.playlist.paste")?.detail
+        #expect(defaultDetail == "Copy the M3U address on this Mac or your iPhone first")
+
+        recorder.pasteResult = "The clipboard doesn't hold a web address."
+        model.press(.select)
+        #expect(model.row(id: "iptv.playlist.paste")?.detail == "The clipboard doesn't hold a web address.")
+
+        model.press(.back)
+        model.perform(.push(.liveTV))
+        #expect(model.row(id: "iptv.playlist.paste")?.detail == defaultDetail)
+
+        // A successful paste clears it too.
+        model.press(.select)
+        recorder.pasteResult = nil
+        model.press(.select)
+        #expect(model.row(id: "iptv.playlist.paste")?.detail == defaultDetail)
+    }
+
+    @Test func pageWithPlaylistAndCustomGuide() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = Self.status
+        model.refreshStatus()
+        model.perform(.push(.liveTV))
+        #expect(model.focusableRowIDs == ["iptv.playlist.paste", "iptv.guide.paste", "iptv.guide.usePlaylist",
+                                          "iptv.refresh", "iptv.remove"])
+        let info = model.row(id: "iptv.playlist.info")
+        #expect(info?.title == "iptv.example")
+        #expect(info?.value == "118 Channels")
+        #expect(info?.detail == "Updated 10:42 PM")
+        #expect(model.row(id: "iptv.playlist.paste")?.title == "Replace with Clipboard URL")
+        #expect(model.row(id: "iptv.guide.info")?.title == "Custom: guide-source.online")
+        #expect(model.row(id: "iptv.guide.info")?.detail == "1,234 programmes · Updated 10:43 PM")
+
+        model.press(.down, .select)
+        #expect(recorder.pastes == [.guide])
+        model.press(.down, .select)
+        #expect(recorder.playlistGuideUses == 1)
+        model.press(.down, .select)
+        #expect(recorder.iptvRefreshes == 1)
+    }
+
+    @Test func playlistGuideHasNoUsePlaylistRow() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = Self.status
+        recorder.iptv.guideKind = .playlist("guide.example")
+        model.refreshStatus()
+        model.perform(.push(.liveTV))
+        #expect(model.focusableRowIDs == ["iptv.playlist.paste", "iptv.guide.paste", "iptv.refresh", "iptv.remove"])
+        #expect(model.row(id: "iptv.guide.info")?.title == "From the playlist: guide.example")
+    }
+
+    @Test func noGuideExplainsHowToAddOne() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = Self.status
+        recorder.iptv.guideKind = .none
+        model.refreshStatus()
+        model.perform(.push(.liveTV))
+        #expect(model.row(id: "iptv.guide.info")?.title == "No guide")
+        #expect(model.row(id: "iptv.guide.info")?.detail == "Paste an XMLTV guide URL to see what's on")
+    }
+
+    @Test func removeConfirmFocusesCancelFirst() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = Self.status
+        model.refreshStatus()
+        model.perform(.push(.liveTV))
+        model.perform(model.row(id: "iptv.remove")!.action!)
+        #expect(model.page == .confirmRemoveIPTV)
+        #expect(model.focusedRowID == "confirm.cancel")
+        model.press(.select)
+        #expect(model.page == .liveTV)
+        #expect(recorder.iptvRemovals == 0)
+
+        model.perform(.push(.confirmRemoveIPTV))
+        model.press(.down, .select)
+        #expect(recorder.iptvRemovals == 1)
+        #expect(model.page == .liveTV)
+    }
+}

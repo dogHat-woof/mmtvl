@@ -27,4 +27,10 @@ struct SettingsEnvironment {
     var reloadYouTube: () -> Void
     /// `YouTubeController.clearData()`, fire and forget.
     var clearYouTubeData: () -> Void
+    var iptvStatus: () -> IPTVSettingsStatus
+    /// Reads the clipboard. Returns an error message, or nil on success; on success it starts the save + refresh.
+    var pasteIPTVURL: (IPTVURLKind) -> String?
+    var useIPTVPlaylistGuide: () -> Void
+    var refreshIPTV: () -> Void
+    var removeIPTVSource: () -> Void
 }
