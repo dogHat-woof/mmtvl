@@ -239,12 +239,20 @@ final class RemoteServer: RemoteTransport {
             return HTTPResponse.error(405, "Method Not Allowed")
         }
         guard let asset = RemoteWebAssets.asset(forPath: head.path),
-              let body = RemoteWebAssets.data(for: asset)
+              let body = body(for: asset)
         else {
             return HTTPResponse.error(404, "Not Found")
         }
         return HTTPResponse.make(status: 200, reason: "OK", contentType: asset.contentType, body: body,
                                  includeBody: head.method == "GET")
+    }
+
+    private static func body(for asset: RemoteWebAsset) -> Data? {
+        switch asset.generated {
+        case .icon(let size): PhoneRemoteIcon.png(size: size)
+        case .manifest: Data(RemoteWebManifest.json.utf8)
+        case nil: RemoteWebAssets.data(for: asset)
+        }
     }
 
     private static func respond(on connection: NWConnection, with data: Data) {

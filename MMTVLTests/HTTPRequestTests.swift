@@ -57,4 +57,49 @@ struct HTTPRequestTests {
         #expect(error.hasPrefix("HTTP/1.1 404 Not Found\r\n"))
         #expect(error.hasSuffix("404 Not Found"))
     }
+
+    @Test func extraHeadersAndNoContentType() {
+        let data = HTTPResponse.make(status: 201, reason: "Created", contentType: nil,
+                                     headers: [HTTPHeader(name: "Location", value: "http://x/run")],
+                                     body: Data(), includeBody: true)
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(!text.contains("\r\nContent-Type:"))
+        #expect(text.hasPrefix("HTTP/1.1 201 Created\r\nContent-Length: 0\r\nLocation: http://x/run\r\nConnection: close\r\n"))
+        #expect(text.hasSuffix("\r\n\r\n"))
+    }
+
+    @Test func reasons() {
+        #expect(HTTPResponse.reason(for: 200) == "OK")
+        #expect(HTTPResponse.reason(for: 201) == "Created")
+        #expect(HTTPResponse.reason(for: 302) == "Found")
+        #expect(HTTPResponse.reason(for: 403) == "Forbidden")
+        #expect(HTTPResponse.reason(for: 413) == "Content Too Large")
+        #expect(HTTPResponse.reason(for: 431) == "Request Header Fields Too Large")
+        #expect(HTTPResponse.reason(for: 501) == "Not Implemented")
+        #expect(HTTPResponse.reason(for: 299) == "Status")
+    }
+
+    @Test func generatedAssets() {
+        for path in ["/apple-touch-icon.png", "/apple-touch-icon-precomposed.png"] {
+            #expect(RemoteWebAssets.asset(forPath: path)?.generated == .icon(size: 180))
+            #expect(RemoteWebAssets.asset(forPath: path)?.contentType == "image/png")
+        }
+        #expect(RemoteWebAssets.asset(forPath: "/icon-192.png")?.generated == .icon(size: 192))
+        #expect(RemoteWebAssets.asset(forPath: "/icon-512.png")?.generated == .icon(size: 512))
+        let manifest = RemoteWebAssets.asset(forPath: "/remote.webmanifest")
+        #expect(manifest?.generated == .manifest)
+        #expect(manifest?.contentType == "application/manifest+json; charset=utf-8")
+        #expect(RemoteWebAssets.asset(forPath: "/")?.generated == nil)
+        // Generated assets never come from the bundle.
+        if let manifest { #expect(RemoteWebAssets.data(for: manifest) == nil) }
+    }
+
+    @Test func manifestDecodes() throws {
+        let object = try JSONSerialization.jsonObject(with: Data(RemoteWebManifest.json.utf8)) as? [String: Any]
+        #expect(object?["short_name"] as? String == "MMTVL")
+        #expect(object?["display"] as? String == "standalone")
+        let icons = try #require(object?["icons"] as? [[String: Any]])
+        #expect(icons.count == 2)
+        #expect(icons.map { $0["sizes"] as? String } == ["192x192", "512x512"])
+    }
 }

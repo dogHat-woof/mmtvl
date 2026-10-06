@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Planned |
+| Status | In progress |
 | Depends on | M7 (and M3 YouTube, M5 phone remote) |
 | Master plan decisions used | D1, D3, D4, D5, D9, D10, D11, D12, D15, D17, D18, D19, D20, D21, D24, D28; new **D30** (YouTube DIAL receiver), **D31** (phone trackpad and home-screen icon), **D32** (Android screen mirroring through Reflector) |
 | Planned | 2026-10-06 |
@@ -545,7 +545,7 @@ Every way in which a phone puts something on the TV, and what MMTVL does around 
 
 Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodebuild … build`) and run the step's tests.
 
-- [ ] **1. Phone remote icon and manifest**: `RemoteServer/HTTPRequest.swift`, `RemoteServer/RemoteWebAssets.swift`, `RemoteServer/PhoneRemoteIcon.swift` (new), `RemoteServer/RemoteServer.swift`, `RemoteServer/Web/remote.html`, `MMTVLTests/HTTPRequestTests.swift`, `MMTVLTests/PhoneRemoteIconTests.swift` (new)
+- [x] **1. Phone remote icon and manifest**: `RemoteServer/HTTPRequest.swift`, `RemoteServer/RemoteWebAssets.swift`, `RemoteServer/PhoneRemoteIcon.swift` (new), `RemoteServer/RemoteServer.swift`, `RemoteServer/Web/remote.html`, `MMTVLTests/HTTPRequestTests.swift`, `MMTVLTests/PhoneRemoteIconTests.swift` (new)
   - `HTTPHeader`, `HTTPResponse.make(contentType: String?, headers:)`, `HTTPResponse.reason(for:)` as sketched. Header order: status line, Content-Type (if any), Content-Length, the extra headers, Connection, Cache-Control, X-Content-Type-Options.
   - `RemoteWebAsset.generated`, the new paths and `RemoteWebManifest.json` (L10). Keep `data(for:bundle:)` for bundle files only (returns nil for generated ones).
   - `PhoneRemoteIcon.png(size:)`: `Image("Logo").resizable().interpolation(.high).frame(width: size, height: size)` rendered with `ImageRenderer` (`scale = 1`), `cgImage` → `NSBitmapImageRep(cgImage:).representation(using: .png, properties: [:])`. Cache in a `[Int: Data]` static dictionary. The `Logo` image set already exists in `Assets.xcassets` (don't change it).

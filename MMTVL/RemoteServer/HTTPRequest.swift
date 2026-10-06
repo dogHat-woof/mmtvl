@@ -31,23 +31,50 @@ nonisolated struct HTTPRequestHead: Equatable, Sendable {
     }
 }
 
+/// One extra response header (M7b).
+nonisolated struct HTTPHeader: Equatable, Sendable {
+    var name: String
+    var value: String
+}
+
 nonisolated enum HTTPResponse {
-    /// Status line, Content-Type, Content-Length, Connection: close, Cache-Control: no-store,
-    /// X-Content-Type-Options: nosniff, blank line, body (omitted for HEAD).
-    static func make(status: Int, reason: String, contentType: String, body: Data, includeBody: Bool) -> Data {
-        let head = [
-            "HTTP/1.1 \(status) \(reason)",
-            "Content-Type: \(contentType)",
-            "Content-Length: \(body.count)",
+    /// Status line, Content-Type (if any), Content-Length, the extra `headers`, Connection: close,
+    /// Cache-Control: no-store, X-Content-Type-Options: nosniff, blank line, body (omitted for HEAD).
+    static func make(status: Int, reason: String, contentType: String?, headers: [HTTPHeader] = [],
+                     body: Data, includeBody: Bool) -> Data {
+        var lines = ["HTTP/1.1 \(status) \(reason)"]
+        if let contentType { lines.append("Content-Type: \(contentType)") }
+        lines.append("Content-Length: \(body.count)")
+        lines += headers.map { "\($0.name): \($0.value)" }
+        lines += [
             "Connection: close",
             "Cache-Control: no-store",
             "X-Content-Type-Options: nosniff",
             "",
             "",
-        ].joined(separator: "\r\n")
-        var data = Data(head.utf8)
+        ]
+        var data = Data(lines.joined(separator: "\r\n").utf8)
         if includeBody { data.append(body) }
         return data
+    }
+
+    /// The reason phrase for the statuses MMTVL sends; anything else "Status".
+    static func reason(for status: Int) -> String {
+        switch status {
+        case 200: "OK"
+        case 201: "Created"
+        case 204: "No Content"
+        case 302: "Found"
+        case 400: "Bad Request"
+        case 403: "Forbidden"
+        case 404: "Not Found"
+        case 405: "Method Not Allowed"
+        case 413: "Content Too Large"
+        case 431: "Request Header Fields Too Large"
+        case 501: "Not Implemented"
+        case 503: "Service Unavailable"
+        default: "Status"
+        }
     }
 
     /// text/plain body "<status> <reason>".
