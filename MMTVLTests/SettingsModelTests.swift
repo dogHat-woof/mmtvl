@@ -253,3 +253,92 @@ struct SettingsAddTileTests {
         #expect(!model.focusableRowIDs.contains("apps.none"))
     }
 }
+
+struct SettingsPINTests {
+    private func rowIDs(_ model: SettingsModel) -> [String] {
+        model.sections.flatMap(\.rows).map(\.id)
+    }
+
+    @Test func rootOffersSetPINWithoutPIN() {
+        let (model, recorder) = makeSettingsModel()
+        #expect(rowIDs(model).contains("pin.set"))
+        #expect(!rowIDs(model).contains("pin.change"))
+        model.perform(model.row(id: "pin.set")!.action!)
+        #expect(recorder.pinFlows == [.setNew])
+    }
+
+    @Test func rootOffersChangeAndTurnOffWithPIN() {
+        let (model, recorder) = makeSettingsModel(hasPIN: true)
+        #expect(!rowIDs(model).contains("pin.set"))
+        model.perform(model.row(id: "pin.change")!.action!)
+        model.perform(model.row(id: "pin.off")!.action!)
+        #expect(recorder.pinFlows == [.change, .turnOff])
+    }
+
+    @Test func refreshStatusRereadsPIN() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.hasPIN = true
+        model.refreshStatus()
+        #expect(model.hasPIN)
+        #expect(rowIDs(model).contains("pin.change"))
+    }
+
+    @Test func requirePINRowOnlyForOrdinaryTiles() {
+        let (model, _) = makeSettingsModel()
+        model.perform(.push(.tile(id: "plex")))
+        #expect(rowIDs(model).contains("tile.requiresPIN"))
+        model.perform(.pop)
+        model.perform(.push(.tile(id: "settings")))
+        #expect(!rowIDs(model).contains("tile.requiresPIN"))
+        model.perform(.pop)
+        model.perform(.push(.tile(id: "exit")))
+        #expect(!rowIDs(model).contains("tile.requiresPIN"))
+        #expect(model.sections.first?.footer == "Exit to Desktop always asks for the PIN when one is set.")
+    }
+
+    @Test func toggleRequiresPINAppliesItems() {
+        let (model, recorder) = makeSettingsModel()
+        model.perform(.push(.tile(id: "plex")))
+        model.perform(.toggleTileRequiresPIN(id: "plex"))
+        #expect(recorder.appliedItems.last?.first { $0.id == "plex" }?.requiresPIN == true)
+        model.perform(.toggleTileRequiresPIN(id: "plex"))
+        #expect(recorder.appliedItems.last?.first { $0.id == "plex" }?.requiresPIN == nil)
+        model.perform(.toggleTileRequiresPIN(id: "exit"))
+        #expect(recorder.appliedItems.count == 2)
+    }
+
+    @Test func requirePINDetailDependsOnPIN() {
+        let (without, _) = makeSettingsModel()
+        without.perform(.push(.tile(id: "plex")))
+        #expect(without.row(id: "tile.requiresPIN")?.detail == "Set a PIN in Settings first")
+        let (with, _) = makeSettingsModel(hasPIN: true)
+        with.perform(.push(.tile(id: "plex")))
+        #expect(with.row(id: "tile.requiresPIN")?.detail == nil)
+    }
+}
+
+struct SettingsYouTubeTests {
+    @Test func rootHasYouTubeRows() {
+        let (model, recorder) = makeSettingsModel()
+        #expect(model.row(id: "youtube.clear") != nil)
+        model.perform(model.row(id: "youtube.reload")!.action!)
+        #expect(recorder.youtubeReloads == 1)
+    }
+
+    @Test func clearConfirmFocusesCancelFirst() {
+        let (model, recorder) = makeSettingsModel()
+        model.perform(.push(.confirmClearYouTube))
+        #expect(model.focusedRowID == "confirm.cancel")
+        model.press(.select)
+        #expect(model.page == .root)
+        #expect(recorder.youtubeClears == 0)
+    }
+
+    @Test func clearConfirmClearsAndPops() {
+        let (model, recorder) = makeSettingsModel()
+        model.perform(.push(.confirmClearYouTube))
+        model.press(.down, .select)
+        #expect(recorder.youtubeClears == 1)
+        #expect(model.page == .root)
+    }
+}

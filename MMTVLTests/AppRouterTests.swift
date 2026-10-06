@@ -2,9 +2,26 @@ import Testing
 @testable import MMTVL
 
 struct AppRouterTests {
-    private func makeRouter(items: [LaunchItem] = LaunchItem.defaults) -> AppRouter {
+    private func makeRouter(
+        items: [LaunchItem] = LaunchItem.defaults,
+        youtube: FakeYouTube = FakeYouTube(),
+        pin: String? = nil
+    ) -> AppRouter {
         let (settings, _) = makeSettingsModel(items: items)
-        return AppRouter(items: items, launcher: AppLauncher(), settings: settings)
+        return AppRouter(items: items, launcher: AppLauncher(), settings: settings, youtube: youtube, pinStore: .inMemory(pin))
+    }
+
+    private func enterPIN(_ code: String, _ router: AppRouter) {
+        for command in pinCommands(for: code, startRow: router.pinEntry?.pad.row ?? 0) {
+            _ = router.handle(command)
+        }
+    }
+
+    /// The YouTube tile is the second tile in the defaults.
+    private func openYouTubeFromTile(_ router: AppRouter) {
+        _ = router.handle(.right)
+        #expect(router.visibleItems[router.focus.index!].kind == .internalDestination(.youtube))
+        _ = router.handle(.select)
     }
 
     /// The Settings tile is the first tile of the second row in the defaults.
@@ -54,5 +71,155 @@ struct AppRouterTests {
         _ = router.handle(.right)
         router.setItems(items.settingHidden(true, id: items[2].id))
         #expect(router.focus.index == 1)
+    }
+
+    @Test func youtubeTileOpensYouTube() {
+        let youtube = FakeYouTube()
+        let router = makeRouter(youtube: youtube)
+        openYouTubeFromTile(router)
+        #expect(router.screen == .youtube)
+        #expect(youtube.opens == 1)
+    }
+
+    @Test func youtubeForwardsCommandsExceptHome() {
+        let youtube = FakeYouTube()
+        let router = makeRouter(youtube: youtube)
+        openYouTubeFromTile(router)
+        let commands: [RemoteCommand] = [.up, .down, .left, .right, .select, .back, .playPause, .fastForward, .rewind]
+        for command in commands {
+            #expect(router.handle(command))
+        }
+        #expect(youtube.sent == commands)
+        #expect(router.screen == .youtube)
+    }
+
+    @Test func homeLeavesYouTubeAndPauses() {
+        let youtube = FakeYouTube()
+        let router = makeRouter(youtube: youtube)
+        openYouTubeFromTile(router)
+        #expect(router.handle(.home))
+        #expect(router.screen == .home)
+        #expect(youtube.pauses == 1)
+        #expect(youtube.sent.isEmpty)
+        #expect(router.visibleItems[router.focus.index!].kind == .internalDestination(.youtube))
+    }
+
+    @Test func reopeningYouTubeAsksControllerEachTime() {
+        let youtube = FakeYouTube()
+        let router = makeRouter(youtube: youtube)
+        openYouTubeFromTile(router)
+        _ = router.handle(.home)
+        _ = router.handle(.select)
+        #expect(router.screen == .youtube)
+        #expect(youtube.opens == 2)
+    }
+
+    // MARK: PIN (D20)
+
+    @Test func settingsTileOpensDirectlyWithoutPIN() {
+        let router = makeRouter()
+        openSettingsFromTile(router)
+        #expect(router.screen == .settings)
+        #expect(router.pinEntry == nil)
+    }
+
+    @Test func settingsTileAsksForPIN() {
+        let router = makeRouter(pin: "1357")
+        openSettingsFromTile(router)
+        #expect(router.screen == .pin(.openSettings))
+        enterPIN("1357", router)
+        #expect(router.screen == .settings)
+        #expect(router.pinEntry == nil)
+    }
+
+    @Test func wrongPINStaysOnPINScreen() {
+        let router = makeRouter(pin: "1357")
+        openSettingsFromTile(router)
+        enterPIN("2468", router)
+        #expect(router.screen == .pin(.openSettings))
+        #expect(router.pinEntry?.message == "Wrong PIN")
+    }
+
+    @Test func backOnEmptyPINAndHomeReturnHome() {
+        let router = makeRouter(pin: "1357")
+        openSettingsFromTile(router)
+        #expect(router.handle(.back))
+        #expect(router.screen == .home)
+        openSettingsFromTile(router)
+        _ = router.handle(.left)
+        #expect(router.handle(.home))
+        #expect(router.screen == .home)
+        #expect(router.pinEntry == nil)
+    }
+
+    @Test func exitTileAsksForPINThenExits() {
+        let router = makeRouter(pin: "1357")
+        var exits = 0
+        router.onExitToDesktop = { exits += 1 }
+        _ = router.handle(.down)
+        _ = router.handle(.right)
+        #expect(router.visibleItems[router.focus.index!].isExitToDesktop)
+        _ = router.handle(.select)
+        #expect(router.screen == .pin(.exitToDesktop))
+        #expect(exits == 0)
+        enterPIN("1357", router)
+        #expect(exits == 1)
+        #expect(router.screen == .home)
+    }
+
+    @Test func flaggedTileAsksForPINThenOpens() {
+        let items = LaunchItem.defaults.settingRequiresPIN(true, id: "youtube")
+        let youtube = FakeYouTube()
+        let router = makeRouter(items: items, youtube: youtube, pin: "1357")
+        openYouTubeFromTile(router)
+        #expect(router.screen == .pin(.openTile(id: "youtube")))
+        #expect(youtube.opens == 0)
+        enterPIN("1357", router)
+        #expect(router.screen == .youtube)
+        #expect(youtube.opens == 1)
+    }
+
+    @Test func unflaggedTileOpensWithoutPIN() {
+        let youtube = FakeYouTube()
+        let router = makeRouter(youtube: youtube, pin: "1357")
+        openYouTubeFromTile(router)
+        #expect(router.screen == .youtube)
+    }
+
+    @Test func lockoutSurvivesCancel() {
+        let router = makeRouter(pin: "1357")
+        openSettingsFromTile(router)
+        for _ in 0..<5 { enterPIN("2468", router) }
+        _ = router.handle(.back)
+        #expect(router.screen == .home)
+        _ = router.handle(.select)
+        _ = router.handle(.left)
+        #expect(router.pinEntry?.message?.hasPrefix("Too many tries") == true)
+    }
+
+    @Test func settingsPINFlowReturnsToSameSettingsPage() {
+        let router = makeRouter()
+        router.openSettings()
+        router.settings.perform(.push(.homeScreen))
+        router.requestPIN(.setNew)
+        #expect(router.screen == .pin(.setNew))
+        enterPIN("2580", router)
+        enterPIN("2580", router)
+        #expect(router.screen == .settings)
+        #expect(router.settings.page == .homeScreen)
+        #expect(router.hasPIN)
+    }
+
+    @Test func cancellingSettingsPINFlowReturnsToSettings() {
+        let router = makeRouter(pin: "1357")
+        router.openSettings()
+        router.requestPIN(.turnOff)
+        _ = router.handle(.back)
+        #expect(router.screen == .settings)
+        #expect(router.hasPIN)
+        router.requestPIN(.turnOff)
+        enterPIN("1357", router)
+        #expect(router.screen == .settings)
+        #expect(!router.hasPIN)
     }
 }

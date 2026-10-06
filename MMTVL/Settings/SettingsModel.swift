@@ -17,6 +17,7 @@ final class SettingsModel {
     private(set) var movingTileID: String?
     private(set) var isAccessibilityTrusted: Bool
     private(set) var loginItemStatus: LoginItemStatus
+    private(set) var hasPIN: Bool
     /// nil = loading (addTile page).
     private(set) var installedApps: [InstalledApp]?
     @ObservationIgnored let environment: SettingsEnvironment
@@ -27,6 +28,7 @@ final class SettingsModel {
         self.environment = environment
         isAccessibilityTrusted = environment.isAccessibilityTrusted()
         loginItemStatus = environment.loginItemStatus()
+        hasPIN = environment.hasPIN()
     }
 
     var page: SettingsPage { stack[stack.count - 1].page }
@@ -50,10 +52,11 @@ final class SettingsModel {
         refreshStatus()
     }
 
-    /// L10: re-read on open, after toggles and when the app becomes active.
+    /// L10: re-read on open, after toggles, after a PIN flow and when the app becomes active.
     func refreshStatus() {
         isAccessibilityTrusted = environment.isAccessibilityTrusted()
         loginItemStatus = environment.loginItemStatus()
+        hasPIN = environment.hasPIN()
     }
 
     /// Returns false only for commands it doesn't use, and for Back on the root page (the router then goes home).
@@ -150,6 +153,16 @@ final class SettingsModel {
             addTile(LaunchItem(id: "app.\(app.bundleID)", title: app.name, kind: .application(bundleID: app.bundleID)))
         case .restoreDefaults:
             updateItems(LaunchItem.defaults)
+            pop()
+        case .startPIN(let purpose):
+            environment.startPINFlow(purpose)
+        case .toggleTileRequiresPIN(let id):
+            guard let item = item(id: id), !item.isSettingsTile, !item.isExitToDesktop else { return }
+            updateItems(items.settingRequiresPIN(item.requiresPIN != true, id: id))
+        case .reloadYouTube:
+            environment.reloadYouTube()
+        case .clearYouTubeData:
+            environment.clearYouTubeData()
             pop()
         }
     }

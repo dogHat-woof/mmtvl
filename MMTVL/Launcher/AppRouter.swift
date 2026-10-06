@@ -11,6 +11,8 @@ final class AppRouter {
         case placeholder(LaunchItem)
         case accessibilityOnboarding
         case settings
+        case youtube
+        case pin(PINPurpose)
     }
 
     private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "AppRouter")
@@ -23,18 +25,28 @@ final class AppRouter {
     /// Kept while another screen is shown, so Back restores the previous focus position.
     private(set) var focus: LauncherFocusModel
     private(set) var shakeTriggers: [LaunchItem.ID: Int] = [:]
+    /// The PIN screen's model while `screen` is `.pin`.
+    private(set) var pinEntry: PINEntryModel?
 
     @ObservationIgnored let launcher: AppLauncher
     let settings: SettingsModel
+    @ObservationIgnored let youtube: any YouTubeHosting
+    @ObservationIgnored private let pinStore: PINStore
+    /// Kept across PIN screens, so cancelling doesn't reset the lockout (L10).
+    @ObservationIgnored private var pinLockout = PINLockout()
+    /// Where cancelling the PIN screen returns: .home or .settings.
+    @ObservationIgnored private var screenBeforePIN: Screen = .home
     /// L8: hover only moves focus after the pointer moved since the last consumed command.
     @ObservationIgnored private var pointerLocationAtLastCommand: NSPoint?
     @ObservationIgnored var onExitToDesktop: (() -> Void)?
     @ObservationIgnored var onRequestAccessibility: (() -> Void)?
 
-    init(items: [LaunchItem], launcher: AppLauncher, settings: SettingsModel) {
+    init(items: [LaunchItem], launcher: AppLauncher, settings: SettingsModel, youtube: any YouTubeHosting, pinStore: PINStore) {
         self.items = items
         self.launcher = launcher
         self.settings = settings
+        self.youtube = youtube
+        self.pinStore = pinStore
         let visibleItems = items.visible
         self.visibleItems = visibleItems
         focus = LauncherFocusModel(itemCount: visibleItems.count, perRow: Theme.tilesPerRow)
@@ -114,12 +126,101 @@ final class AppRouter {
                 return true
             }
             return false
+
+        case .youtube:
+            // L2: Home always leaves; everything else goes to leanback.
+            if command == .home {
+                goHome()
+            } else {
+                youtube.send(command)
+            }
+            return true
+
+        case .pin:
+            if command == .home {
+                goHome()
+            } else if let result = pinEntry?.handle(command) {
+                finishPIN(result)
+            }
+            return true
         }
     }
 
-    /// Shows the home screen, keeping the focus position.
+    /// Shows the home screen, keeping the focus position. Leaving YouTube pauses it (L3).
     func goHome() {
+        if screen == .youtube {
+            youtube.pause()
+        }
+        closePINEntry()
         screen = .home
+    }
+
+    var hasPIN: Bool { pinStore.load() != nil }
+
+    /// Shows the PIN screen; cancelling returns to the current screen (home or Settings).
+    func requestPIN(_ purpose: PINPurpose) {
+        screenBeforePIN = screen == .settings ? .settings : .home
+        pinEntry = PINEntryModel(purpose: purpose, storedPIN: pinStore.load(), lockout: pinLockout)
+        screen = .pin(purpose)
+    }
+
+    /// Mouse click on the PIN screen's keypad.
+    func pinEnter(row: Int, column: Int) {
+        guard let result = pinEntry?.enter(row: row, column: column) else { return }
+        finishPIN(result)
+    }
+
+    private func finishPIN(_ result: PINEntryModel.Result) {
+        guard let purpose = pinEntry?.purpose else { return }
+        closePINEntry()
+        switch result {
+        case .cancelled:
+            screen = screenBeforePIN
+        case .verified:
+            switch purpose {
+            case .openSettings:
+                openSettings()
+            case .openTile(let id):
+                screen = .home
+                if let item = visibleItems.first(where: { $0.id == id }) { open(item) }
+            case .exitToDesktop:
+                screen = .home
+                onExitToDesktop?()
+            case .setNew, .change, .turnOff:
+                screen = screenBeforePIN
+            }
+        case .newPIN(let pin):
+            do {
+                try pinStore.save(pin)
+            } catch {
+                Self.logger.error("Failed to save the PIN: \(error.localizedDescription, privacy: .public)")
+            }
+            returnToSettings()
+        case .removed:
+            do {
+                try pinStore.remove()
+            } catch {
+                Self.logger.error("Failed to remove the PIN: \(error.localizedDescription, privacy: .public)")
+            }
+            returnToSettings()
+        }
+    }
+
+    /// Back to the same Settings page (not `openSettings()`, which resets the page stack).
+    private func returnToSettings() {
+        screen = .settings
+        settings.refreshStatus()
+    }
+
+    /// Keeps the lockout for the next PIN screen.
+    private func closePINEntry() {
+        if let pinEntry { pinLockout = pinEntry.lockout }
+        pinEntry = nil
+    }
+
+    func openYouTube() {
+        youtube.open()
+        screen = .youtube
     }
 
     func showAccessibilityOnboarding() {
@@ -151,6 +252,21 @@ final class AppRouter {
         focus.focus(index: index)
         let item = visibleItems[index]
 
+        if item.isPINProtected && hasPIN {
+            if item.isSettingsTile {
+                requestPIN(.openSettings)
+            } else if item.isExitToDesktop {
+                requestPIN(.exitToDesktop)
+            } else {
+                requestPIN(.openTile(id: item.id))
+            }
+            return
+        }
+        open(item)
+    }
+
+    /// Opens a tile without asking for the PIN (already checked or not needed).
+    private func open(_ item: LaunchItem) {
         switch item.kind {
         case .application, .url, .defaultBrowser:
             guard launcher.isInstalled(item) else {
@@ -168,6 +284,8 @@ final class AppRouter {
             }
         case .internalDestination(.settings):
             openSettings()
+        case .internalDestination(.youtube):
+            openYouTube()
         case .internalDestination:
             screen = .placeholder(item)
         case .system(.exitToDesktop):
@@ -179,16 +297,22 @@ final class AppRouter {
 /// Lays the active screen out on the 1920×1080 canvas and scales it to the window.
 struct LauncherRootView: View {
     let router: AppRouter
+    let youtube: YouTubeController
 
     var body: some View {
-        GeometryReader { geometry in
-            content
-                .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height)
-                .scaleEffect(Theme.scale(for: geometry.size))
-                .frame(width: geometry.size.width, height: geometry.size.height)
+        if router.screen == .youtube {
+            // L4: outside the scaled canvas, at the window's real size.
+            YouTubeView(controller: youtube)
+        } else {
+            GeometryReader { geometry in
+                content
+                    .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height)
+                    .scaleEffect(Theme.scale(for: geometry.size))
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+            }
+            .background(Theme.backgroundGradient)
+            .ignoresSafeArea()
         }
-        .background(Theme.backgroundGradient)
-        .ignoresSafeArea()
     }
 
     @ViewBuilder
@@ -217,6 +341,13 @@ struct LauncherRootView: View {
                 onHoverRow: router.hoverSettingsRow,
                 onActivateRow: router.settings.activate
             )
+        case .youtube:
+            // Shown by `body` outside the canvas.
+            EmptyView()
+        case .pin:
+            if let pinEntry = router.pinEntry {
+                PINEntryView(model: pinEntry, onEnter: router.pinEnter)
+            }
         }
     }
 }

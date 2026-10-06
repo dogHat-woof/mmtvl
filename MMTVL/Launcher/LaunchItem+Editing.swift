@@ -24,6 +24,11 @@ nonisolated extension Array where Element == LaunchItem {
         updating(id: id) { $0.launchFullScreen = fullScreen }
     }
 
+    /// Stores `true` when on and `nil` when off, keeping the JSON clean.
+    func settingRequiresPIN(_ on: Bool, id: String) -> [LaunchItem] {
+        updating(id: id) { $0.requiresPIN = on ? true : nil }
+    }
+
     func removingItem(id: String) -> [LaunchItem] {
         filter { $0.id != id }
     }

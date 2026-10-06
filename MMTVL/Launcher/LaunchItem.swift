@@ -18,11 +18,17 @@ nonisolated struct LaunchItem: Codable, Identifiable, Hashable, Sendable {
     var iconSymbol: String?   // SF Symbol for internal/system items
     var launchFullScreen: Bool?   // nil = the kind's default; Optional so older files decode
     var isHidden: Bool?           // nil/false = shown; Optional so older files decode; stored as nil when shown
+    var requiresPIN: Bool?        // D20: asks for the launcher PIN when one is set; stored as nil when off
 
     var isVisible: Bool { isHidden != true }
 
     /// The only way into Settings, so it's always on the Home screen: movable, never hidden or removed.
     var isSettingsTile: Bool { kind == .internalDestination(.settings) }
+
+    var isExitToDesktop: Bool { kind == .system(.exitToDesktop) }
+
+    /// Asks for the PIN when one is set (D20, L8): Settings and Exit to Desktop always, others when flagged.
+    var isPINProtected: Bool { isSettingsTile || isExitToDesktop || requiresPIN == true }
 
     /// Kinds whose window `AppLauncher` can make full screen (D15).
     var supportsFullScreen: Bool {

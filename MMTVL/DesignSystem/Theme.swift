@@ -75,6 +75,23 @@ enum Theme {
     static let focusedRowText = Color.black
     static let focusedRowSecondaryText = Color.black.opacity(0.6)
 
+    // MARK: PIN (D20; layout after Google TV's privacy keypad)
+
+    static let pinTitleFont = Font.system(size: 56, weight: .semibold)
+    static let pinLabelFont = Font.system(size: 20, weight: .semibold)
+    static let pinSlotWidth: CGFloat = 90
+    static let pinSlotSpacing: CGFloat = 18
+    static let pinSlotHeight: CGFloat = 4
+    static let pinActiveSlotHeight: CGFloat = 6
+    static let pinDialSize: CGFloat = 340
+    static let pinDialDigitFont = Font.system(size: 48, weight: .regular)
+    static let pinDialFill = Color.white
+    static let pinDialText = Color.black.opacity(0.6)
+    static let pinKeypadFont = Font.system(size: 30, weight: .semibold)
+    static let pinKeypadColumnSpacing: CGFloat = 20
+    static let pinKeypadRowSpacing: CGFloat = 24
+    static let pinColumnSpacing: CGFloat = 80
+
     // MARK: Animation
 
     static let focusAnimation = Animation.spring(response: 0.3, dampingFraction: 0.8)

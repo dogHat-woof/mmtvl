@@ -1,7 +1,7 @@
 import Foundation
 
 nonisolated enum SettingsPage: Hashable, Sendable {
-    case root, homeScreen, tile(id: String), addTile, confirmRestoreDefaults
+    case root, homeScreen, tile(id: String), addTile, confirmRestoreDefaults, confirmClearYouTube
 }
 
 /// The `settings.json` toggles.
@@ -34,6 +34,11 @@ nonisolated enum SettingsAction: Hashable, Sendable {
     case addApp(InstalledApp)
     case restoreDefaults
     case pop
+    /// D20: the router shows the PIN screen and returns to this page.
+    case startPIN(PINPurpose)
+    case toggleTileRequiresPIN(id: String)
+    case reloadYouTube
+    case clearYouTubeData
 }
 
 nonisolated enum RowImage: Hashable, Sendable {

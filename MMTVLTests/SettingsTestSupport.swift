@@ -12,6 +12,10 @@ final class SettingsRecorder {
     var trusted: Bool
     var loginStatus: LoginItemStatus
     var installedApps: [InstalledApp] = []
+    var hasPIN = false
+    var pinFlows: [PINPurpose] = []
+    var youtubeReloads = 0
+    var youtubeClears = 0
 
     init(trusted: Bool, loginStatus: LoginItemStatus) {
         self.trusted = trusted
@@ -24,9 +28,11 @@ func makeSettingsModel(
     trusted: Bool = true,
     loginStatus: LoginItemStatus = .notRegistered,
     settings: AppSettings = AppSettings(),
-    items: [LaunchItem] = LaunchItem.defaults
+    items: [LaunchItem] = LaunchItem.defaults,
+    hasPIN: Bool = false
 ) -> (SettingsModel, SettingsRecorder) {
     let recorder = SettingsRecorder(trusted: trusted, loginStatus: loginStatus)
+    recorder.hasPIN = hasPIN
     let environment = SettingsEnvironment(
         isKiosk: kiosk,
         versionString: "1.0",
@@ -40,7 +46,11 @@ func makeSettingsModel(
         relaunch: { recorder.relaunches += 1 },
         exitToDesktop: { recorder.exits += 1 },
         tileTitle: { $0.title },
-        isInstalled: { _ in true }
+        isInstalled: { _ in true },
+        hasPIN: { recorder.hasPIN },
+        startPINFlow: { recorder.pinFlows.append($0) },
+        reloadYouTube: { recorder.youtubeReloads += 1 },
+        clearYouTubeData: { recorder.youtubeClears += 1 }
     )
     return (SettingsModel(settings: settings, items: items, environment: environment), recorder)
 }
