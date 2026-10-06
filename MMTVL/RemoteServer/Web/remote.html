@@ -33,6 +33,7 @@
 <main id="remote" class="view" hidden>
   <header class="top-bar">
     <span class="dot"></span><span id="front-app">MMTVL</span>
+    <button type="button" id="mode-toggle" class="mode-toggle" aria-label="Switch to trackpad">Trackpad</button>
   </header>
 
   <div class="dpad">
@@ -42,6 +43,7 @@
     <button type="button" class="dir right" data-command="right" data-repeat aria-label="Right">▶</button>
     <button type="button" class="dir down" data-command="down" data-repeat aria-label="Down">▼</button>
   </div>
+  <div id="trackpad" class="trackpad" hidden aria-label="Trackpad"><span class="trackpad-hint">Tap to click · two fingers to scroll · two-finger tap to right-click</span></div>
 
   <div class="row">
     <button type="button" class="pill" data-command="back" aria-label="Back">↩&#xFE0E;</button>

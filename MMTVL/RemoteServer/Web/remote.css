@@ -88,6 +88,37 @@ h1 { margin: 0; font-size: 28px; font-weight: 700; }
 
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #30d158; flex: none; }
 
+/* M7b: D-pad / Trackpad switch, pushed to the right of the top bar. */
+.top-bar { width: var(--width); }
+#front-app { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mode-toggle {
+  flex: none;
+  margin-left: auto;
+  padding: 6px 14px;
+  border-radius: 16px;
+  background: var(--button);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.trackpad {
+  width: var(--width);
+  aspect-ratio: 1;
+  border-radius: 32px;
+  background: var(--button);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.trackpad-hint { color: var(--muted); font-size: 14px; line-height: 1.4; pointer-events: none; }
+
 .dpad {
   width: var(--width);
   aspect-ratio: 1;
