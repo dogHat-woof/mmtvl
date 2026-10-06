@@ -1,7 +1,37 @@
 import AppKit
 import os
 
-/// Launches external apps and URLs (D13) and brings the launcher back when an app it launched quits.
+/// Home pressed while a launched app is still starting: that app must not take the screen when it comes up.
+/// Pure; `AppLauncher` feeds it launches, Home presses and activations.
+nonisolated struct LaunchCancellation: Sendable {
+    /// Plex HTPC can take several seconds to show its window.
+    static let window: TimeInterval = 20
+
+    private var launch: (bundleID: String, startedAt: Date)?
+    private var cancelled: (bundleID: String, until: Date)?
+
+    /// A new launch replaces any earlier one and its cancellation.
+    mutating func began(_ bundleID: String, at date: Date) {
+        launch = (bundleID, date)
+        cancelled = nil
+    }
+
+    /// Returns the cancelled app's bundle ID when Home falls within `window` of a launch.
+    mutating func homePressed(at date: Date) -> String? {
+        guard let launch, date.timeIntervalSince(launch.startedAt) < Self.window else { return nil }
+        cancelled = (launch.bundleID, date + Self.window)
+        return launch.bundleID
+    }
+
+    /// True when `bundleID` came forward after Home cancelled it; the launcher takes the screen back.
+    func shouldReturn(activated bundleID: String?, at date: Date) -> Bool {
+        guard let cancelled, let bundleID else { return false }
+        return bundleID == cancelled.bundleID && date < cancelled.until
+    }
+}
+
+/// Launches external apps and URLs (D13) and brings the launcher back when an app it launched quits,
+/// or when an app comes forward after Home cancelled its launch.
 final class AppLauncher {
     enum LaunchError: Error {
         case notInstalled(bundleID: String)
@@ -32,6 +62,8 @@ final class AppLauncher {
     private var launchedPIDs: Set<pid_t> = []
     private var iconCache: [URL: NSImage] = [:]
     private var terminationObserver: NSObjectProtocol?
+    private var activationObserver: NSObjectProtocol?
+    private var cancellation = LaunchCancellation()
 
     init() {
         terminationObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -43,6 +75,22 @@ final class AppLauncher {
             guard let pid = app?.processIdentifier else { return }
             MainActor.assumeIsolated { self?.applicationDidTerminate(pid: pid) }
         }
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            let bundleID = app?.bundleIdentifier
+            MainActor.assumeIsolated { self?.applicationDidActivate(bundleID: bundleID) }
+        }
+    }
+
+    /// Any Home press (local or global). Within a few seconds of a launch, the app won't take the screen
+    /// when it finishes starting; it keeps running (D18).
+    func homePressed() {
+        guard let bundleID = cancellation.homePressed(at: Date()) else { return }
+        Self.logger.info("Home during the launch of \(bundleID, privacy: .public); it won't take the screen")
     }
 
     func isInstalled(_ item: LaunchItem) -> Bool {
@@ -98,6 +146,7 @@ final class AppLauncher {
                 throw LaunchError.notInstalled(bundleID: bundleID)
             }
             Self.logger.info("Launching \(bundleID, privacy: .public)")
+            cancellation.began(bundleID, at: Date())
             let app = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
             launchedPIDs.insert(app.processIdentifier)
             makeFullScreenIfWanted(item, pid: app.processIdentifier)
@@ -107,6 +156,7 @@ final class AppLauncher {
                 throw LaunchError.notInstalled(bundleID: "default browser")
             }
             let bundleID = Bundle(url: browserURL)?.bundleIdentifier
+            if let bundleID { cancellation.began(bundleID, at: Date()) }
             configuration.arguments = Self.launchArguments(browserBundleID: bundleID, fullScreen: fullScreen)
             Self.logger.info("Launching default browser \(bundleID ?? "?", privacy: .public) with \(configuration.arguments, privacy: .public)")
             let app = try await NSWorkspace.shared.openApplication(at: browserURL, configuration: configuration)
@@ -118,6 +168,7 @@ final class AppLauncher {
                 throw LaunchError.notInstalled(bundleID: browserBundleID)
             }
             Self.logger.info("Opening \(url.absoluteString, privacy: .public) in \(browserBundleID, privacy: .public)")
+            cancellation.began(browserBundleID, at: Date())
             let app = try await NSWorkspace.shared.open([url], withApplicationAt: browserURL, configuration: configuration)
             launchedPIDs.insert(app.processIdentifier)
 
@@ -142,6 +193,12 @@ final class AppLauncher {
 
     private func defaultBrowserURL() -> URL? {
         NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!)
+    }
+
+    private func applicationDidActivate(bundleID: String?) {
+        guard cancellation.shouldReturn(activated: bundleID, at: Date()) else { return }
+        Self.logger.info("\(bundleID ?? "?", privacy: .public) came forward after Home; returning to the launcher")
+        onReturnToLauncher?()
     }
 
     private func applicationDidTerminate(pid: pid_t) {

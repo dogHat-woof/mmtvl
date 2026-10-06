@@ -73,6 +73,7 @@ final class AppRouter {
 
     /// Returns true if the command was consumed.
     func handle(_ command: RemoteCommand) -> Bool {
+        if command == .home { launcher.homePressed() }
         let consumed = route(command)
         if consumed {
             pointerLocationAtLastCommand = NSEvent.mouseLocation

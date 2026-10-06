@@ -285,7 +285,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleGlobal(_ command: RemoteCommand) {
         // Only Home is global by default; ignore others for now.
         guard command == .home else { return }
-        // D18: the other app keeps running.
+        // D18: the other app keeps running. An app still starting won't take the screen back when it's up.
+        launcher.homePressed()
         router?.goHome()
         windowController?.show()
     }
