@@ -9,7 +9,7 @@ struct LiveTVModelTests {
         -> (LiveTVModel, FakePlayer, LibraryFixture) {
         let fixture = try makeLibrary(playlist: playlist, state: state)
         let player = FakePlayer()
-        let model = LiveTVModel(player: player, library: fixture.library, now: { fixture.clock.now })
+        let model = LiveTVModel(player: player, makePlayer: { FakePlayer() }, library: fixture.library, now: { fixture.clock.now })
         return (model, player, fixture)
     }
 
@@ -52,7 +52,7 @@ struct LiveTVModelTests {
     @Test func emptyPlaylistIsUnavailable() async throws {
         let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL, texts: [IPTVFixtures.playlistURL: "#EXTM3U\n"])
         defer { fixture.cleanUp() }
-        let model = LiveTVModel(player: FakePlayer(), library: fixture.library)
+        let model = LiveTVModel(player: FakePlayer(), makePlayer: { FakePlayer() }, library: fixture.library)
         await open(model)
         #expect(model.mode == .unavailable("The playlist has no channels"))
         #expect(model.handle(.back) == .leave)
@@ -62,7 +62,7 @@ struct LiveTVModelTests {
         let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL, texts: [:], state: Self.watching)
         defer { fixture.cleanUp() }
         let player = FakePlayer()
-        let model = LiveTVModel(player: player, library: fixture.library)
+        let model = LiveTVModel(player: player, makePlayer: { FakePlayer() }, library: fixture.library)
         await open(model)
         #expect(model.mode == .unavailable("Server error (HTTP 404)"))
 
@@ -182,7 +182,7 @@ struct LiveTVModelTests {
                                       state: IPTVState(lastChannelID: "id:nbatv.us"))
         await fixture.library.refreshAll()
         let player = FakePlayer()
-        let model = LiveTVModel(player: player, library: fixture.library, now: { fixture.clock.now })
+        let model = LiveTVModel(player: player, makePlayer: { FakePlayer() }, library: fixture.library, now: { fixture.clock.now })
         await open(model)
         player.state.phase = .playing
         return (model, player, fixture)
@@ -251,7 +251,8 @@ struct LiveTVModelTests {
         let (model, _, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
         _ = model.handle(.select)
-        _ = model.handle(.left)                 // the now-cell → groups
+        _ = model.handle(.left)                 // the now-cell → the channel cell
+        _ = model.handle(.left)                 // → groups
         #expect(model.guide?.focus == .groups(0))
         _ = model.handle(.down)
         _ = model.handle(.down)
@@ -268,5 +269,53 @@ struct LiveTVModelTests {
         _ = model.handle(.select)
         model.leave()
         #expect(model.guide == nil)
+    }
+
+    // MARK: Channel menu (M6 L8)
+
+    @Test func selectOnTheChannelCellOpensTheChannelMenu() async throws {
+        let (model, _, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        _ = model.handle(.select)
+        _ = model.handle(.up)
+        _ = model.handle(.left)
+        #expect(model.handle(.select) == .handled)
+        #expect(model.menu?.title == "NFL Network")
+        #expect(model.menu?.items.map(\.id) == ["watch", "addToMultiview"])
+    }
+
+    @Test func watchInTheChannelMenuPlays() async throws {
+        let (model, player, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        _ = model.handle(.select)
+        _ = model.handle(.up)
+        _ = model.handle(.left)
+        _ = model.handle(.select)
+        _ = model.handle(.select)
+        #expect(model.mode == .player)
+        #expect(model.menu == nil)
+        #expect(model.currentChannel?.name == "NFL Network")
+        #expect(player.played == [IPTVFixtures.streamURL(2), IPTVFixtures.streamURL(1)])
+    }
+
+    @Test func backClosesTheChannelMenu() async throws {
+        let (model, _, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        _ = model.handle(.select)
+        _ = model.handle(.left)
+        _ = model.handle(.select)
+        #expect(model.menu != nil)
+        #expect(model.handle(.back) == .handled)
+        #expect(model.menu == nil)
+        #expect(model.mode == .guide)
+    }
+
+    @Test func homeWithTheMenuOpenLeaves() async throws {
+        let (model, _, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        _ = model.handle(.select)
+        _ = model.handle(.left)
+        _ = model.handle(.select)
+        #expect(model.handle(.home) == .leave)
     }
 }

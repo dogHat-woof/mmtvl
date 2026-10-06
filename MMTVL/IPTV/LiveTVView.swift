@@ -15,46 +15,44 @@ nonisolated enum CanvasGeometry {
     }
 }
 
-/// Live TV: the video view at window size (L16), with overlays on the scaled canvas above it.
+/// Live TV: the video views placed in window coordinates (M4 L16, M6 L15), with overlays on the scaled canvas above them.
 struct LiveTVRootView: View {
     let model: LiveTVModel
-
-    private var controller: MPVPlayerController? { model.player as? MPVPlayerController }
 
     var body: some View {
         GeometryReader { geometry in
             let size = geometry.size
             ZStack {
                 Color.black
-                if let videoView = controller?.videoView {
-                    let rect = videoRect(in: size)
-                    MPVVideoRepresentable(view: videoView)
-                        .frame(width: rect.width, height: rect.height)
-                        .position(x: rect.midX, y: rect.midY)
-                        .opacity(showsVideo ? 1 : 0)
-                        .transaction { $0.animation = nil }
+                // Keyed by player identity, so a window that moves keeps its view and GL context.
+                ForEach(model.videoPlacements) { placement in
+                    if let view = (placement.player as? MPVPlayerController)?.videoView {
+                        let rect = placement.canvasRect.map { CanvasGeometry.windowRect(forCanvasRect: $0, in: size) }
+                            ?? CGRect(origin: .zero, size: size)
+                        MPVVideoRepresentable(view: view)
+                            .frame(width: rect.width, height: rect.height)
+                            .position(x: rect.midX, y: rect.midY)
+                            .opacity(placement.isVisible ? 1 : 0)
+                            .transaction { $0.animation = nil }
+                    }
                 }
-                overlay
+                ZStack {
+                    overlay
+                    if let menu = model.menu {
+                        LiveMenuView(menu: menu)
+                            .transition(.opacity)
+                    }
+                }
+                    .animation(.easeInOut(duration: 0.2), value: model.menu)
                     .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height)
                     .scaleEffect(Theme.scale(for: size))
                     .frame(width: size.width, height: size.height)
             }
         }
         .ignoresSafeArea()
-        .onAppear { controller?.prepare() }
+        .onAppear { (model.player as? MPVPlayerController)?.prepare() }
         .onChange(of: model.library.guideRevision) { model.guideDataChanged() }
         .onChange(of: model.library.channels) { model.channelsChanged() }
-    }
-
-    private var showsVideo: Bool {
-        model.mode == .player || model.mode == .guide
-    }
-
-    /// Full window in player mode; the guide's preview window in guide mode (L16).
-    private func videoRect(in size: CGSize) -> CGRect {
-        model.mode == .guide
-            ? CanvasGeometry.windowRect(forCanvasRect: Theme.guidePreviewRect, in: size)
-            : CGRect(origin: .zero, size: size)
     }
 
     @ViewBuilder
@@ -64,8 +62,11 @@ struct LiveTVRootView: View {
             PlayerOverlayView(model: model)
         case .guide:
             if let guide = model.guide {
-                GuideView(model: guide, currentChannel: model.currentChannel, phase: model.player.state.phase)
+                GuideView(model: guide, currentChannel: model.previewChannel, phase: model.previewPlayer.state.phase,
+                          isPicking: model.guidePurpose != .watch)
             }
+        case .multiview:
+            MultiviewOverlayView(model: model)
         case .setupNeeded:
             LiveTVMessageView(title: "Live TV isn't set up",
                               message: "Copy your playlist URL, then open Settings → Live TV → Paste Playlist URL.",

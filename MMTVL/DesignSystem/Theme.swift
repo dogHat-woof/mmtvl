@@ -125,6 +125,22 @@ enum Theme {
     static let guideNowLine = Color(red: 1, green: 0.27, blue: 0.23)
     static let guideLogoSize: CGFloat = 48
 
+    // MARK: Multiview (M6)
+
+    static let multiviewGap = MultiviewLayout.gap
+    static let multiviewDiagramSize = CGSize(width: 96, height: 54)
+    static let multiviewFocusBorder = Color.white
+    static let multiviewFocusBorderWidth: CGFloat = 6
+    static let multiviewEmptySymbolSize: CGFloat = 48
+    static let multiviewChipFont = Font.system(size: 26, weight: .semibold)
+    static let multiviewChipDetailFont = Font.system(size: 20)
+
+    // MARK: Live TV menus (M6)
+
+    static let liveMenuWidth: CGFloat = 720
+    static let liveMenuTitleFont = Font.system(size: 34, weight: .semibold)
+    static let liveMenuRowHeight: CGFloat = 72
+
     // MARK: Animation
 
     static let focusAnimation = Animation.spring(response: 0.3, dampingFraction: 0.8)

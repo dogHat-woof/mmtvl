@@ -223,4 +223,39 @@ struct IPTVLibraryTests {
         fixture.library.rememberGroup("NBA Games")
         #expect(fixture.stateFile.load() == IPTVState(lastChannelID: "id:nbatv.us", lastGroup: "NBA Games"))
     }
+
+    @Test func multiviewSnapshotRoundTrips() throws {
+        let snapshot = MultiviewSnapshot(layout: .grid, slots: ["id:nbatv.us", nil, "id:nflnetwork.us", nil],
+                                         focusedSlot: 2, isActive: true)
+        let state = IPTVState(lastChannelID: "id:nbatv.us", multiview: snapshot)
+        let fixture = try makeLibrary(state: state)
+        defer { fixture.cleanUp() }
+        #expect(fixture.stateFile.load() == state)
+        #expect(fixture.library.state.multiview == snapshot)
+    }
+
+    @Test func badMultiviewSnapshotReadsAsNil() throws {
+        let fixture = try makeLibrary()
+        defer { fixture.cleanUp() }
+        let json = """
+        {"lastChannelID": "id:nbatv.us",
+         "multiview": {"layout": "bogus", "slots": ["id:nbatv.us"], "focusedSlot": 0, "isActive": true}}
+        """
+        try FileManager.default.createDirectory(at: fixture.directory, withIntermediateDirectories: true)
+        try Data(json.utf8).write(to: fixture.directory.appending(path: IPTVState.fileName))
+        let state = fixture.stateFile.load()
+        #expect(state.multiview == nil)
+        #expect(state.lastChannelID == "id:nbatv.us")
+    }
+
+    @Test func rememberMultiviewSaves() throws {
+        let fixture = try makeLibrary()
+        defer { fixture.cleanUp() }
+        let snapshot = MultiviewSnapshot(layout: .onePlusFour, slots: ["id:nbatv.us", nil, nil, nil, nil],
+                                         focusedSlot: 0, isActive: false)
+        fixture.library.rememberMultiview(snapshot)
+        #expect(fixture.stateFile.load().multiview == snapshot)
+        fixture.library.rememberMultiview(nil)
+        #expect(fixture.stateFile.load().multiview == nil)
+    }
 }

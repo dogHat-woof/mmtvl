@@ -35,7 +35,7 @@ open build/Build/Products/Debug/MMTVL.app --args -windowed YES
 
 # Watch the app's log (unbound keys show up here while MMTVL is frontmost)
 /usr/bin/log stream --predicate 'subsystem == "dev.mmtvl.launcher"' --level info
-# Only mpv's messages (Live TV playback)
+# Only mpv's messages (Live TV playback; lines name the player, e.g. "(player 2)" in Multiview)
 /usr/bin/log stream --predicate 'subsystem == "dev.mmtvl.launcher" AND category == "MPV"' --level info
 # Only the phone remote (server state, connections, pairing; never codes, tokens or typed text)
 /usr/bin/log stream --predicate 'subsystem == "dev.mmtvl.launcher" AND category == "PhoneRemote"' --level info
@@ -51,7 +51,7 @@ curl -i http://localhost:8765/
 - Not sandboxed, no hardened runtime. Signed `Apple Development` with the personal team **H846CY8RB4** (no provisioning profile needed), so the Accessibility (TCC) grant for the global event tap and AX full screen survives rebuilds. To re-test onboarding: `tccutil reset Accessibility dev.mmtvl.launcher`.
 - Deployment target: macOS 26.0. Bundle ID: `dev.mmtvl.launcher`.
 - Tests use Swift Testing (`import Testing`, `@Test`, `#expect`), hosted in the app (`@testable import MMTVL`).
-- Swift packages (M4): **MPVKit 1.0.0** (the LGPL `MPVKit` product only, never `MPVKit-GPL`; `import Libmpv`) and **GRDB 7.11.x**, linked to the **app target only**. Tests reach them through app types (`EPGStore.inMemory()`), never by importing them. `MMTVL.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved` is committed. The first resolve downloads about 350 MB of MPVKit binaries. `MPVVideoView.swift` shows OpenGL deprecation warnings by design (D22).
+- Swift packages (M4): **MPVKit 1.0.0** (the LGPL `MPVKit` product only, never `MPVKit-GPL`; `import Libmpv`) and **GRDB 7.11.x**, linked to the **app target only**. Tests reach them through app types (`EPGStore.inMemory()`), never by importing them. `MMTVL.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved` is committed. The first resolve downloads about 350 MB of MPVKit binaries. `MPVVideoView.swift` shows OpenGL deprecation warnings by design (D22). Multiview (M6) runs up to 5 mpv players, one per window, from a pool in `LiveTVModel` that is reused and never torn down.
 
 ## Conventions
 
@@ -60,7 +60,7 @@ curl -i http://localhost:8765/
   - `launch-items.json`: home screen tiles, in order. Per item, optional `launchFullScreen` (D15), `isHidden` and `requiresPIN` (D20; Settings and Exit to Desktop always ask when a PIN is set).
   - `settings.json`: `globalInputEnabled`, `controllersEnabled`, `cursorAutoHide`, `launchAtLogin` (kiosk mode only). Optional hand-edited `youtubeUserAgent` overrides the YouTube TV user agent (D21). `phoneRemoteEnabled` (Settings → Phone Remote). Hand-edited `phoneRemotePort` (default 8765, the page; the WebSocket uses port + 1; outside 1024…65534 falls back to 8765) and `phoneRemoteVolume` (`auto` | `keys` | `system` | `app`, D25; unknown values read as `auto`). Missing keys use defaults.
   - The **Settings screen** (the Settings tile, which is always on the home screen and can be moved but not hidden or removed) edits `settings.json` and `launch-items.json` live and saves each change at once. Hand edits made while MMTVL runs are overwritten by the next Settings change, so edit those files with MMTVL quit. Settings → Relaunch MMTVL picks up hand edits.
-  - `iptv-state.json`: Live TV's last channel and group, and guide-import bookkeeping (time, SHA-256 of the guide URL). Hand edits are fine while MMTVL is quit.
+  - `iptv-state.json`: Live TV's last channel and group, guide-import bookkeeping (time, SHA-256 of the guide URL), and the Multiview snapshot `multiview` (layout, channel ids per window, highlighted window, whether Live TV was left in Multiview). An undecodable snapshot reads as none. Hand edits are fine while MMTVL is quit.
   - `epg-overrides.json` (M4 L17): hand-edited `{ "<channel name or tvg-id>": "<EPG channel id>" }` for channels the guide doesn't match by id or exact name. Keys match the playlist's channel name first, then its `tvg-id`, ignoring case. Applied by Settings → Live TV → Refresh Now (no relaunch). To find EPG ids: `gzip -dc guide.xml.gz | grep -o '<channel id="[^"]*"'`.
   - `guide.sqlite` (+ `-wal`/`-shm`): the EPG cache (GRDB, D8). Safe to delete; the next guide refresh rebuilds it. Channels are never stored; the playlist is re-fetched at launch and when Live TV opens (D23).
   - `key-bindings.json` (still hand-edited; a learn-button editor comes in M7): an array of `{ "trigger", "command", "isGlobal", "label" }`. Triggers are `{"key": {"keyCode": 115, "modifiers": []}}`, `{"media": {"key": "playPause"}}` or `{"controller": {"button": "a"}}`. Modifiers must match exactly. `isGlobal` bindings also act while another app is frontmost (keys need Accessibility). To find a new remote's key codes, run the `log stream` command above with MMTVL frontmost and press the buttons: each unbound key logs `Unbound key <code> modifiers [...]`.

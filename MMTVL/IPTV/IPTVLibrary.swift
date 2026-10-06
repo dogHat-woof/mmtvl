@@ -88,6 +88,11 @@ final class IPTVLibrary {
         updateState { $0.lastGroup = group }
     }
 
+    func rememberMultiview(_ snapshot: MultiviewSnapshot?) {
+        guard state.multiview != snapshot else { return }
+        updateState { $0.multiview = snapshot }
+    }
+
     // MARK: - Refresh
 
     func refreshPlaylist() async {

@@ -10,6 +10,9 @@ final class FakePlayer: LivePlayer {
     var pauses = 0
     var seeks: [Double] = []
     var liveSeeks = 0
+    var volume: (level: Int, muted: Bool)?
+    var audible = true
+    var bufferProfile = BufferProfile.full
 
     func play(_ url: URL) {
         played.append(url)
@@ -32,6 +35,9 @@ final class FakePlayer: LivePlayer {
 
     func seek(by seconds: Double) { seeks.append(seconds) }
     func seekToLive() { liveSeeks += 1 }
+    func setVolume(_ level: Int, muted: Bool) { volume = (level, muted) }
+    func setAudible(_ audible: Bool) { self.audible = audible }
+    func setBufferProfile(_ profile: BufferProfile) { bufferProfile = profile }
 
     /// Retries exhausted.
     func fail() {

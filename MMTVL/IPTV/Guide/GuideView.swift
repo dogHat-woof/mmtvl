@@ -6,6 +6,8 @@ struct GuideView: View {
     let model: GuideModel
     let currentChannel: Channel?
     let phase: PlayerState.Phase
+    /// The Multiview picker guide (M6 L11): Select puts the channel in a window.
+    var isPicking = false
 
     var body: some View {
         TimelineView(.everyMinute) { context in
@@ -26,13 +28,24 @@ struct GuideView: View {
                     groupPanel(focused: index)
                         .offset(x: Theme.sideMargin, y: Theme.guideGridTop)
                 }
-                Text("Select: watch · Left at now: groups · Back: close")
+                Text(Self.hint(focus: model.focus, isPicking: isPicking))
                     .font(Theme.settingsHintFont)
                     .foregroundStyle(Theme.secondaryText)
                     .frame(width: Theme.canvasSize.width)
                     .offset(y: Theme.canvasSize.height - 64)
             }
             .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height, alignment: .topLeading)
+        }
+    }
+
+    /// The bottom hint per focus and purpose (M6).
+    nonisolated static func hint(focus: GuideModel.Focus, isPicking: Bool) -> String {
+        switch (focus, isPicking) {
+        case (.grid, false): "Select: watch · Left at now: channel options · Back: close"
+        case (.grid, true): "Select: show in window · Left at now: channel · Back: cancel"
+        case (.channel, false): "Select: options · Left: groups · Right: programmes · Back: close"
+        case (.channel, true): "Select: show in window · Left: groups · Right: programmes · Back: cancel"
+        case (.groups, _): "Select: show group · Back: close list"
         }
     }
 
@@ -111,9 +124,15 @@ struct GuideView: View {
     private func rowView(_ row: Int, now: Date) -> some View {
         let channel = model.channels[row]
         let focusedCell = row == model.row && model.focus == .grid ? model.focusedCell(now: now) : nil
+        let isChannelFocused = row == model.row && model.focus == .channel
         return HStack(spacing: Theme.guideGridLeading - Theme.sideMargin - Theme.guideChannelColumnWidth) {
-            channelCell(channel)
-                .frame(width: Theme.guideChannelColumnWidth, alignment: .leading)
+            channelCell(channel, isFocused: isChannelFocused)
+                .padding(.horizontal, 8)
+                .frame(width: Theme.guideChannelColumnWidth, height: Theme.guideRowHeight - Theme.guideCellSpacing,
+                       alignment: .leading)
+                .background(isChannelFocused ? Theme.focusedRowFill : Color.clear,
+                            in: RoundedRectangle(cornerRadius: Theme.guideCellCornerRadius))
+                .frame(height: Theme.guideRowHeight, alignment: .top)
             ZStack(alignment: .topLeading) {
                 ForEach(Array(model.cells(row: row, now: now).enumerated()), id: \.offset) { _, cell in
                     if let span = model.timeline.span(start: cell.start, stop: cell.stop, width: Theme.guideGridWidth) {
@@ -129,11 +148,11 @@ struct GuideView: View {
         }
     }
 
-    private func channelCell(_ channel: Channel) -> some View {
+    private func channelCell(_ channel: Channel, isFocused: Bool) -> some View {
         HStack(spacing: 12) {
             Text("\(channel.number)")
                 .font(Theme.guideCellTimeFont)
-                .foregroundStyle(Theme.secondaryText)
+                .foregroundStyle(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText)
                 .frame(width: 44, alignment: .trailing)
             if let logo = channel.logoURL {
                 AsyncImage(url: logo) { image in
@@ -145,12 +164,12 @@ struct GuideView: View {
             }
             Text(channel.name)
                 .font(Theme.guideChannelFont)
-                .foregroundStyle(Theme.primaryText)
+                .foregroundStyle(isFocused ? Theme.focusedRowText : Theme.primaryText)
                 .lineLimit(1)
             if channel.id == currentChannel?.id {
                 Image(systemName: "speaker.wave.2.fill")
                     .font(Theme.guideCellTimeFont)
-                    .foregroundStyle(Theme.secondaryText)
+                    .foregroundStyle(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText)
             }
         }
     }

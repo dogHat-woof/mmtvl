@@ -24,7 +24,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var remoteServer: RemoteServer?
     private var phoneRemote: PhoneRemote?
     private var volume: VolumeController?
-    private var livePlayer: MPVPlayerController?
     private var appActivationObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -56,9 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settingsModel = SettingsModel(settings: settings, items: items, environment: makeSettingsEnvironment(kiosk: kiosk))
         let youtube = YouTubeController(userAgent: YouTubeConfig.userAgent(override: settings.youtubeUserAgent))
         self.youtube = youtube
-        let livePlayer = MPVPlayerController()
-        self.livePlayer = livePlayer
-        let liveTV = LiveTVModel(player: livePlayer, library: iptvLibrary)
+        let liveTV = LiveTVModel(player: MPVPlayerController(), makePlayer: { MPVPlayerController() }, library: iptvLibrary)
         self.liveTV = liveTV
         let router = AppRouter(items: items, launcher: launcher, settings: settingsModel, youtube: youtube,
                                liveTV: liveTV, pinStore: .keychain)
@@ -116,7 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mode: { [weak self] in self?.settings.volumeMode ?? .auto },
             isLauncherActive: { NSApp.isActive },
             applyAppVolume: { [weak self] volume in
-                self?.livePlayer?.setVolume(volume.level, muted: volume.muted)
+                self?.liveTV?.setAppVolume(volume.level, muted: volume.muted)
                 self?.youtube?.setVolume(volume.level, muted: volume.muted)
             }
         )

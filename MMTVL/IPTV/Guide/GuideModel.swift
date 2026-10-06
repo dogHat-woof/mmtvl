@@ -1,11 +1,12 @@
 import Foundation
 
-/// Guide focus and navigation (L9, L12). Pure: `LiveTVModel` feeds it commands and programmes.
+/// Guide focus and navigation (M4 L9, L12; M6 L8 channel cell). Pure: `LiveTVModel` feeds it commands and programmes.
 nonisolated struct GuideModel: Equatable, Sendable {
     static let visibleRows = 6
 
-    enum Focus: Equatable, Sendable { case grid, groups(Int) }
-    enum Action: Equatable, Sendable { case none, play(Channel.ID), close, groupChanged(String) }
+    /// `.channel`: the channel cell of the focused row (M6 L8), between the grid and the groups.
+    enum Focus: Equatable, Sendable { case grid, channel, groups(Int) }
+    enum Action: Equatable, Sendable { case none, play(Channel.ID), close, groupChanged(String), channelMenu(Channel.ID) }
     /// One focusable cell: a programme, or a placeholder spanning the window when a row has no data.
     struct Cell: Equatable, Sendable {
         var programme: Programme?
@@ -69,6 +70,7 @@ nonisolated struct GuideModel: Equatable, Sendable {
     mutating func handle(_ command: RemoteCommand, now: Date) -> Action {
         switch focus {
         case .grid: handleGrid(command, now: now)
+        case .channel: handleChannel(command)
         case .groups(let index): handleGroups(command, index: index, now: now)
         }
     }
@@ -106,9 +108,7 @@ nonisolated struct GuideModel: Equatable, Sendable {
     private mutating func handleGrid(_ command: RemoteCommand, now: Date) -> Action {
         switch command {
         case .up, .down:
-            guard !channels.isEmpty else { return .none }
-            row = min(max(row + (command == .up ? -1 : 1), 0), channels.count - 1)
-            keepRowVisible()
+            moveRow(command)
             return .none
         case .right, .fastForward:
             let cells = cells(row: row, now: now)
@@ -119,13 +119,33 @@ nonisolated struct GuideModel: Equatable, Sendable {
             let cells = cells(row: row, now: now)
             guard let index = focusedCellIndex(in: cells) else { return .none }
             if index == 0 {
-                focus = .groups(groupIndex)
+                focus = .channel
             } else {
                 moveFocus(to: cells[index - 1], now: now)
             }
             return .none
         case .select:
             return focusedChannel.map { .play($0.id) } ?? .none
+        case .back:
+            return .close
+        case .playPause, .home:
+            return .none
+        }
+    }
+
+    private mutating func handleChannel(_ command: RemoteCommand) -> Action {
+        switch command {
+        case .up, .down:
+            moveRow(command)
+            return .none
+        case .right, .fastForward:
+            focus = .grid
+            return .none
+        case .left, .rewind:
+            focus = .groups(groupIndex)
+            return .none
+        case .select:
+            return focusedChannel.map { .channelMenu($0.id) } ?? .none
         case .back:
             return .close
         case .playPause, .home:
@@ -155,6 +175,12 @@ nonisolated struct GuideModel: Equatable, Sendable {
         case .playPause, .home, .fastForward, .rewind:
             return .none
         }
+    }
+
+    private mutating func moveRow(_ command: RemoteCommand) {
+        guard !channels.isEmpty else { return }
+        row = min(max(row + (command == .up ? -1 : 1), 0), channels.count - 1)
+        keepRowVisible()
     }
 
     private mutating func moveFocus(to cell: Cell, now: Date) {

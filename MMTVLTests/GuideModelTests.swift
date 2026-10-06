@@ -91,6 +91,7 @@ struct GuideModelTests {
         #expect(model.timeline.windowStart == GuideTimelineTests.utc(14, 30))
         #expect(model.focus == .grid)
 
+        _ = model.handle(.left, now: now)   // the now-cell → the channel cell
         _ = model.handle(.left, now: now)
         #expect(model.focus == .groups(1))
     }
@@ -98,6 +99,7 @@ struct GuideModelTests {
     @Test func groups() {
         var model = model()
         _ = model.handle(.down, now: now)
+        _ = model.handle(.left, now: now)   // the now-cell → the channel cell
         _ = model.handle(.left, now: now)
         #expect(model.focus == .groups(1))
         _ = model.handle(.down, now: now)
@@ -108,6 +110,7 @@ struct GuideModelTests {
         #expect(model.channels.map(\.id) == ["id:c7", "id:c8"])
 
         // Back in groups → grid, no change.
+        _ = model.handle(.left, now: now)   // the now-cell → the channel cell
         _ = model.handle(.left, now: now)
         _ = model.handle(.up, now: now)
         #expect(model.handle(.back, now: now) == .none)
@@ -115,6 +118,7 @@ struct GuideModelTests {
         #expect(model.selectedGroup == "NBA")
 
         // Right applies too; Up/Down clamp.
+        _ = model.handle(.left, now: now)   // the now-cell → the channel cell
         _ = model.handle(.left, now: now)
         for _ in 0..<6 { _ = model.handle(.up, now: now) }
         #expect(model.focus == .groups(0))
@@ -168,5 +172,54 @@ struct GuideModelTests {
         #expect(model.selectedGroup == "Live")
         #expect(model.focusedChannel?.id == "id:c4")
         #expect(model.row == 2)
+    }
+
+    // MARK: Channel cell (M6 L8)
+
+    @Test func leftAtNowFocusesTheChannelThenTheGroups() {
+        var model = model()
+        #expect(model.handle(.left, now: now) == .none)
+        #expect(model.focus == .channel)
+        _ = model.handle(.left, now: now)
+        #expect(model.focus == .groups(1))
+    }
+
+    @Test func rightFromTheChannelReturnsToTheSameCell() {
+        var model = model()
+        _ = model.handle(.right, now: now)
+        _ = model.handle(.left, now: now)
+        _ = model.handle(.left, now: now)
+        #expect(model.focus == .channel)
+        let time = model.focusTime
+        _ = model.handle(.right, now: now)
+        #expect(model.focus == .grid)
+        #expect(model.focusTime == time)
+        #expect(model.focusedCell(now: now)?.programme?.title == "A")
+    }
+
+    @Test func upDownOnTheChannelMoveRows() {
+        var model = model()
+        _ = model.handle(.left, now: now)
+        _ = model.handle(.down, now: now)
+        _ = model.handle(.down, now: now)
+        #expect(model.row == 2)
+        #expect(model.focus == .channel)
+        _ = model.handle(.up, now: now)
+        #expect(model.row == 1)
+        #expect(model.focus == .channel)
+    }
+
+    @Test func selectOnTheChannelOpensItsMenu() {
+        var model = model()
+        _ = model.handle(.down, now: now)
+        _ = model.handle(.left, now: now)
+        #expect(model.handle(.select, now: now) == .channelMenu("id:c2"))
+    }
+
+    @Test func backOnTheChannelCloses() {
+        var model = model()
+        _ = model.handle(.left, now: now)
+        #expect(model.handle(.back, now: now) == .close)
+        #expect(model.handle(.playPause, now: now) == .none)
     }
 }
