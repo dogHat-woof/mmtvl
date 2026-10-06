@@ -2,6 +2,27 @@ import Foundation
 
 nonisolated enum SettingsPage: Hashable, Sendable {
     case root, homeScreen, tile(id: String), addTile, confirmRestoreDefaults, confirmClearYouTube
+    case liveTV, confirmRemoveIPTV
+}
+
+/// Which Live TV address a paste row fills (M4 L2).
+nonisolated enum IPTVURLKind: Hashable, Sendable {
+    case playlist, guide
+}
+
+/// What the Live TV rows show. Built by the app from `IPTVLibrary`; hosts only, never full URLs (L2).
+nonisolated struct IPTVSettingsStatus: Equatable, Sendable {
+    var hasPlaylist = false
+    /// url.host()
+    var playlistHost: String?
+    var channelCount = 0
+    /// "Loading…", "Updated 10:42 PM", "Failed: Server error (HTTP 403)"
+    var playlistLine: String = ""
+    var guideKind: GuideKind = .none
+    /// "1,234 programmes · Updated 10:43 PM", "Loading…", "Failed: …", "No guide"
+    var guideLine: String = ""
+
+    enum GuideKind: Equatable, Sendable { case none, playlist(String), custom(String) }
 }
 
 /// The `settings.json` toggles.
@@ -39,6 +60,10 @@ nonisolated enum SettingsAction: Hashable, Sendable {
     case toggleTileRequiresPIN(id: String)
     case reloadYouTube
     case clearYouTubeData
+    case pasteIPTVURL(IPTVURLKind)
+    case useIPTVPlaylistGuide
+    case refreshIPTV
+    case removeIPTVSource
 }
 
 nonisolated enum RowImage: Hashable, Sendable {

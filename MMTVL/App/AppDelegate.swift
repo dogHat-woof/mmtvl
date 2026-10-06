@@ -7,6 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let launcher = AppLauncher()
     private var youtube: YouTubeController?
+    private var iptvLibrary: IPTVLibrary?
+    private var liveTV: LiveTVModel?
     private var settings = AppSettings()
     private var settingsFile: JSONConfigFile<AppSettings>?
     private var accessibilityWaitTask: Task<Void, Never>?
@@ -41,12 +43,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Self.logger.error("Failed to save launch items: \(error.localizedDescription, privacy: .public)")
             }
         }
+        let iptvLibrary = makeIPTVLibrary(directory: directory)
+        self.iptvLibrary = iptvLibrary
         let settingsModel = SettingsModel(settings: settings, items: items, environment: makeSettingsEnvironment(kiosk: kiosk))
         let youtube = YouTubeController(userAgent: YouTubeConfig.userAgent(override: settings.youtubeUserAgent))
         self.youtube = youtube
-        let router = AppRouter(items: items, launcher: launcher, settings: settingsModel, youtube: youtube, pinStore: .keychain)
+        let liveTV = LiveTVModel(player: MPVPlayerController(), library: iptvLibrary)
+        self.liveTV = liveTV
+        let router = AppRouter(items: items, launcher: launcher, settings: settingsModel, youtube: youtube,
+                               liveTV: liveTV, pinStore: .keychain)
         let windowController = KioskWindowController(
-            rootView: LauncherRootView(router: router, youtube: youtube),
+            rootView: LauncherRootView(router: router, youtube: youtube, liveTV: liveTV),
             hidesCursor: settings.cursorAutoHide
         )
         self.inputRouter = inputRouter
@@ -60,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         youtube.onExit = { [weak router] in
             if router?.screen == .youtube { router?.goHome() }
         }
+        iptvLibrary.onStatusChange = { [weak router] in router?.settings.refreshStatus() }
         inputRouter.handler = router.handle
         inputRouter.onGlobalCommand = { [weak self] command in self?.handleGlobal(command) }
         // Reads the current setting, which Settings can change live.
@@ -81,6 +89,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         windowController.show()
+
+        // M4 L4/L5: channels are fetched at every launch; the guide only when stale.
+        if iptvLibrary.hasPlaylist {
+            Task {
+                await iptvLibrary.refreshPlaylist()
+                await iptvLibrary.refreshGuideIfStale()
+            }
+        }
+    }
+
+    private func makeIPTVLibrary(directory: URL) -> IPTVLibrary {
+        var epgStore: EPGStore?
+        do {
+            epgStore = try EPGStore.open(at: EPGStore.defaultURL)
+        } catch {
+            Self.logger.error("Guide storage unavailable: \(error.localizedDescription, privacy: .public)")
+        }
+        return IPTVLibrary(
+            sources: .keychain,
+            store: epgStore,
+            network: .live,
+            stateFile: JSONConfigFile(url: directory.appending(path: IPTVState.fileName), defaultValue: IPTVState()),
+            overridesFile: JSONConfigFile(url: directory.appending(path: IPTVState.overridesFileName), defaultValue: [String: String]())
+        )
+    }
+
+    /// What Settings → Live TV shows. Times are time-only; hosts only (L2).
+    private func iptvSettingsStatus() -> IPTVSettingsStatus {
+        guard let library = iptvLibrary else { return IPTVSettingsStatus() }
+        func time(_ date: Date) -> String { date.formatted(date: .omitted, time: .shortened) }
+
+        var status = IPTVSettingsStatus()
+        status.hasPlaylist = library.hasPlaylist
+        status.playlistHost = library.playlistHost
+        status.channelCount = library.channels.count
+        switch library.playlistStatus {
+        case .idle: status.playlistLine = ""
+        case .loading: status.playlistLine = "Loading…"
+        case .loaded(let date): status.playlistLine = "Updated \(time(date))"
+        case .failed(let message): status.playlistLine = "Failed: \(message)"
+        }
+
+        switch library.guideSource {
+        case .none: status.guideKind = .none
+        case .playlist(let url): status.guideKind = .playlist(url.host() ?? "?")
+        case .custom(let url): status.guideKind = .custom(url.host() ?? "?")
+        }
+        let programmes = "\(library.guideProgrammeCount.formatted()) programmes"
+        switch library.guideStatus {
+        case .loading:
+            status.guideLine = "Loading…"
+        case .failed(let message):
+            status.guideLine = "Failed: \(message)"
+        case .loaded(let date):
+            status.guideLine = "\(programmes) · Updated \(time(date))"
+        case .idle:
+            if case .none = library.guideSource {
+                status.guideLine = "No guide"
+            } else if let imported = library.state.lastGuideImport {
+                status.guideLine = "\(programmes) · Updated \(imported.formatted(date: .abbreviated, time: .shortened))"
+            } else {
+                status.guideLine = ""
+            }
+        }
+        return status
+    }
+
+    /// L2: reads the clipboard on Select. Returns an error message, or nil after starting the save + refresh.
+    private func pasteIPTVURL(_ kind: IPTVURLKind) -> String? {
+        let text = NSPasteboard.general.string(forType: .string)
+        switch ClipboardURL.parse(text) {
+        case .failure(let problem):
+            return ClipboardURL.message(for: problem)
+        case .success(let url):
+            Self.logger.info("Pasted a \(kind == .playlist ? "playlist" : "guide", privacy: .public) URL for \(url.host() ?? "?", privacy: .public)")
+            guard let library = iptvLibrary else { return nil }
+            Task {
+                switch kind {
+                case .playlist: await library.setPlaylistURL(url)
+                case .guide: await library.setGuideURL(url)
+                }
+            }
+            return nil
+        }
     }
 
     /// A global binding fired while another app is frontmost.
@@ -232,6 +324,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reloadYouTube: { [weak self] in self?.youtube?.reload() },
             clearYouTubeData: { [weak self] in
                 Task { await self?.youtube?.clearData() }
+            },
+            iptvStatus: { [weak self] in self?.iptvSettingsStatus() ?? IPTVSettingsStatus() },
+            pasteIPTVURL: { [weak self] in self?.pasteIPTVURL($0) },
+            useIPTVPlaylistGuide: { [weak self] in
+                guard let library = self?.iptvLibrary else { return }
+                Task { await library.setGuideURL(nil) }
+            },
+            refreshIPTV: { [weak self] in
+                guard let library = self?.iptvLibrary else { return }
+                Task { await library.refreshAll() }
+            },
+            removeIPTVSource: { [weak self] in
+                guard let library = self?.iptvLibrary else { return }
+                self?.liveTV?.leave()
+                Task { await library.removeSource() }
             }
         )
     }

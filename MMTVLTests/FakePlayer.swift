@@ -1,0 +1,41 @@
+import Foundation
+@testable import MMTVL
+
+/// Records what Live TV asks the player to do.
+final class FakePlayer: LivePlayer {
+    var state = PlayerState()
+    var onFailure: (() -> Void)?
+    var played: [URL] = []
+    var stops = 0
+    var pauses = 0
+    var seeks: [Double] = []
+    var liveSeeks = 0
+
+    func play(_ url: URL) {
+        played.append(url)
+        state = PlayerState(phase: .loading)
+    }
+
+    func stop() {
+        stops += 1
+        state = PlayerState()
+    }
+
+    func togglePause() {
+        pauses += 1
+        switch state.phase {
+        case .playing: state.phase = .paused
+        case .paused: state.phase = .playing
+        default: break
+        }
+    }
+
+    func seek(by seconds: Double) { seeks.append(seconds) }
+    func seekToLive() { liveSeeks += 1 }
+
+    /// Retries exhausted.
+    func fail() {
+        state.phase = .failed
+        onFailure?()
+    }
+}

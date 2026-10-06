@@ -8,10 +8,10 @@ import os
 final class AppRouter {
     enum Screen: Equatable {
         case home
-        case placeholder(LaunchItem)
         case accessibilityOnboarding
         case settings
         case youtube
+        case liveTV
         case pin(PINPurpose)
     }
 
@@ -31,6 +31,7 @@ final class AppRouter {
     @ObservationIgnored let launcher: AppLauncher
     let settings: SettingsModel
     @ObservationIgnored let youtube: any YouTubeHosting
+    @ObservationIgnored let liveTV: any LiveTVHosting
     @ObservationIgnored private let pinStore: PINStore
     /// Kept across PIN screens, so cancelling doesn't reset the lockout (L10).
     @ObservationIgnored private var pinLockout = PINLockout()
@@ -41,11 +42,13 @@ final class AppRouter {
     @ObservationIgnored var onExitToDesktop: (() -> Void)?
     @ObservationIgnored var onRequestAccessibility: (() -> Void)?
 
-    init(items: [LaunchItem], launcher: AppLauncher, settings: SettingsModel, youtube: any YouTubeHosting, pinStore: PINStore) {
+    init(items: [LaunchItem], launcher: AppLauncher, settings: SettingsModel, youtube: any YouTubeHosting,
+         liveTV: any LiveTVHosting, pinStore: PINStore) {
         self.items = items
         self.launcher = launcher
         self.settings = settings
         self.youtube = youtube
+        self.liveTV = liveTV
         self.pinStore = pinStore
         let visibleItems = items.visible
         self.visibleItems = visibleItems
@@ -93,15 +96,6 @@ final class AppRouter {
                 return false
             }
 
-        case .placeholder:
-            switch command {
-            case .back, .home:
-                goHome()
-                return true
-            case .up, .down, .left, .right, .select, .playPause, .fastForward, .rewind:
-                return false
-            }
-
         case .accessibilityOnboarding:
             switch command {
             case .select:
@@ -136,6 +130,27 @@ final class AppRouter {
             }
             return true
 
+        case .liveTV:
+            if command == .home {
+                goHome()
+                return true
+            }
+            switch liveTV.handle(command) {
+            case .handled:
+                break
+            case .leave:
+                goHome()
+            case .openSettings:
+                // Live TV isn't set up: Select opens Settings (PIN-guarded like the tile).
+                liveTV.leave()
+                if hasPIN {
+                    requestPIN(.openSettings)
+                } else {
+                    openSettings()
+                }
+            }
+            return true
+
         case .pin:
             if command == .home {
                 goHome()
@@ -146,10 +161,13 @@ final class AppRouter {
         }
     }
 
-    /// Shows the home screen, keeping the focus position. Leaving YouTube pauses it (L3).
+    /// Shows the home screen, keeping the focus position. Leaving YouTube pauses it (L3); leaving Live TV stops it (M4 L7).
     func goHome() {
         if screen == .youtube {
             youtube.pause()
+        }
+        if screen == .liveTV {
+            liveTV.leave()
         }
         closePINEntry()
         screen = .home
@@ -223,6 +241,11 @@ final class AppRouter {
         screen = .youtube
     }
 
+    func openLiveTV() {
+        liveTV.open()
+        screen = .liveTV
+    }
+
     func showAccessibilityOnboarding() {
         screen = .accessibilityOnboarding
     }
@@ -286,8 +309,8 @@ final class AppRouter {
             openSettings()
         case .internalDestination(.youtube):
             openYouTube()
-        case .internalDestination:
-            screen = .placeholder(item)
+        case .internalDestination(.iptv):
+            openLiveTV()
         case .system(.exitToDesktop):
             onExitToDesktop?()
         }
@@ -298,11 +321,15 @@ final class AppRouter {
 struct LauncherRootView: View {
     let router: AppRouter
     let youtube: YouTubeController
+    let liveTV: LiveTVModel
 
     var body: some View {
         if router.screen == .youtube {
             // L4: outside the scaled canvas, at the window's real size.
             YouTubeView(controller: youtube)
+        } else if router.screen == .liveTV {
+            // M4 L16: the video sits outside the scaled canvas; overlays are scaled inside LiveTVRootView.
+            LiveTVRootView(model: liveTV)
         } else {
             GeometryReader { geometry in
                 content
@@ -327,8 +354,6 @@ struct LauncherRootView: View {
                 onHover: router.hover,
                 onActivate: router.activate
             )
-        case .placeholder(let item):
-            PlaceholderView(item: item)
         case .accessibilityOnboarding:
             AccessibilityOnboardingView(
                 onOpenSettings: { router.onRequestAccessibility?() },
@@ -341,7 +366,7 @@ struct LauncherRootView: View {
                 onHoverRow: router.hoverSettingsRow,
                 onActivateRow: router.settings.activate
             )
-        case .youtube:
+        case .youtube, .liveTV:
             // Shown by `body` outside the canvas.
             EmptyView()
         case .pin:

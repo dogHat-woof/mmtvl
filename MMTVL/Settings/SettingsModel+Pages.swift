@@ -8,6 +8,8 @@ extension SettingsModel {
         case .addTile: addTileSections
         case .confirmRestoreDefaults: confirmRestoreSections
         case .confirmClearYouTube: confirmClearYouTubeSections
+        case .liveTV: liveTVSections
+        case .confirmRemoveIPTV: confirmRemoveIPTVSections
         }
     }
 
@@ -19,6 +21,8 @@ extension SettingsModel {
         case .addTile: "Add Tile"
         case .confirmRestoreDefaults: "Restore Default Tiles?"
         case .confirmClearYouTube: "Sign Out of YouTube?"
+        case .liveTV: "Live TV"
+        case .confirmRemoveIPTV: "Remove Live TV Source?"
         }
     }
 
@@ -30,16 +34,18 @@ extension SettingsModel {
         case .addTile: .symbol("plus.app")
         case .confirmRestoreDefaults: .symbol("arrow.counterclockwise")
         case .confirmClearYouTube: .symbol("play.rectangle")
+        case .liveTV: .symbol("tv")
+        case .confirmRemoveIPTV: .symbol("tv.slash")
         }
     }
 
     var hint: String {
         switch page {
-        case .root, .tile: "Select: choose · Back: return"
+        case .root, .tile, .liveTV: "Select: choose · Back: return"
         case .homeScreen:
             movingTileID == nil ? "Select: edit tile · Back: return" : "Up/Down: move · Select or Back: done"
         case .addTile: "Select: add · Back: return"
-        case .confirmRestoreDefaults, .confirmClearYouTube: "Select: choose · Back: cancel"
+        case .confirmRestoreDefaults, .confirmClearYouTube, .confirmRemoveIPTV: "Select: choose · Back: cancel"
         }
     }
 
@@ -100,6 +106,11 @@ extension SettingsModel {
                 SettingsRow(id: "youtube.clear", title: "Sign Out & Clear YouTube Data", showsDisclosure: true,
                             action: .push(.confirmClearYouTube)),
             ], footer: "To keep kids in their own profile, set a Parent code in YouTube → Settings → Parent code."),
+            SettingsSection(id: "liveTV", title: "Live TV", rows: [
+                SettingsRow(id: "liveTV", title: "Live TV",
+                            value: iptv.hasPlaylist ? Self.channelCount(iptv.channelCount) : "Not Set Up",
+                            showsDisclosure: true, action: .push(.liveTV)),
+            ]),
             SettingsSection(id: "system", title: "System", rows: [
                 SettingsRow(id: "relaunch", title: "Relaunch MMTVL", action: .relaunch),
                 SettingsRow(id: "exit", title: "Exit to Desktop", action: .exitToDesktop),
@@ -197,6 +208,63 @@ extension SettingsModel {
                 SettingsRow(id: "confirm.cancel", title: "Cancel", action: .pop),
                 SettingsRow(id: "confirm.clearYouTube", title: "Sign Out & Clear", action: .clearYouTubeData),
             ], footer: "Signs every account out of YouTube on this Mac and deletes its watch data. YouTube's Parent code may be removed too."),
+        ]
+    }
+
+    private static func channelCount(_ count: Int) -> String {
+        "\(count.formatted()) Channels"
+    }
+
+    /// M4: the playlist and guide addresses come from the clipboard (L2).
+    private var liveTVSections: [SettingsSection] {
+        var playlistRows: [SettingsRow] = []
+        if iptv.hasPlaylist {
+            playlistRows.append(SettingsRow(id: "iptv.playlist.info", title: iptv.playlistHost ?? "Playlist",
+                                            value: Self.channelCount(iptv.channelCount), detail: iptv.playlistLine))
+        }
+        playlistRows.append(SettingsRow(id: "iptv.playlist.paste",
+                                        title: iptv.hasPlaylist ? "Replace with Clipboard URL" : "Paste Playlist URL",
+                                        detail: pasteMessage ?? "Copy the M3U address on this Mac or your iPhone first",
+                                        action: .pasteIPTVURL(.playlist)))
+        var sections = [SettingsSection(id: "playlist", title: "Playlist", rows: playlistRows)]
+        guard iptv.hasPlaylist else { return sections }
+
+        let guideTitle: String
+        let guideDetail: String
+        switch iptv.guideKind {
+        case .none:
+            guideTitle = "No guide"
+            guideDetail = "Paste an XMLTV guide URL to see what's on"
+        case .playlist(let host):
+            guideTitle = "From the playlist: \(host)"
+            guideDetail = iptv.guideLine
+        case .custom(let host):
+            guideTitle = "Custom: \(host)"
+            guideDetail = iptv.guideLine
+        }
+        var guideRows = [
+            SettingsRow(id: "iptv.guide.info", title: guideTitle, detail: guideDetail),
+            SettingsRow(id: "iptv.guide.paste", title: "Paste Guide URL", action: .pasteIPTVURL(.guide)),
+        ]
+        if case .custom = iptv.guideKind {
+            guideRows.append(SettingsRow(id: "iptv.guide.usePlaylist", title: "Use the Playlist's Guide",
+                                         action: .useIPTVPlaylistGuide))
+        }
+        sections.append(SettingsSection(id: "guide", title: "Guide", rows: guideRows))
+        sections.append(SettingsSection(id: "manage", rows: [
+            SettingsRow(id: "iptv.refresh", title: "Refresh Now", action: .refreshIPTV),
+            SettingsRow(id: "iptv.remove", title: "Remove Live TV Source", showsDisclosure: true,
+                        action: .push(.confirmRemoveIPTV)),
+        ], footer: "Addresses are kept in the Keychain. The first paste may ask for permission; choose Allow."))
+        return sections
+    }
+
+    private var confirmRemoveIPTVSections: [SettingsSection] {
+        [
+            SettingsSection(id: "confirm", rows: [
+                SettingsRow(id: "confirm.cancel", title: "Cancel", action: .pop),
+                SettingsRow(id: "confirm.removeIPTV", title: "Remove", action: .removeIPTVSource),
+            ], footer: "Forgets the playlist and guide addresses and deletes the downloaded guide."),
         ]
     }
 

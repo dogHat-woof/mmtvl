@@ -5,10 +5,12 @@ struct AppRouterTests {
     private func makeRouter(
         items: [LaunchItem] = LaunchItem.defaults,
         youtube: FakeYouTube = FakeYouTube(),
+        liveTV: FakeLiveTV = FakeLiveTV(),
         pin: String? = nil
     ) -> AppRouter {
         let (settings, _) = makeSettingsModel(items: items)
-        return AppRouter(items: items, launcher: AppLauncher(), settings: settings, youtube: youtube, pinStore: .inMemory(pin))
+        return AppRouter(items: items, launcher: AppLauncher(), settings: settings, youtube: youtube, liveTV: liveTV,
+                         pinStore: .inMemory(pin))
     }
 
     private func enterPIN(_ code: String, _ router: AppRouter) {
@@ -221,5 +223,83 @@ struct AppRouterTests {
         enterPIN("1357", router)
         #expect(router.screen == .settings)
         #expect(!router.hasPIN)
+    }
+}
+
+struct AppRouterLiveTVTests {
+    private func makeRouter(liveTV: FakeLiveTV, pin: String? = nil) -> AppRouter {
+        let (settings, _) = makeSettingsModel()
+        return AppRouter(items: LaunchItem.defaults, launcher: AppLauncher(), settings: settings, youtube: FakeYouTube(),
+                         liveTV: liveTV, pinStore: .inMemory(pin))
+    }
+
+    /// The Live TV tile is the third tile in the defaults.
+    private func openLiveTVFromTile(_ router: AppRouter) {
+        _ = router.handle(.right)
+        _ = router.handle(.right)
+        #expect(router.visibleItems[router.focus.index!].kind == .internalDestination(.iptv))
+        _ = router.handle(.select)
+    }
+
+    @Test func tileOpensLiveTV() {
+        let liveTV = FakeLiveTV()
+        let router = makeRouter(liveTV: liveTV)
+        openLiveTVFromTile(router)
+        #expect(router.screen == .liveTV)
+        #expect(liveTV.opens == 1)
+    }
+
+    @Test func homeLeaves() {
+        let liveTV = FakeLiveTV()
+        let router = makeRouter(liveTV: liveTV)
+        openLiveTVFromTile(router)
+        #expect(router.handle(.home))
+        #expect(router.screen == .home)
+        #expect(liveTV.leaves == 1)
+        #expect(liveTV.handled.isEmpty)
+    }
+
+    @Test func leaveOutcomeGoesHome() {
+        let liveTV = FakeLiveTV()
+        let router = makeRouter(liveTV: liveTV)
+        router.openLiveTV()
+        liveTV.outcome = .leave
+        #expect(router.handle(.back))
+        #expect(router.screen == .home)
+        #expect(liveTV.leaves == 1)
+    }
+
+    @Test func commandsAreForwarded() {
+        let liveTV = FakeLiveTV()
+        let router = makeRouter(liveTV: liveTV)
+        router.openLiveTV()
+        for command in [RemoteCommand.up, .down, .left, .right, .select, .playPause, .fastForward, .rewind, .back] {
+            #expect(router.handle(command))
+        }
+        #expect(liveTV.handled == [.up, .down, .left, .right, .select, .playPause, .fastForward, .rewind, .back])
+        #expect(router.screen == .liveTV)
+    }
+
+    @Test func openSettingsWithoutPIN() {
+        let liveTV = FakeLiveTV()
+        let router = makeRouter(liveTV: liveTV)
+        router.openLiveTV()
+        liveTV.outcome = .openSettings
+        _ = router.handle(.select)
+        #expect(router.screen == .settings)
+        #expect(liveTV.leaves == 1)
+    }
+
+    @Test func openSettingsWithPIN() {
+        let liveTV = FakeLiveTV()
+        let router = makeRouter(liveTV: liveTV, pin: "1357")
+        router.openLiveTV()
+        liveTV.outcome = .openSettings
+        _ = router.handle(.select)
+        #expect(router.screen == .pin(.openSettings))
+        #expect(liveTV.leaves == 1)
+        // Cancelling returns home.
+        _ = router.handle(.back)
+        #expect(router.screen == .home)
     }
 }

@@ -20,6 +20,9 @@ final class SettingsModel {
     private(set) var hasPIN: Bool
     /// nil = loading (addTile page).
     private(set) var installedApps: [InstalledApp]?
+    private(set) var iptv: IPTVSettingsStatus
+    /// The last paste error; the paste row's detail. Cleared on any push/pop and on a successful paste.
+    private(set) var pasteMessage: String?
     @ObservationIgnored let environment: SettingsEnvironment
 
     init(settings: AppSettings, items: [LaunchItem], environment: SettingsEnvironment) {
@@ -29,6 +32,7 @@ final class SettingsModel {
         isAccessibilityTrusted = environment.isAccessibilityTrusted()
         loginItemStatus = environment.loginItemStatus()
         hasPIN = environment.hasPIN()
+        iptv = environment.iptvStatus()
     }
 
     var page: SettingsPage { stack[stack.count - 1].page }
@@ -57,6 +61,7 @@ final class SettingsModel {
         isAccessibilityTrusted = environment.isAccessibilityTrusted()
         loginItemStatus = environment.loginItemStatus()
         hasPIN = environment.hasPIN()
+        iptv = environment.iptvStatus()
     }
 
     /// Returns false only for commands it doesn't use, and for Back on the root page (the router then goes home).
@@ -164,6 +169,16 @@ final class SettingsModel {
         case .clearYouTubeData:
             environment.clearYouTubeData()
             pop()
+        case .pasteIPTVURL(let kind):
+            pasteMessage = environment.pasteIPTVURL(kind)
+            refreshStatus()
+        case .useIPTVPlaylistGuide:
+            environment.useIPTVPlaylistGuide()
+        case .refreshIPTV:
+            environment.refreshIPTV()
+        case .removeIPTVSource:
+            environment.removeIPTVSource()
+            pop()
         }
     }
 
@@ -185,6 +200,7 @@ final class SettingsModel {
     }
 
     private func push(_ page: SettingsPage) {
+        pasteMessage = nil
         stack.append(PageState(page: page, focusedRowID: nil))
         if page == .addTile {
             installedApps = nil
@@ -194,6 +210,7 @@ final class SettingsModel {
 
     private func pop() {
         guard stack.count > 1 else { return }
+        pasteMessage = nil
         stack.removeLast()
     }
 
