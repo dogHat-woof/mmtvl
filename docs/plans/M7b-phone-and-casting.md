@@ -585,7 +585,7 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
     ```
     and `curl -s -X POST -d 'v=dQw4w9WgXcQ' http://localhost:8770/apps/YouTube` switches MMTVL to YouTube.
 
-- [ ] **4. YouTube bridge (warm path)**: `YouTube/YouTubeDIAL.swift` (new), `YouTube/YouTubeController.swift`, `App/AppDelegate.swift`, `MMTVLTests/YouTubeDIALTests.swift` (new)
+- [x] **4. YouTube bridge (warm path)**: `YouTube/YouTubeDIAL.swift` (new), `YouTube/YouTubeController.swift`, `App/AppDelegate.swift`, `MMTVLTests/YouTubeDIALTests.swift` (new)
   - `YouTubeController.init(userAgent:castEnabled: Bool)`; when `castEnabled` at web view creation, add `YouTubeDIAL.shimScript` as a `WKUserScript` (`.atDocumentStart`, `forMainFrameOnly: true`; the default page content world) and `userContentController.add(delegate, name: YouTubeDIAL.messageHandlerName)`. AppDelegate passes `settings.youtubeCastEnabled` (read at creation, L5).
   - **Fix the delegate:** `userContentController(_:didReceive:)` calls `pageDidExit()` only for `YouTubeKeyMap.messageHandlerName`; for `YouTubeDIAL.messageHandlerName` with body `["type": "ready", "app": "YouTube"]` it calls `controller?.dialDidBecomeReady()`.
   - `private(set) var isDIALReady = false` (`@ObservationIgnored`), set true by `dialDidBecomeReady()` (log "Leanback registered its DIAL handlers"), false in `load()`, `didFail`, `contentProcessDidTerminate`, and a new `webView(_:didStartProvisionalNavigation:)` delegate method.

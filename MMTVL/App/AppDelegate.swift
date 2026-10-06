@@ -71,7 +71,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.plex = plex
         let settingsModel = SettingsModel(settings: settings, items: items, environment: makeSettingsEnvironment(kiosk: kiosk),
                                           bindings: bindings)
-        let youtube = YouTubeController(userAgent: YouTubeConfig.userAgent(override: settings.youtubeUserAgent))
+        let youtube = YouTubeController(userAgent: YouTubeConfig.userAgent(override: settings.youtubeUserAgent),
+                                        castEnabled: settings.youtubeCastEnabled)
         self.youtube = youtube
         let liveTV = LiveTVModel(player: MPVPlayerController(), makePlayer: { MPVPlayerController() }, library: iptvLibrary)
         liveTV.channelUpMovesUpList = settings.channelUpMovesUpList
@@ -196,8 +197,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// M7b D30: the YouTube DIAL receiver, in kiosk and -windowed mode alike.
     private func setUpCasting() {
         let bridge = CastBridge(
-            isAppReady: { false },
-            forward: { _ in nil },
+            isAppReady: { [weak self] in self?.youtube?.isDIALReady ?? false },
+            forward: { [weak self] request in await self?.youtube?.handleDIAL(request) },
             launch: { [weak self] query in self?.castToTV(query: query) },
             didConnect: { [weak self] in self?.castToTV(query: nil) }
         )
