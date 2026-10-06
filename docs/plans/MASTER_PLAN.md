@@ -30,7 +30,7 @@ This file is the **single source of truth** for vision, decisions, architecture,
 | Deployment target | macOS 26.0 (dev machine: macOS 27 / Xcode 27). Revisit if the mini runs an older OS. |
 | Language / UI | Swift 6 (MainActor default isolation), SwiftUI hosted in AppKit windows |
 | Distribution | Local build, signed **Apple Development, team H846CY8RB4** (from M2), **no App Sandbox, no hardened runtime** (for now) |
-| IPTV provider | the IPTV provider: M3U URL with embedded credentials (very likely also Xtream Codes). **5 concurrent streams** observed. |
+| IPTV provider | the IPTV provider: a plain M3U URL with an embedded token (**not** Xtream; verified 2026-10-06). About 118 entries (97 US sports channels + game event streams), all live HLS (720p H.264, ~3–4 Mb/s, 40 s server window), no built-in EPG. **5 concurrent streams** observed. |
 | EPG | User-supplied XMLTV sources (multiple) |
 | Remote | Not purchased. Candidates: Siri Remote + Remote Buddy 2, WeChip G20S Pro, Flirc + IR remote. The app must work with any remote that emits key events. |
 
@@ -46,10 +46,10 @@ Record every architecture-level decision here. Sub plans may make local decision
 | D4 | Global Home button uses a **CGEventTap**, which requires Accessibility permission. | Needed to steal a key/button back from Plex, browsers, etc. Acceptable for a personal unsandboxed app. Signing must be stable so the TCC grant survives rebuilds: Apple Development cert, team **H846CY8RB4** (the user's own team; verified to build without a provisioning profile). |
 | D5 | YouTube = `youtube.com/tv` in a **WKWebView inside the launcher**, with a TV user agent (PS4/Cobalt 25, verified 2026-10-05; see D21). Profile PIN protection relies on YouTube's own **Parent code**. Fallback: launcher-level profiles with isolated `WKWebsiteDataStore`s and the launcher PIN (D20). | Best remote UX. Keeps the user inside the launcher. Parent code matches the desired child-profile behavior. |
 | D6 | IPTV is **built in**. Player engine = **libmpv via MPVKit** (Swift package). | IPTV streams are often raw MPEG-TS that AVPlayer handles poorly. mpv plays nearly everything and supports a back-buffer for rewind. |
-| D7 | IPTV **rewind buffer** uses mpv's demuxer back-cache (`demuxer-max-back-bytes`, optionally `cache-on-disk`), targeting **≥ 5 minutes** per live stream. | Meets "cache a few minutes to rewind" without a DVR. |
+| D7 | IPTV **rewind buffer** uses mpv's in-memory demuxer back-cache (`cache=yes`, `demuxer-max-back-bytes=512MiB`, `demuxer-max-bytes=256MiB`; M4 L8), targeting **≥ 5 minutes** per live stream (~17 min at the measured bitrate). `cache-on-disk` stays an option for M6 multiview. | Meets "cache a few minutes to rewind" without a DVR. Verified in an M4 spike: seeking 60 s back on live HLS (beyond the 40 s server window) and pausing both work from the cache. |
 | D8 | EPG and channel data are stored in **SQLite (GRDB)**. XMLTV is stream-parsed and refreshed on a schedule. | XMLTV files can be 100MB+. The guide grid needs fast time-range queries. |
 | D9 | Secrets (IPTV URL/credentials, PINs) live in the **Keychain**, never in config files or the repo. | — |
-| D10 | Non-secret config (launch items, bindings, EPG source URLs, settings) is JSON in `~/Library/Application Support/MMTVL/`. | Easy to inspect and back up. |
+| D10 | Non-secret config (launch items, bindings, settings, EPG channel overrides) is JSON in `~/Library/Application Support/MMTVL/`. IPTV source and guide URLs are Keychain items (D23). | Easy to inspect and back up. |
 | D11 | The phone remote is a **web page served by the launcher** (Network.framework HTTP + WebSocket on the LAN), protected by a pairing code. A native iOS app is optional later. | Works on iOS and Android with no install. Supports text entry. |
 | D12 | Casting: **AirPlay = macOS's built-in AirPlay Receiver** (a setting, no code). Plex = Plex HTPC as a Plex Companion player. YouTube = "Link with TV code" in the TV UI. No Chromecast receiver. | Zero/low code and reliable. |
 | D13 | Prime Video and the generic browser are launched as **external apps** (Prime Video Mac app or Safari/Chrome). | DRM (Widevine/FairPlay) does not work reliably in our WKWebView. |
@@ -61,6 +61,8 @@ Record every architecture-level decision here. Sub plans may make local decision
 | D19 | A **remote-navigable Settings screen** (a Settings tile, M2b) edits the D10 JSON files in place and applies changes **live where possible**; otherwise the row shows "Relaunch needed" and Settings offers a Relaunch MMTVL action. Entry point: a **Settings tile** that is always present (movable, never hidden or removed; re-added at launch if missing). A gear by the clock was built in M2b and dropped after use (user choice 2026-10-05). Later milestones add their own sections (M3 YouTube, M4 IPTV sources/EPG); secrets entered there go to the Keychain (D9). The learn-button bindings editor comes later (M7). M2b has **no Settings PIN** (user choice 2026-10-05); the launcher PIN arrives in M3 (D20). | User choice (2026-10-05): GUI settings early instead of hand-editing JSON. One settings framework that later milestones only add rows to. |
 | D20 | An optional 4-digit **launcher PIN** (Keychain, D9; the legacy keychain, because the data-protection keychain needs a provisioning profile) guards **Settings**, **Exit to Desktop**, and tiles with **Require PIN** on (`requiresPIN` in `launch-items.json`). It is entered on a **privacy keypad** like Google TV's: Up/Down moves a visible row highlight, and Left/Select/Right enters that row's first/middle/last digit with no on-screen sign of which. 5 wrong tries lock entry for 60 s. Recovery is Mac-side (`security delete-generic-password`). | User choice (2026-10-05). Keeps a kid away from the desktop, the browser and Settings, and resists anyone watching the TV. |
 | D21 | YouTube hosting: **one persistent WKWebView** (default website data store), created on first open and **kept alive and paused** while away (D18 semantics). The page is told it is always visible, so coming back doesn't trigger YouTube's resume screens (found in M3 step 3). Remote commands reach leanback as **JS key events** (arrows, 13, 27, 179 play/pause, 228/227 FF/RW). Home always leaves; Back goes to the page; leanback's own exit (`window.close`) returns home. Top-level navigation is limited to YouTube/Google hosts. The UA can be overridden in `settings.json` (`youtubeUserAgent`). | Verified in a WKWebView spike (2026-10-05): leanback, 4K playback and these key codes work. One code path serves keyboard, controller and the phone remote. The UA override survives YouTube changes without a rebuild. |
+| D22 | mpv video is drawn with the **libmpv render API (OpenGL) in a `CAOpenGLLayer`** (`vo=libmpv`, `hwdec=videotoolbox`), via **MPVKit 1.0.0, LGPL product**. Not MPVKit's Metal/MoltenVK `wid` path. | Verified in an M4 spike: picture, VideoToolbox decoding and live resizing (needed for the guide's preview window) work. The MoltenVK path ignores layer resizes (MPVKit #3) and is an unofficial patch; mpv recommends the render API over `wid`. IINA uses the same approach. |
+| D23 | IPTV **channels are not persisted**: the playlist is fetched at launch, when Live TV opens (if older than 10 min) and on demand, and kept in memory. Only the **EPG** goes to SQLite (D8). Source and guide URLs are Keychain items (D9); full source/stream URLs are never logged. | Stream URLs embed the account token (D9). The playlist is ~30 KB and its game entries change daily. |
 
 ## 5. Architecture overview
 
@@ -73,7 +75,7 @@ MMTVL.app
 ├─ YouTube/        WKWebView host (D21), TV user agent, key map, profile fallback
 ├─ PIN/            Launcher PIN (D20): Keychain store, privacy keypad, flows, entry screen
 ├─ IPTV/
-│   ├─ Sources/    M3U + Xtream clients, channel import
+│   ├─ Sources/    M3U parser, channel list, Keychain source URLs
 │   ├─ EPG/        XMLTV parser, matcher, GRDB store, refresh scheduler
 │   ├─ Player/     mpv wrapper (MPVKit), timeshift controls, OSD
 │   ├─ Guide/      Grid guide UI, channel list, favorites/groups
@@ -95,7 +97,7 @@ Status values: `Not planned` → `Planned` → `In progress` → `Done` (or `Blo
 | M2 | Input layer: remappable bindings, global Home (event tap + Accessibility onboarding), game controllers, cursor auto-hide, launch at login, sleep/wake behavior, signing with personal team, full screen for launched apps via Accessibility (D15) | M1 | Done | [M2-input-layer.md](M2-input-layer.md) |
 | M2b | Settings screen: an always-present Settings tile; remote-navigable settings screen on the custom focus model (D2); toggles for `settings.json` applied live where possible; Accessibility status with a grant action; home tile editing (reorder, hide, full screen, add any installed app) | M2 | Done | [M2b-settings-screen.md](M2b-settings-screen.md) |
 | M3 | YouTube: WKWebView `youtube.com/tv`, TV user agent, key mapping, **verify Parent code**, profile fallback if needed, verify Link-with-TV-code casting, launcher PIN with privacy keypad (D20) | M2b | Done | [M3-youtube-and-pin.md](M3-youtube-and-pin.md) |
-| M4 | IPTV core: Keychain-stored M3U/Xtream source, channel import, single EPG source, grid guide, mpv player, **rewind buffer** | M2b | Not planned | — |
+| M4 | Live TV (IPTV core): clipboard-pasted M3U source in the Keychain, channel import, single XMLTV guide source, grid guide with preview, mpv player (D22), **rewind buffer**, Settings → Live TV. (Xtream dropped: the provider is plain M3U.) | M2b | Planned | [M4-live-tv.md](M4-live-tv.md) |
 | M5 | Phone remote: LAN web server, pairing, D-pad/media/volume/text entry | M2 | Not planned | — |
 | M6 | IPTV advanced: multiple EPG sources + manual matching, multiview (2-up/2×2), favorites/groups/hidden, catch-up (if provider supports) | M4 | Not planned | — |
 | M7 | Polish: parallax/specular tile effect, top shelf, learn-button bindings editor in Settings, casting setup checklist (AirPlay/Plex/YouTube), on-TV QA pass | M2b, M3–M6 | Not planned | — |
@@ -106,10 +108,11 @@ Status values: `Not planned` → `Planned` → `In progress` → `Done` (or `Blo
 |---|---|---|
 | Q1 | Which remote will be purchased? Its Home button must emit a key macOS can see (or be mapped to one by Remote Buddy/Flirc). M2 makes bindings remappable and logs unbound key codes, so this only affects `key-bindings.json`. | Nothing (bindings are data) |
 | Q2 | ~~Does `youtube.com/tv` in a WKWebView expose Parent code and child profiles?~~ **Yes (verified with the user 2026-10-05):** a kid account works, the Parent code is required to leave it, and sign-in, profile and code survive a relaunch. D5's primary path holds; no launcher profiles needed. | — |
-| Q3 | Does the provider expose the Xtream API (`player_api.php`) and HLS output, and does it offer catch-up? | M4 source design, M6 catch-up |
+| Q3 | ~~Does the provider expose the Xtream API and HLS output, and does it offer catch-up?~~ **No Xtream, HLS yes, no catch-up (verified 2026-10-06).** The playlist is plain M3U; streams are live HLS with a 40 s window. M6 catch-up is moot unless the provider changes. | — |
 | Q4 | Prime Video: Mac App Store app or browser? (test which is more remote-friendly) | M1 default launch item only |
 | Q5 | Final app name / display name (currently "MMTVL") | Nothing |
 | Q6 | macOS version on the Mac mini | Deployment target |
+| Q7 | ~~Which XMLTV guide URL for Live TV?~~ **guide-source US2** (user, 2026-10-06). With M4's hand-edited `epg-overrides.json`, it covers 58/97 live channels. The FanDuel regionals and international channels need a second source: **M6** multiple EPG sources (ALL_SOURCES1 has them). | — |
 
 ## How planning works
 
