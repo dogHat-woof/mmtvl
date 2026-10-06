@@ -6,6 +6,7 @@ enum IPTVFixtures {
     static let otherPlaylistURL = URL(string: "https://provider.example/app2/other")!
     static let playlistGuideURL = URL(string: "https://guide.example/from-playlist.xml")!
     static let customGuideURL = URL(string: "https://guide.example/custom.xml")!
+    static let secondGuideURL = URL(string: "https://guide.example/second.xml.gz")!
 
     static func streamURL(_ n: Int) -> URL { URL(string: "https://cdn.example/t/channel/\(n)/chunks.m3u8")! }
 
@@ -39,8 +40,16 @@ enum IPTVFixtures {
     /// NFL Network matches by name, NBA TV by id; "NFL.RedZone.HD.us2" only through an override.
     /// Each channel gets hour-long programmes from now − 1 h to now + 3 h.
     static func guide(now: Date) -> String {
-        let channels = [("NFL.Network.HD.us2", "NFL Network HD"), ("nbatv.us", "NBA TV"), ("NFL.RedZone.HD.us2", "NFL RedZone"),
-                        ("Unrelated.us2", "Unrelated")]
+        xmltv(now: now, channels: [("NFL.Network.HD.us2", "NFL Network HD"), ("nbatv.us", "NBA TV"),
+                                   ("NFL.RedZone.HD.us2", "NFL RedZone"), ("Unrelated.us2", "Unrelated")])
+    }
+
+    /// M6b: Red Zone matches here by name, NBA TV by name (custom has it by id). Titles "<name> alt <hour>".
+    static func secondGuide(now: Date) -> String {
+        xmltv(now: now, channels: [("RedZone.Alt.us", "Red Zone"), ("NBA.TV.Alt.us", "NBA TV")], titleSuffix: " alt")
+    }
+
+    private static func xmltv(now: Date, channels: [(String, String)], titleSuffix: String = "") -> String {
         var xml = "<?xml version=\"1.0\"?>\n<!DOCTYPE tv SYSTEM \"xmltv.dtd\">\n<tv>\n"
         for (id, name) in channels {
             xml += "<channel id=\"\(id)\"><display-name>\(name)</display-name></channel>\n"
@@ -50,7 +59,7 @@ enum IPTVFixtures {
             for hour in 0..<4 {
                 let start = base.addingTimeInterval(Double(hour) * 3600)
                 xml += "<programme start=\"\(stamp(start))\" stop=\"\(stamp(start.addingTimeInterval(3600)))\" channel=\"\(id)\">"
-                xml += "<title>\(name) \(hour)</title></programme>\n"
+                xml += "<title>\(name)\(titleSuffix) \(hour)</title></programme>\n"
             }
         }
         return xml + "</tv>\n"
@@ -133,32 +142,38 @@ struct LibraryFixture {
     let directory: URL
     let stateFile: JSONConfigFile<IPTVState>
     let overridesFile: JSONConfigFile<[String: String]>
+    let preferencesFile: JSONConfigFile<ChannelPreferences>
 
     func cleanUp() { try? FileManager.default.removeItem(at: directory) }
 }
 
 /// A library with an in-memory guide store and sources, and its files in a temporary directory.
-func makeLibrary(playlist: URL? = nil, guide: URL? = nil,
+func makeLibrary(playlist: URL? = nil, guides: [URL] = [],
                  texts: [URL: String] = [IPTVFixtures.playlistURL: IPTVFixtures.playlist],
                  files: [URL: String]? = nil,
-                 state: IPTVState? = nil, overrides: [String: String]? = nil,
+                 state: IPTVState? = nil, overrides: [String: String]? = nil, preferences: ChannelPreferences? = nil,
                  now: Date = Date(timeIntervalSince1970: 1_791_200_000)) throws -> LibraryFixture {
     let directory = FileManager.default.temporaryDirectory
         .appending(path: "IPTVLibraryTests-\(UUID().uuidString)", directoryHint: .isDirectory)
     let stateFile = JSONConfigFile(url: directory.appending(path: IPTVState.fileName), defaultValue: IPTVState())
     let overridesFile = JSONConfigFile(url: directory.appending(path: IPTVState.overridesFileName), defaultValue: [String: String]())
     if let state { try stateFile.save(state) }
+    let preferencesFile = JSONConfigFile(url: directory.appending(path: ChannelPreferences.fileName),
+                                         defaultValue: ChannelPreferences())
     if let overrides { try overridesFile.save(overrides) }
+    if let preferences { try preferencesFile.save(preferences) }
 
     let clock = TestClock(now)
     let guideText = IPTVFixtures.guide(now: now)
     let (network, networkState) = IPTVNetwork.fake(
         texts: texts,
-        files: files ?? [IPTVFixtures.playlistGuideURL: guideText, IPTVFixtures.customGuideURL: guideText])
-    let sources = IPTVSourceStore.inMemory(playlist: playlist, guide: guide)
+        files: files ?? [IPTVFixtures.playlistGuideURL: guideText, IPTVFixtures.customGuideURL: guideText,
+                         IPTVFixtures.secondGuideURL: IPTVFixtures.secondGuide(now: now)])
+    let sources = IPTVSourceStore.inMemory(playlist: playlist, guides: guides)
     let store = try EPGStore.inMemory()
     let library = IPTVLibrary(sources: sources, store: store, network: network, stateFile: stateFile,
-                              overridesFile: overridesFile, now: { clock.now })
+                              overridesFile: overridesFile, preferencesFile: preferencesFile, now: { clock.now })
     return LibraryFixture(library: library, network: networkState, sources: sources, store: store, clock: clock,
-                          directory: directory, stateFile: stateFile, overridesFile: overridesFile)
+                          directory: directory, stateFile: stateFile, overridesFile: overridesFile,
+                          preferencesFile: preferencesFile)
 }

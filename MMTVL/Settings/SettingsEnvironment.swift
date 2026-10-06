@@ -30,7 +30,14 @@ struct SettingsEnvironment {
     var iptvStatus: () -> IPTVSettingsStatus
     /// Reads the clipboard. Returns an error message, or nil on success; on success it starts the save + refresh.
     var pasteIPTVURL: (IPTVURLKind) -> String?
-    var useIPTVPlaylistGuide: () -> Void
+    /// `IPTVLibrary.moveGuideSource(_:by:)`, fire and forget.
+    var moveGuideSource: (String, Int) -> Void
+    /// `IPTVLibrary.removeGuideSource(_:)`, fire and forget.
+    var removeGuideSource: (String) -> Void
+    /// `IPTVLibrary.setGroupHidden(_:_:)`.
+    var setIPTVGroupHidden: (String, Bool) -> Void
+    /// `IPTVLibrary.setChannelHidden(id, false)`.
+    var unhideIPTVChannel: (String) -> Void
     var refreshIPTV: () -> Void
     var removeIPTVSource: () -> Void
     var phoneRemoteStatus: () -> PhoneRemoteSettingsStatus

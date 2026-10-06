@@ -23,6 +23,8 @@ final class SettingsModel {
     private(set) var iptv: IPTVSettingsStatus
     /// The last paste error; the paste row's detail. Cleared on any push/pop and on a successful paste.
     private(set) var pasteMessage: String?
+    /// Which paste row `pasteMessage` belongs to.
+    private(set) var pasteMessageKind: IPTVURLKind?
     private(set) var phoneRemote: PhoneRemoteSettingsStatus
     @ObservationIgnored let environment: SettingsEnvironment
     /// The phone pairing code is valid while Pair a Phone shows (M5 L3).
@@ -185,9 +187,21 @@ final class SettingsModel {
             pop()
         case .pasteIPTVURL(let kind):
             pasteMessage = environment.pasteIPTVURL(kind)
+            pasteMessageKind = pasteMessage == nil ? nil : kind
             refreshStatus()
-        case .useIPTVPlaylistGuide:
-            environment.useIPTVPlaylistGuide()
+        case .moveGuideSource(let id, let step):
+            environment.moveGuideSource(id, step)
+            refreshStatus()
+        case .removeGuideSource(let id):
+            environment.removeGuideSource(id)
+            pop()
+            refreshStatus()
+        case .toggleIPTVGroupHidden(let name):
+            environment.setIPTVGroupHidden(name, !(iptv.groups.first { $0.name == name }?.isHidden ?? false))
+            refreshStatus()
+        case .unhideIPTVChannel(let id):
+            environment.unhideIPTVChannel(id)
+            refreshStatus()
         case .refreshIPTV:
             environment.refreshIPTV()
         case .removeIPTVSource:
@@ -219,6 +233,7 @@ final class SettingsModel {
 
     private func push(_ page: SettingsPage) {
         pasteMessage = nil
+        pasteMessageKind = nil
         stack.append(PageState(page: page, focusedRowID: nil))
         if page == .addTile {
             installedApps = nil
@@ -230,6 +245,7 @@ final class SettingsModel {
     private func pop() {
         guard stack.count > 1 else { return }
         pasteMessage = nil
+        pasteMessageKind = nil
         stack.removeLast()
         syncPairing()
     }

@@ -45,4 +45,47 @@ struct LiveMenuTests {
         #expect(menu(focusedIndex: -1).focusedIndex == 0)
         #expect(LiveMenu(title: "Empty", items: [], focusedIndex: 3).focusedIndex == 0)
     }
+
+    // MARK: Scrolling (M6b L10)
+
+    private func long(focusedIndex: Int = 0) -> LiveMenu {
+        LiveMenu(title: "Guide", items: (0..<20).map { .init(id: "i\($0)", title: "\($0)", action: .watch("id:\($0)")) },
+                 focusedIndex: focusedIndex, isWide: true)
+    }
+
+    @Test func initKeepsTheFocusVisible() {
+        let menu = long(focusedIndex: 15)
+        #expect(menu.firstVisibleIndex == 12)
+        #expect(menu.visibleRange == 12..<20)
+        #expect(menu.hasHiddenAbove)
+        #expect(!menu.hasHiddenBelow)
+        #expect(long(focusedIndex: 3).firstVisibleIndex == 3)
+    }
+
+    @Test func scrollsWithTheFocus() {
+        var menu = long()
+        #expect(menu.visibleRange == 0..<8)
+        #expect(!menu.hasHiddenAbove && menu.hasHiddenBelow)
+        for _ in 0..<7 { _ = menu.handle(.down) }
+        #expect(menu.firstVisibleIndex == 0)
+        _ = menu.handle(.down)
+        #expect(menu.firstVisibleIndex == 1)
+        for _ in 0..<30 { _ = menu.handle(.down) }
+        #expect(menu.focusedIndex == 19)
+        #expect(menu.visibleRange == 12..<20)
+        for _ in 0..<12 { _ = menu.handle(.up) }
+        #expect(menu.focusedIndex == 7)
+        #expect(menu.firstVisibleIndex == 7)
+        for _ in 0..<30 { _ = menu.handle(.up) }
+        #expect(menu.focusedIndex == 0)
+        #expect(menu.firstVisibleIndex == 0)
+        #expect(!menu.hasHiddenAbove)
+    }
+
+    @Test func shortMenuHasNoHiddenRows() {
+        let menu = menu()
+        #expect(menu.visibleRange == 0..<3)
+        #expect(!menu.hasHiddenAbove && !menu.hasHiddenBelow)
+        #expect(!menu.isWide)
+    }
 }

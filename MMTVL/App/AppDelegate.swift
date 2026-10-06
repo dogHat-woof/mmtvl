@@ -214,7 +214,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             store: epgStore,
             network: .live,
             stateFile: JSONConfigFile(url: directory.appending(path: IPTVState.fileName), defaultValue: IPTVState()),
-            overridesFile: JSONConfigFile(url: directory.appending(path: IPTVState.overridesFileName), defaultValue: [String: String]())
+            overridesFile: JSONConfigFile(url: directory.appending(path: IPTVState.overridesFileName), defaultValue: [String: String]()),
+            preferencesFile: JSONConfigFile(url: directory.appending(path: ChannelPreferences.fileName),
+                                            defaultValue: ChannelPreferences())
         )
     }
 
@@ -234,27 +236,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .failed(let message): status.playlistLine = "Failed: \(message)"
         }
 
-        switch library.guideSource {
-        case .none: status.guideKind = .none
-        case .playlist(let url): status.guideKind = .playlist(url.host() ?? "?")
-        case .custom(let url): status.guideKind = .custom(url.host() ?? "?")
-        }
-        let programmes = "\(library.guideProgrammeCount.formatted()) programmes"
-        switch library.guideStatus {
-        case .loading:
-            status.guideLine = "Loading…"
-        case .failed(let message):
-            status.guideLine = "Failed: \(message)"
-        case .loaded(let date):
-            status.guideLine = "\(programmes) · Updated \(time(date))"
-        case .idle:
-            if case .none = library.guideSource {
-                status.guideLine = "No guide"
-            } else if let imported = library.state.lastGuideImport {
-                status.guideLine = "\(programmes) · Updated \(imported.formatted(date: .abbreviated, time: .shortened))"
-            } else {
-                status.guideLine = ""
+        // M6b: one line per guide. Labels may show a guide's file name, never its query (L2).
+        status.guideSources = library.guideSources.map { source in
+            let info = library.guideSourceInfo[source.id] ?? IPTVLibrary.GuideSourceInfo()
+            func summary(_ updated: String) -> String {
+                "\(info.programmeCount.formatted()) programmes · \(info.matchedChannels) channels · Updated \(updated)"
             }
+            let line = switch info.status {
+            case .loading: "Loading…"
+            case .failed(let message): "Failed: \(message)"
+            case .loaded(let date): summary(time(date))
+            case .idle: library.state.guideImports[source.id]
+                .map { summary($0.formatted(date: .abbreviated, time: .shortened)) } ?? "Not loaded yet"
+            }
+            return IPTVSettingsStatus.GuideSourceStatus(id: source.id, label: source.label, line: line,
+                                                        isFromPlaylist: source.isFromPlaylist)
+        }
+        status.customGuideCount = library.customGuideCount
+        status.matchedChannelCount = library.matchedChannelCount
+
+        // M6b L5: groups and hidden channels, in playlist order.
+        let hiddenGroups = Set(library.preferences.hiddenGroups)
+        let counts = Dictionary(grouping: library.channels, by: \.group).mapValues(\.count)
+        status.groups = ChannelList.groups(of: library.channels).map { name in
+            IPTVSettingsStatus.GroupStatus(name: name, channelCount: counts[name] ?? 0, isHidden: hiddenGroups.contains(name))
+        }
+        let hiddenChannels = Set(library.preferences.hiddenChannels)
+        status.hiddenChannels = library.channels.filter { hiddenChannels.contains($0.id) }.map { channel in
+            IPTVSettingsStatus.HiddenChannelStatus(id: channel.id, number: channel.number, name: channel.name, group: channel.group)
         }
         return status
     }
@@ -268,10 +277,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .success(let url):
             Self.logger.info("Pasted a \(kind == .playlist ? "playlist" : "guide", privacy: .public) URL for \(url.host() ?? "?", privacy: .public)")
             guard let library = iptvLibrary else { return nil }
-            Task {
-                switch kind {
-                case .playlist: await library.setPlaylistURL(url)
-                case .guide: await library.setGuideURL(url)
+            switch kind {
+            case .playlist:
+                Task { await library.setPlaylistURL(url) }
+            case .guide:
+                switch library.guideAddProblem(url) {
+                case .duplicate: return "That guide is already added"
+                case .full: return "Up to \(IPTVLibrary.maxGuideSources) guides; remove one first"
+                case nil: Task { await library.addGuideURL(url) }
                 }
             }
             return nil
@@ -443,10 +456,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             iptvStatus: { [weak self] in self?.iptvSettingsStatus() ?? IPTVSettingsStatus() },
             pasteIPTVURL: { [weak self] in self?.pasteIPTVURL($0) },
-            useIPTVPlaylistGuide: { [weak self] in
+            moveGuideSource: { [weak self] id, step in
                 guard let library = self?.iptvLibrary else { return }
-                Task { await library.setGuideURL(nil) }
+                Task { await library.moveGuideSource(id, by: step) }
             },
+            removeGuideSource: { [weak self] id in
+                guard let library = self?.iptvLibrary else { return }
+                Task { await library.removeGuideSource(id) }
+            },
+            setIPTVGroupHidden: { [weak self] name, hidden in self?.iptvLibrary?.setGroupHidden(name, hidden) },
+            unhideIPTVChannel: { [weak self] id in self?.iptvLibrary?.setChannelHidden(id, false) },
             refreshIPTV: { [weak self] in
                 guard let library = self?.iptvLibrary else { return }
                 Task { await library.refreshAll() }

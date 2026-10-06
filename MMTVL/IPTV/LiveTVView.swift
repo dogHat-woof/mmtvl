@@ -52,7 +52,7 @@ struct LiveTVRootView: View {
         .ignoresSafeArea()
         .onAppear { (model.player as? MPVPlayerController)?.prepare() }
         .onChange(of: model.library.guideRevision) { model.guideDataChanged() }
-        .onChange(of: model.library.channels) { model.channelsChanged() }
+        .onChange(of: model.library.lineup) { model.channelsChanged() }
     }
 
     @ViewBuilder
@@ -63,7 +63,7 @@ struct LiveTVRootView: View {
         case .guide:
             if let guide = model.guide {
                 GuideView(model: guide, currentChannel: model.previewChannel, phase: model.previewPlayer.state.phase,
-                          isPicking: model.guidePurpose != .watch)
+                          isPicking: model.guidePurpose != .watch, favoriteIDs: Set(model.library.preferences.favorites))
             }
         case .multiview:
             MultiviewOverlayView(model: model)

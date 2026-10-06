@@ -106,8 +106,8 @@ struct MultiviewLiveTVTests {
         _ = model.handle(.down)
         _ = model.handle(.left)
         _ = model.handle(.select)
-        #expect(model.menu?.items.map(\.id) == ["watch", "addToMultiview"])
-        #expect(model.menu?.items.last?.title == "Add to Multiview")
+        #expect(model.menu?.items.map(\.id) == ["watch", "addToMultiview", "favorite", "matchGuide", "hide"])
+        #expect(model.menu?.items[1].title == "Add to Multiview")
         _ = model.handle(.down)
         _ = model.handle(.select)
         _ = model.handle(.back)
@@ -115,7 +115,7 @@ struct MultiviewLiveTVTests {
         _ = model.handle(.select)
         _ = model.handle(.left)
         _ = model.handle(.select)
-        #expect(model.menu?.items.last?.title == "Show in Multiview")
+        #expect(model.menu?.items[1].title == "Show in Multiview")
     }
 
     // MARK: Inside Multiview

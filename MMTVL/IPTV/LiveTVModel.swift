@@ -238,9 +238,9 @@ final class LiveTVModel: LiveTVHosting {
         loadProgrammes()
     }
 
-    /// The view calls this when `library.channels` changes.
+    /// The view calls this when `library.lineup` changes; the model calls it after favorites/hiding changes too.
     func channelsChanged() {
-        guide?.setChannels(allChannels: library.channels)
+        guide?.setLineup(library.lineup)
         if mode == .guide { loadProgrammes() }
     }
 
@@ -348,14 +348,30 @@ final class LiveTVModel: LiveTVHosting {
 
     // MARK: - Menus
 
-    /// M6 L8: the guide's channel menu.
-    private func channelMenu(for id: Channel.ID) -> LiveMenu? {
+    /// M6 L8, M6b L8: the guide's channel menu. Focus on `itemID`, else on the item at `index` (clamped).
+    private func channelMenu(for id: Channel.ID, focusing itemID: String? = nil, at index: Int = 0) -> LiveMenu? {
         guard let channel = library.channels.first(where: { $0.id == id }) else { return nil }
         let isShown = library.state.multiview?.slots.contains(id) == true
-        return LiveMenu(title: channel.name, items: [
+        let isFavorite = library.isFavorite(id)
+        var items: [LiveMenu.Item] = [
             .init(id: "watch", title: "Watch", action: .watch(id)),
             .init(id: "addToMultiview", title: isShown ? "Show in Multiview" : "Add to Multiview", action: .addToMultiview(id)),
-        ])
+            .init(id: "favorite", title: isFavorite ? "Remove from Favorites" : "Add to Favorites", action: .toggleFavorite(id)),
+        ]
+        if guide?.selectedGroup == ChannelLineup.favoritesGroup,
+           let position = library.lineup.favorites.firstIndex(where: { $0.id == id }) {
+            if position > 0 {
+                items.append(.init(id: "moveUp", title: "Move Up", action: .moveFavorite(id, by: -1)))
+            }
+            if position < library.lineup.favorites.count - 1 {
+                items.append(.init(id: "moveDown", title: "Move Down", action: .moveFavorite(id, by: 1)))
+            }
+        }
+        let guideLabel = library.epgMatches[id].flatMap(library.guideLabel(for:)) ?? "None"
+        items.append(.init(id: "matchGuide", title: "Match Guide", value: guideLabel, action: .openMatchGuide(id)))
+        items.append(.init(id: "hide", title: "Hide Channel", action: .hideChannel(id)))
+        let focused = itemID.flatMap { itemID in items.firstIndex { $0.id == itemID } } ?? index
+        return LiveMenu(title: channel.name, items: items, focusedIndex: focused)
     }
 
     private func perform(_ action: LiveMenuAction) {
@@ -392,7 +408,58 @@ final class LiveTVModel: LiveTVHosting {
         case .removeWindow:
             guard let slot = multiview?.focusedSlot else { return }
             removeWindow(slot)
+        case .toggleFavorite(let id):
+            library.setFavorite(id, !library.isFavorite(id))
+            channelsChanged()
+        case .moveFavorite(let id, let step):
+            // The menu stays open, focused on the same item or, if it went, the one now at its place (M6b L8).
+            let itemID = step < 0 ? "moveUp" : "moveDown"
+            let index = channelMenu(for: id)?.items.firstIndex { $0.id == itemID } ?? 0
+            library.moveFavorite(id, by: step)
+            channelsChanged()
+            menu = channelMenu(for: id, focusing: itemID, at: index)
+        case .hideChannel(let id):
+            library.setChannelHidden(id, true)
+            channelsChanged()
+        case .openMatchGuide(let id):
+            // Opens once its options load (M6b L9); nothing shows meanwhile.
+            guard let channel = channel(id) else { return }
+            let library = library
+            pendingTask = Task {
+                let options = await library.guideMatchOptions(for: channel)
+                guard !Task.isCancelled, self.mode == .guide, self.menu == nil else { return }
+                self.menu = self.matchMenu(channel, options)
+            }
+        case .matchGuide(let id, let choice):
+            // The guide reloads through guideRevision when the rematch lands.
+            guard let channel = channel(id) else { return }
+            let library = library
+            pendingTask = Task { await library.setGuideMatch(choice, for: channel) }
         }
+    }
+
+    /// M6b L9: Automatic, No Guide, then the current match and the suggestions. Focus on the selected row.
+    private func matchMenu(_ channel: Channel, _ options: GuideMatchOptions) -> LiveMenu {
+        let id = channel.id
+        var items: [LiveMenu.Item] = [
+            .init(id: "match.automatic", title: "Automatic", value: options.choice == .automatic ? "Selected" : nil,
+                  action: .matchGuide(id, .automatic)),
+            .init(id: "match.none", title: "No Guide", value: options.choice == .none ? "Selected" : nil,
+                  action: .matchGuide(id, .none)),
+        ]
+        var focused = options.choice == .none ? 1 : 0
+        for candidate in options.candidates {
+            var value = candidate.sourceLabel
+            if options.choice == .epg(candidate.ref) {
+                value += " · Selected"
+                focused = items.count
+            } else if options.choice == .automatic, candidate.ref == options.current {
+                value += " · Automatic"
+            }
+            items.append(.init(id: "match.\(candidate.ref.sourceID).\(candidate.ref.epgID)", title: candidate.name,
+                               value: value, action: .matchGuide(id, .epg(candidate.ref))))
+        }
+        return LiveMenu(title: "Guide for \(channel.name)", items: items, focusedIndex: focused, isWide: true)
     }
 
     /// M6 L10, for the highlighted window.
@@ -582,7 +649,7 @@ final class LiveTVModel: LiveTVHosting {
     /// L11: the guide picks the channel for `slot`; the window with sound is its preview.
     private func openPicker(slot: Int) {
         guard let multiview else { return }
-        guide = GuideModel(allChannels: library.channels, group: library.state.lastGroup,
+        guide = GuideModel(lineup: library.lineup, group: library.state.lastGroup,
                            focusedChannelID: multiview.slots[slot] ?? multiview.audioChannelID, now: now())
         guidePurpose = .pick(slot: slot)
         mode = .guide
@@ -651,7 +718,7 @@ final class LiveTVModel: LiveTVHosting {
     }
 
     private func openGuide() {
-        guide = GuideModel(allChannels: library.channels, group: library.state.lastGroup,
+        guide = GuideModel(lineup: library.lineup, group: library.state.lastGroup,
                            focusedChannelID: currentChannel?.id, now: now())
         mode = .guide
         hideOverlays()
@@ -673,16 +740,24 @@ final class LiveTVModel: LiveTVHosting {
         }
     }
 
-    /// Up/Down: previous/next channel in the remembered group if it holds the current channel, else its own group. Wraps.
+    /// Up/Down over the lineup (M6b L11): the remembered group if it holds the current channel, else its own group,
+    /// else every visible channel. Wraps. A channel not in the list (hidden while playing): Down plays the first, Up the last.
     private func zap(_ step: Int) {
         guard let current = currentChannel else { return }
-        let all = library.channels
-        var list = ChannelList.channels(in: current.group, of: all)
+        let lineup = library.lineup
+        var list: [Channel] = []
         if let group = library.state.lastGroup {
-            let remembered = ChannelList.channels(in: group, of: all)
+            let remembered = lineup.channels(in: group)
             if remembered.contains(where: { $0.id == current.id }) { list = remembered }
         }
-        guard list.count > 1, let index = list.firstIndex(where: { $0.id == current.id }) else { return }
+        if list.isEmpty { list = lineup.channels(in: current.group) }
+        if list.isEmpty { list = lineup.visibleChannels }
+        guard !list.isEmpty else { return }
+        guard let index = list.firstIndex(where: { $0.id == current.id }) else {
+            play(step > 0 ? list[0] : list[list.count - 1])
+            return
+        }
+        guard list.count > 1 else { return }
         play(list[(index + step + list.count) % list.count])
     }
 

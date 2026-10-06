@@ -348,7 +348,12 @@ struct SettingsYouTubeTests {
 struct SettingsLiveTVTests {
     private static let status = IPTVSettingsStatus(
         hasPlaylist: true, playlistHost: "iptv.example", channelCount: 118, playlistLine: "Updated 10:42 PM",
-        guideKind: .custom("guide-source.online"), guideLine: "1,234 programmes · Updated 10:43 PM")
+        guideSources: [
+            .init(id: "g1", label: "guide-source.online · guide-source_US2.xml.gz", line: "1,234 programmes · 50 channels · Updated 10:43 PM",
+                  isFromPlaylist: false),
+            .init(id: "g2", label: "guide-source.online · guide-source_FANDUEL1.xml.gz", line: "Loading…", isFromPlaylist: false),
+        ],
+        customGuideCount: 2, matchedChannelCount: 3)
 
     @Test func rootRowShowsSetupState() {
         let (model, recorder) = makeSettingsModel()
@@ -365,7 +370,7 @@ struct SettingsLiveTVTests {
         model.perform(.push(.liveTV))
         #expect(model.focusableRowIDs == ["iptv.playlist.paste"])
         #expect(model.row(id: "iptv.playlist.paste")?.title == "Paste Playlist URL")
-        #expect(model.row(id: "iptv.guide.paste") == nil)
+        #expect(model.row(id: "iptv.guide.add") == nil)
         model.press(.select)
         #expect(recorder.pastes == [.playlist])
     }
@@ -391,47 +396,162 @@ struct SettingsLiveTVTests {
         #expect(model.row(id: "iptv.playlist.paste")?.detail == defaultDetail)
     }
 
-    @Test func pageWithPlaylistAndCustomGuide() {
+    @Test func pageWithPlaylistAndTwoGuides() {
         let (model, recorder) = makeSettingsModel()
         recorder.iptv = Self.status
+        recorder.iptv.channelCount = 5
         model.refreshStatus()
         model.perform(.push(.liveTV))
-        #expect(model.focusableRowIDs == ["iptv.playlist.paste", "iptv.guide.paste", "iptv.guide.usePlaylist",
-                                          "iptv.refresh", "iptv.remove"])
+        #expect(model.focusableRowIDs == ["iptv.playlist.paste", "iptv.guide.g1", "iptv.guide.g2", "iptv.guide.add",
+                                          "iptv.groups", "iptv.hiddenChannels", "iptv.refresh", "iptv.remove"])
         let info = model.row(id: "iptv.playlist.info")
         #expect(info?.title == "iptv.example")
-        #expect(info?.value == "118 Channels")
+        #expect(info?.value == "5 Channels")
         #expect(info?.detail == "Updated 10:42 PM")
         #expect(model.row(id: "iptv.playlist.paste")?.title == "Replace with Clipboard URL")
-        #expect(model.row(id: "iptv.guide.info")?.title == "Custom: guide-source.online")
-        #expect(model.row(id: "iptv.guide.info")?.detail == "1,234 programmes · Updated 10:43 PM")
+        let first = model.row(id: "iptv.guide.g1")
+        #expect(first?.title == "guide-source.online · guide-source_US2.xml.gz")
+        #expect(first?.value == "1")
+        #expect(first?.detail == "1,234 programmes · 50 channels · Updated 10:43 PM")
+        #expect(first?.action == .push(.guideSource(id: "g1")))
+        #expect(model.row(id: "iptv.guide.g2")?.value == "2")
+        #expect(model.row(id: "iptv.guide.g2")?.detail == "Loading…")
+        let footer = model.sections.first { $0.id == "guides" }?.footer
+        #expect(footer?.hasPrefix("Guide data for 3 of 5 channels.") == true)
 
-        model.press(.down, .select)
+        model.press(.down, .down, .down, .select)
         #expect(recorder.pastes == [.guide])
-        model.press(.down, .select)
-        #expect(recorder.playlistGuideUses == 1)
-        model.press(.down, .select)
+        model.press(.down, .down, .down, .select)
         #expect(recorder.iptvRefreshes == 1)
     }
 
-    @Test func playlistGuideHasNoUsePlaylistRow() {
+    @Test func playlistGuideIsAnInfoRow() {
         let (model, recorder) = makeSettingsModel()
         recorder.iptv = Self.status
-        recorder.iptv.guideKind = .playlist("guide.example")
+        recorder.iptv.guideSources = [.init(id: "p", label: "guide.example", line: "Not loaded yet", isFromPlaylist: true)]
+        recorder.iptv.customGuideCount = 0
         model.refreshStatus()
         model.perform(.push(.liveTV))
-        #expect(model.focusableRowIDs == ["iptv.playlist.paste", "iptv.guide.paste", "iptv.refresh", "iptv.remove"])
-        #expect(model.row(id: "iptv.guide.info")?.title == "From the playlist: guide.example")
+        #expect(model.focusableRowIDs == ["iptv.playlist.paste", "iptv.guide.add", "iptv.groups", "iptv.hiddenChannels",
+                                          "iptv.refresh", "iptv.remove"])
+        #expect(model.row(id: "iptv.guide.p")?.value == "From Playlist")
+        #expect(model.row(id: "iptv.guide.p")?.action == nil)
     }
 
     @Test func noGuideExplainsHowToAddOne() {
         let (model, recorder) = makeSettingsModel()
         recorder.iptv = Self.status
-        recorder.iptv.guideKind = .none
+        recorder.iptv.guideSources = []
+        recorder.iptv.customGuideCount = 0
         model.refreshStatus()
         model.perform(.push(.liveTV))
-        #expect(model.row(id: "iptv.guide.info")?.title == "No guide")
-        #expect(model.row(id: "iptv.guide.info")?.detail == "Paste an XMLTV guide URL to see what's on")
+        #expect(model.row(id: "iptv.guide.none")?.title == "No guide")
+        #expect(model.row(id: "iptv.guide.none")?.detail == "Copy an XMLTV guide address, then add it below")
+    }
+
+    @Test func noAddRowAtTheLimit() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = Self.status
+        recorder.iptv.customGuideCount = IPTVLibrary.maxGuideSources
+        model.refreshStatus()
+        model.perform(.push(.liveTV))
+        #expect(model.row(id: "iptv.guide.add") == nil)
+    }
+
+    @Test func guidePasteErrorShowsOnTheGuideRowOnly() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = Self.status
+        model.refreshStatus()
+        model.perform(.push(.liveTV))
+        let playlistDetail = model.row(id: "iptv.playlist.paste")?.detail
+        recorder.pasteResult = "That guide is already added"
+        model.perform(.pasteIPTVURL(.guide))
+        #expect(model.row(id: "iptv.guide.add")?.detail == "That guide is already added")
+        #expect(model.row(id: "iptv.playlist.paste")?.detail == playlistDetail)
+
+        model.perform(.pasteIPTVURL(.playlist))
+        #expect(model.row(id: "iptv.playlist.paste")?.detail == "That guide is already added")
+        #expect(model.row(id: "iptv.guide.add")?.detail == "Copy an XMLTV address on this Mac or your iPhone first")
+    }
+
+    @Test func channelsSection() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = Self.status
+        recorder.iptv.groups = [.init(name: "Live Channels", channelCount: 97, isHidden: false),
+                                .init(name: "NHL Games", channelCount: 8, isHidden: false)]
+        model.refreshStatus()
+        model.perform(.push(.liveTV))
+        #expect(model.row(id: "iptv.groups")?.value == "All Shown")
+        #expect(model.row(id: "iptv.hiddenChannels")?.value == "None")
+
+        recorder.iptv.groups[1].isHidden = true
+        recorder.iptv.hiddenChannels = [.init(id: "id:a", number: 3, name: "A", group: "Live Channels"),
+                                        .init(id: "id:b", number: 9, name: "B", group: "Live Channels")]
+        model.refreshStatus()
+        #expect(model.row(id: "iptv.groups")?.value == "1 Hidden")
+        #expect(model.row(id: "iptv.hiddenChannels")?.value == "2")
+    }
+
+    @Test func groupsPage() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = Self.status
+        recorder.iptv.groups = [.init(name: "Live Channels", channelCount: 97, isHidden: false),
+                                .init(name: "NHL Games", channelCount: 8, isHidden: true)]
+        model.refreshStatus()
+        model.perform(.push(.liveTV))
+        model.perform(.push(.iptvGroups))
+        #expect(model.pageTitle == "Groups")
+        #expect(model.focusableRowIDs == ["group.Live Channels", "group.NHL Games"])
+        let nhl = model.row(id: "group.NHL Games")
+        #expect(nhl?.value == "Hidden")
+        #expect(nhl?.detail == "8 channels")
+        #expect(nhl?.isDimmed == true)
+        model.press(.select)
+        model.press(.down, .select)
+        #expect(recorder.groupHides == [GroupHide(name: "Live Channels", hidden: true), GroupHide(name: "NHL Games", hidden: false)])
+    }
+
+    @Test func hiddenChannelsPage() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = Self.status
+        recorder.iptv.hiddenChannels = [.init(id: "id:a", number: 3, name: "A", group: "Live Channels")]
+        model.refreshStatus()
+        model.perform(.push(.liveTV))
+        model.perform(.push(.iptvHiddenChannels))
+        #expect(model.row(id: "hidden.id:a")?.title == "3  A")
+        #expect(model.row(id: "hidden.id:a")?.value == "Show")
+        #expect(model.row(id: "hidden.id:a")?.detail == "Live Channels")
+        recorder.iptv.hiddenChannels = []
+        model.press(.select)
+        #expect(recorder.unhiddenChannels == ["id:a"])
+        // Empty: only the info row.
+        #expect(model.focusableRowIDs.isEmpty)
+        #expect(model.sections.flatMap(\.rows).map(\.id) == ["hidden.none"])
+    }
+
+    @Test func guidePage() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = Self.status
+        model.refreshStatus()
+        model.perform(.push(.liveTV))
+        model.perform(.push(.guideSource(id: "g1")))
+        #expect(model.pageTitle == "guide-source.online · guide-source_US2.xml.gz")
+        #expect(model.row(id: "guideSource.status")?.detail == "1,234 programmes · 50 channels · Updated 10:43 PM")
+        #expect(model.focusableRowIDs == ["guideSource.moveDown", "guideSource.remove"])
+        model.press(.select)
+        #expect(recorder.guideMoves == [GuideMove(id: "g1", step: 1)])
+        #expect(model.page == .guideSource(id: "g1"))
+
+        model.perform(.push(.guideSource(id: "g2")))
+        #expect(model.focusableRowIDs == ["guideSource.moveUp", "guideSource.remove"])
+        model.press(.down, .select)
+        #expect(recorder.guideRemovals == ["g2"])
+        #expect(model.page == .guideSource(id: "g1"))
+
+        // An id no longer listed shows nothing.
+        model.perform(.push(.guideSource(id: "gone")))
+        #expect(model.sections.isEmpty)
+        #expect(model.pageTitle == "Guide")
     }
 
     @Test func removeConfirmFocusesCancelFirst() {

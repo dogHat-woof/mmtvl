@@ -21,7 +21,10 @@ final class SettingsRecorder {
     var pastes: [IPTVURLKind] = []
     var iptvRefreshes = 0
     var iptvRemovals = 0
-    var playlistGuideUses = 0
+    var guideMoves: [GuideMove] = []
+    var guideRemovals: [String] = []
+    var groupHides: [GroupHide] = []
+    var unhiddenChannels: [String] = []
     var phoneRemote = PhoneRemoteSettingsStatus()
     var pairingCalls: [Bool] = []
     var forgets = 0
@@ -30,6 +33,16 @@ final class SettingsRecorder {
         self.trusted = trusted
         self.loginStatus = loginStatus
     }
+}
+
+struct GuideMove: Equatable {
+    var id: String
+    var step: Int
+}
+
+struct GroupHide: Equatable {
+    var name: String
+    var hidden: Bool
 }
 
 func makeSettingsModel(
@@ -65,7 +78,10 @@ func makeSettingsModel(
             recorder.pastes.append(kind)
             return recorder.pasteResult
         },
-        useIPTVPlaylistGuide: { recorder.playlistGuideUses += 1 },
+        moveGuideSource: { recorder.guideMoves.append(GuideMove(id: $0, step: $1)) },
+        removeGuideSource: { recorder.guideRemovals.append($0) },
+        setIPTVGroupHidden: { recorder.groupHides.append(GroupHide(name: $0, hidden: $1)) },
+        unhideIPTVChannel: { recorder.unhiddenChannels.append($0) },
         refreshIPTV: { recorder.iptvRefreshes += 1 },
         removeIPTVSource: { recorder.iptvRemovals += 1 },
         phoneRemoteStatus: { recorder.phoneRemote },

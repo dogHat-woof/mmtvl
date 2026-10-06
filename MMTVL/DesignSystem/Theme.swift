@@ -124,6 +124,8 @@ enum Theme {
     static let guideCellCornerRadius: CGFloat = 10
     static let guideNowLine = Color(red: 1, green: 0.27, blue: 0.23)
     static let guideLogoSize: CGFloat = 48
+    /// The star after a favorite's name in the channel cell (M6b).
+    static let guideFavoriteSymbolSize: CGFloat = 20
 
     // MARK: Multiview (M6)
 
@@ -138,6 +140,8 @@ enum Theme {
     // MARK: Live TV menus (M6)
 
     static let liveMenuWidth: CGFloat = 720
+    /// Match Guide (M6b L10).
+    static let liveMenuWideWidth: CGFloat = 1040
     static let liveMenuTitleFont = Font.system(size: 34, weight: .semibold)
     static let liveMenuRowHeight: CGFloat = 72
 
