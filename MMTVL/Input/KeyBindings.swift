@@ -40,7 +40,29 @@ nonisolated struct KeyBindings: Equatable, Sendable {
         controller(.rightShoulder, .fastForward),
         controller(.home, .home, isGlobal: true),
         controller(.menu, .home, isGlobal: true),
+        // M7 L7 (D27): revision 2.
+        key(kVK_PageUp, .channelUp, "Page Up"),
+        key(kVK_PageDown, .channelDown, "Page Down"),
+        key(kVK_Tab, .menu, "Tab"),
+        key(kVK_ContextualMenu, .menu, "Menu key"),
+        controller(.rightTrigger, .channelUp),
+        controller(.leftTrigger, .channelDown),
+        controller(.y, .menu),
     ]
+
+    /// M7 L7: `settings.json` `keyBindingsRevision` below this gets the newer defaults once.
+    static let currentRevision = 2
+
+    /// Appends each default binding of `commands` whose trigger matches no existing binding, in the defaults' order.
+    func addingDefaults(for commands: Set<RemoteCommand>) -> KeyBindings {
+        var result = bindings
+        for binding in Self.defaultBindings where commands.contains(binding.command) {
+            if !result.contains(where: { $0.trigger.matches(binding.trigger) }) {
+                result.append(binding)
+            }
+        }
+        return KeyBindings(result)
+    }
 
     /// Exact modifier match: `Set(binding.modifiers) == modifiers`. First match wins.
     /// No default binding has ⌘, so ⌘-combos never match and always pass through.

@@ -83,6 +83,8 @@ final class ControllerInput {
             bind(gamepad.leftShoulder, to: .leftShoulder)
             bind(gamepad.rightShoulder, to: .rightShoulder)
             bind(gamepad.buttonMenu, to: .menu)
+            bind(gamepad.leftTrigger, to: .leftTrigger)
+            bind(gamepad.rightTrigger, to: .rightTrigger)
             if let buttonOptions = gamepad.buttonOptions {
                 bind(buttonOptions, to: .options)
             }
@@ -113,7 +115,7 @@ final class ControllerInput {
                 gamepad.dpad.up, gamepad.dpad.down, gamepad.dpad.left, gamepad.dpad.right,
                 gamepad.buttonA, gamepad.buttonB, gamepad.buttonX, gamepad.buttonY,
                 gamepad.leftShoulder, gamepad.rightShoulder, gamepad.buttonMenu,
-                gamepad.buttonOptions, gamepad.buttonHome,
+                gamepad.buttonOptions, gamepad.buttonHome, gamepad.leftTrigger, gamepad.rightTrigger,
             ]
             buttons.forEach { $0?.pressedChangedHandler = nil }
             gamepad.leftThumbstick.valueChangedHandler = nil
@@ -138,6 +140,8 @@ final class ControllerInput {
             return
         }
         stopRepeat()
+        // M7 L8: learning a button.
+        if inputRouter.capture(.controller(button: button)) { return }
         guard let binding = inputRouter.bindings.binding(controller: button) else { return }
         inputRouter.dispatch(binding.command, isGlobal: binding.isGlobal)
         if Self.directions.contains(binding.command) {

@@ -42,7 +42,7 @@ struct MultiviewOverlayView: View {
                         .font(.system(size: Theme.multiviewEmptySymbolSize))
                         .foregroundStyle(Theme.primaryText)
                         .padding(28)
-                        .background(.black.opacity(0.6), in: Circle())
+                        .glassPanel(in: Circle())
                 }
                 if slot == multiview.audioSlot, multiview.channelIDs.count > 1 {
                     soundBadge
@@ -75,7 +75,7 @@ struct MultiviewOverlayView: View {
                     .foregroundStyle(Theme.primaryText)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .background(.black.opacity(0.6), in: Capsule())
+                    .glassPanel(in: Capsule())
             }
             Spacer(minLength: 0)
         }
@@ -91,7 +91,7 @@ struct MultiviewOverlayView: View {
                     .foregroundStyle(Theme.primaryText)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .background(.black.opacity(0.6), in: Capsule())
+                    .glassPanel(in: Capsule())
                 Spacer(minLength: 0)
             }
             Spacer(minLength: 0)
@@ -135,7 +135,7 @@ struct MultiviewOverlayView: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.black.opacity(0.7))
+            .glassPanel(in: Rectangle())
         }
     }
 }

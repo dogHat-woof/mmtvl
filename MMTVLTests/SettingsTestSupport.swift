@@ -28,6 +28,26 @@ final class SettingsRecorder {
     var phoneRemote = PhoneRemoteSettingsStatus()
     var pairingCalls: [Bool] = []
     var forgets = 0
+    var appliedBindings: [KeyBindings] = []
+    /// The capture handler while Settings learns a button (M7 L8).
+    var learningHandler: ((InputBinding.Trigger) -> Void)?
+    var learningCalls: [Bool] = []
+    /// Tile id → custom picture name (M7 L3).
+    var tileArtNames: [String: String] = [:]
+    /// M7 Settings → Plex.
+    var plex = PlexSettingsStatus()
+    var plexLinkingCalls: [Bool] = []
+    var chosenPlexServers: [String] = []
+    var plexSignOuts = 0
+    var plexRefreshes = 0
+    /// M7 L23: web app identity per tile id, and what the clipboard holds.
+    var webApps: [String: WebAppInfo] = [:]
+    var clipboard: String?
+    /// M7 L25.
+    var pictures: [PictureFile] = []
+    var pictureSets: [String] = []
+    var pictureSetResult: String?
+    var pictureRemovals: [String] = []
 
     init(trusted: Bool, loginStatus: LoginItemStatus) {
         self.trusted = trusted
@@ -51,7 +71,8 @@ func makeSettingsModel(
     loginStatus: LoginItemStatus = .notRegistered,
     settings: AppSettings = AppSettings(),
     items: [LaunchItem] = LaunchItem.defaults,
-    hasPIN: Bool = false
+    hasPIN: Bool = false,
+    bindings: KeyBindings = .defaults
 ) -> (SettingsModel, SettingsRecorder) {
     let recorder = SettingsRecorder(trusted: trusted, loginStatus: loginStatus)
     recorder.hasPIN = hasPIN
@@ -86,9 +107,32 @@ func makeSettingsModel(
         removeIPTVSource: { recorder.iptvRemovals += 1 },
         phoneRemoteStatus: { recorder.phoneRemote },
         setPhonePairing: { recorder.pairingCalls.append($0) },
-        forgetAllPhones: { recorder.forgets += 1 }
+        forgetAllPhones: { recorder.forgets += 1 },
+        applyBindings: { recorder.appliedBindings.append($0) },
+        setButtonLearning: { handler in
+            recorder.learningHandler = handler
+            recorder.learningCalls.append(handler != nil)
+        },
+        tileArtFileName: { recorder.tileArtNames[$0] },
+        plexStatus: { recorder.plex },
+        setPlexLinking: { recorder.plexLinkingCalls.append($0) },
+        choosePlexServer: { recorder.chosenPlexServers.append($0) },
+        signOutOfPlex: { recorder.plexSignOuts += 1 },
+        refreshPlex: { recorder.plexRefreshes += 1 },
+        webAppInfo: { recorder.webApps[$0.id] },
+        pasteURL: { ClipboardURL.parse(recorder.clipboard) },
+        findPictures: { recorder.pictures },
+        setTilePicture: { id, url in
+            recorder.pictureSets.append("\(id) ← \(url.lastPathComponent)")
+            if recorder.pictureSetResult == nil { recorder.tileArtNames[id] = "\(id).\(url.pathExtension.lowercased())" }
+            return recorder.pictureSetResult
+        },
+        removeTilePicture: { id in
+            recorder.pictureRemovals.append(id)
+            recorder.tileArtNames[id] = nil
+        }
     )
-    return (SettingsModel(settings: settings, items: items, environment: environment), recorder)
+    return (SettingsModel(settings: settings, items: items, environment: environment, bindings: bindings), recorder)
 }
 
 extension SettingsModel {
@@ -96,4 +140,9 @@ extension SettingsModel {
     func press(_ commands: RemoteCommand...) {
         for command in commands { _ = handle(command) }
     }
+}
+
+/// A tile art store on an empty temporary folder, so tests never read the real one (M7 L3).
+func makeTestTileArt() -> TileArtStore {
+    TileArtStore(directory: FileManager.default.temporaryDirectory.appending(path: "mmtvl-tile-art-\(UUID().uuidString)"))
 }

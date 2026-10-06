@@ -15,7 +15,7 @@ struct SettingsModelTests {
         let (model, _) = makeSettingsModel()
         model.press(.up)
         #expect(model.focusedRowID == "globalInput")
-        model.press(.down, .down, .down)
+        model.press(.down, .down, .down, .down, .down)
         #expect(model.focusedRowID == "phoneRemote")
         model.press(.down)
         #expect(model.focusedRowID == "accessibility")
@@ -33,7 +33,7 @@ struct SettingsModelTests {
     @Test func accessibilityRowRequestsAccess() {
         let (model, recorder) = makeSettingsModel(trusted: false)
         #expect(model.row(id: "accessibility")?.value == "Not Allowed")
-        model.press(.down, .down, .down, .down, .select)
+        model.press(.down, .down, .down, .down, .down, .down, .select)
         #expect(recorder.accessibilityRequests == 1)
     }
 
@@ -191,7 +191,8 @@ struct SettingsHomeScreenTests {
     @Test func settingsTileCanOnlyMove() {
         let (model, recorder) = modelOnHomeScreen()
         model.perform(.push(.tile(id: "settings")))
-        #expect(model.focusableRowIDs == ["tile.move"])
+        // Tile Art (M7 L25) and Move; never hide or remove.
+        #expect(model.focusableRowIDs == ["tile.art", "tile.move"])
         model.perform(.toggleTileVisible(id: "settings"))
         model.perform(.removeTile(id: "settings"))
         #expect(recorder.appliedItems.isEmpty)
@@ -570,5 +571,97 @@ struct SettingsLiveTVTests {
         model.press(.down, .select)
         #expect(recorder.iptvRemovals == 1)
         #expect(model.page == .liveTV)
+    }
+    // MARK: Channel Up/Down and Menu (M7 L5, L22)
+
+    @Test func channelUpDownPageByEightRows() {
+        let (model, _) = makeSettingsModel()
+        #expect(model.handle(.channelDown))
+        let ids = model.focusableRowIDs
+        #expect(model.focusedRowID == ids[8])
+        #expect(model.handle(.channelUp))
+        #expect(model.focusedRowID == ids[0])
+        model.press(.channelDown, .channelDown, .channelDown, .channelDown, .channelDown)
+        #expect(model.focusedRowID == ids.last)
+    }
+
+    @Test func menuIsNotHandled() {
+        let (model, _) = makeSettingsModel()
+        #expect(!model.handle(.menu))
+    }
+
+    @Test func channelUpRowTogglesTheDirection() {
+        let (model, recorder) = makeSettingsModel()
+        #expect(model.row(id: "channelUp")?.value == "Up the List")
+        #expect(model.row(id: "channelUp")?.detail == "Changes channel in Live TV")
+        model.activate(rowID: "channelUp")
+        #expect(recorder.appliedSettings.last?.channelUpMovesUpList == false)
+        #expect(model.row(id: "channelUp")?.value == "Higher Number")
+    }
+}
+
+/// A web app tile's start page (M7 L23).
+struct SettingsWebAppStartPageTests {
+    static let meet = LaunchItem(id: "app.meet", title: "Google Meet",
+                                 kind: .application(bundleID: "com.brave.Browser.app.kjgfgldnnfoeklkmfkjfagphfepbbdan"))
+    static let info = WebAppInfo(appID: "kjg", name: "Google Meet", startURL: URL(string: "https://meet.google.com/landing?lfhs=2"),
+                                 browserBundleID: "com.brave.Browser")
+
+    private func onMeetPage() -> (SettingsModel, SettingsRecorder) {
+        let (model, recorder) = makeSettingsModel(items: LaunchItem.defaults + [Self.meet])
+        recorder.webApps["app.meet"] = Self.info
+        model.perform(.push(.homeScreen))
+        model.perform(.push(.tile(id: "app.meet")))
+        return (model, recorder)
+    }
+
+    @Test func onlyWebAppsHaveTheRows() {
+        let (model, _) = onMeetPage()
+        let ids = model.focusableRowIDs
+        #expect(ids.firstIndex(of: "tile.startURL") == ids.firstIndex(of: "tile.fullScreen")! + 1)
+        #expect(model.row(id: "tile.startURL")?.value == "App's Own")
+        #expect(model.row(id: "tile.startURL")?.detail == "Copy a page address on this Mac or your iPhone, then select")
+        #expect(model.row(id: "tile.startURL.clear") == nil)
+
+        let (plain, _) = makeSettingsModel()
+        plain.perform(.push(.homeScreen))
+        plain.perform(.push(.tile(id: "plex")))
+        #expect(plain.row(id: "tile.startURL") == nil)
+    }
+
+    @Test func pastingAPageOfTheAppsSite() {
+        let (model, recorder) = onMeetPage()
+        recorder.clipboard = "https://meet.google.com/home?calling=1\n"
+        model.activate(rowID: "tile.startURL")
+        let saved = recorder.appliedItems.last?.first { $0.id == "app.meet" }
+        #expect(saved?.startURL?.absoluteString == "https://meet.google.com/home?calling=1")
+        #expect(model.row(id: "tile.startURL")?.value == "meet.google.com/home?calling=1")
+        #expect(model.row(id: "tile.startURL.clear") != nil)
+
+        model.activate(rowID: "tile.startURL.clear")
+        #expect(recorder.appliedItems.last?.first { $0.id == "app.meet" }?.startURL == nil)
+        #expect(model.row(id: "tile.startURL")?.value == "App's Own")
+        #expect(model.focusedRowID == "tile.startURL")
+    }
+
+    @Test func aPageOnAnotherSiteIsRefused() {
+        let (model, recorder) = onMeetPage()
+        recorder.clipboard = "https://example.com/meet"
+        model.activate(rowID: "tile.startURL")
+        #expect(recorder.appliedItems.isEmpty)
+        #expect(model.row(id: "tile.startURL")?.detail == "Use a page on meet.google.com")
+        recorder.clipboard = nil
+        model.activate(rowID: "tile.startURL")
+        #expect(model.row(id: "tile.startURL")?.detail == "The clipboard is empty. Copy the URL first.")
+        model.press(.back)
+        model.perform(.push(.tile(id: "app.meet")))
+        #expect(model.row(id: "tile.startURL")?.detail == "Copy a page address on this Mac or your iPhone, then select")
+    }
+
+    @Test func longAddressesAreCut() {
+        let url = URL(string: "https://meet.google.com/a/very/long/path/that/goes/on/and/on?x=1")!
+        let label = SettingsModel.startURLLabel(url)
+        #expect(label.count == 48)
+        #expect(label.hasSuffix("…"))
     }
 }

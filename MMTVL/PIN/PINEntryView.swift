@@ -130,6 +130,9 @@ struct PINEntryView: View {
                 }
             }
         }
+        // M7 L28: the keypad sits on glass.
+        .padding(24)
+        .glassPanel()
         .animation(Theme.focusAnimation, value: model.pad.row)
     }
 }

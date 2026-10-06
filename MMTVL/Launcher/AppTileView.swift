@@ -1,24 +1,22 @@
 import SwiftUI
 
-/// One home screen tile: a 5:3 rounded rect with the app icon or an SF Symbol.
+/// One home screen tile: a 5:3 rounded rect with its art (M7 L3, L4).
 struct AppTileView: View {
     let item: LaunchItem
     let title: String
-    let icon: NSImage?
+    let art: TileArt
     let isFocused: Bool
     let isInstalled: Bool
     /// Incremented to play the "can't open" shake (L6).
     let shakeTrigger: Int
+    /// M7 L2: drives the parallax nudge and press.
+    let focusMotion: FocusMotion
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: Theme.tileTitleSpacing) {
             tile
-                .scaleEffect(isFocused ? Theme.focusScale : 1)
-                .shadow(
-                    color: .black.opacity(isFocused ? Theme.focusShadowOpacity : 0),
-                    radius: Theme.focusShadowRadius,
-                    y: Theme.focusShadowYOffset
-                )
+                .parallaxFocus(isFocused: isFocused, motion: focusMotion, cornerRadius: Theme.tileCornerRadius)
+                // After the parallax, so the shake moves the whole tile.
                 .keyframeAnimator(initialValue: CGFloat.zero, trigger: shakeTrigger) { view, offset in
                     view.offset(x: offset)
                 } keyframes: { _ in
@@ -34,6 +32,7 @@ struct AppTileView: View {
                 .font(Theme.tileTitleFont)
                 .foregroundStyle(Theme.primaryText)
                 .lineLimit(1)
+                .frame(height: Theme.tileTitleHeight)
                 .opacity(isFocused ? 1 : 0)
         }
         .animation(Theme.focusAnimation, value: isFocused)
@@ -44,7 +43,7 @@ struct AppTileView: View {
         return ZStack {
             shape.fill(Theme.tileFill)
 
-            artwork
+            TileArtView(art: art)
                 .opacity(isInstalled ? 1 : Theme.unavailableOpacity)
 
             if !isInstalled {
@@ -57,26 +56,10 @@ struct AppTileView: View {
                 }
             }
 
-            if isFocused {
-                shape.strokeBorder(Theme.focusHighlight, lineWidth: Theme.focusHighlightWidth)
-            }
         }
         .frame(width: Theme.tileSize.width, height: Theme.tileSize.height)
+        // L26: the glass edge, inside the parallax so it tilts with the tile.
+        .glassRim(cornerRadius: Theme.tileCornerRadius, isFocused: isFocused)
         .contentShape(shape)
-    }
-
-    @ViewBuilder
-    private var artwork: some View {
-        if let icon {
-            Image(nsImage: icon)
-                .resizable()
-                .interpolation(.high)
-                .scaledToFit()
-                .frame(height: Theme.tileSize.height * Theme.tileIconFraction)
-        } else {
-            Image(systemName: item.iconSymbol ?? "app.dashed")
-                .font(.system(size: Theme.tileSymbolSize))
-                .foregroundStyle(Theme.primaryText)
-        }
     }
 }

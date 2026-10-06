@@ -272,6 +272,9 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = MMTVL;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
+				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "MMTVL lists pictures here so you can use one as tile art.";
+				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "MMTVL lists pictures here so you can use one as tile art.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MMTVL connects to your Plex Media Server on this network.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -302,6 +305,9 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = MMTVL;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
+				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "MMTVL lists pictures here so you can use one as tile art.";
+				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "MMTVL lists pictures here so you can use one as tile art.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MMTVL connects to your Plex Media Server on this network.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

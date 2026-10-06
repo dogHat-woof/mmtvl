@@ -79,4 +79,55 @@ struct KeyBindingsTests {
         let decoded = try JSONDecoder().decode([InputBinding].self, from: data)
         #expect(decoded == KeyBindings.defaultBindings)
     }
+
+    // MARK: M7 (D27, L7, L9)
+
+    @Test func defaultsHaveTheNewCommands() {
+        let expected: [(InputBinding.Trigger, RemoteCommand)] = [
+            (.key(keyCode: UInt16(kVK_PageUp), modifiers: []), .channelUp),
+            (.key(keyCode: UInt16(kVK_PageDown), modifiers: []), .channelDown),
+            (.key(keyCode: UInt16(kVK_Tab), modifiers: []), .menu),
+            (.key(keyCode: UInt16(kVK_ContextualMenu), modifiers: []), .menu),
+            (.controller(button: .rightTrigger), .channelUp),
+            (.controller(button: .leftTrigger), .channelDown),
+            (.controller(button: .y), .menu),
+        ]
+        for (trigger, command) in expected {
+            let binding = bindings.bindings.first { $0.trigger == trigger }
+            #expect(binding?.command == command)
+            #expect(binding?.isGlobal == false)
+        }
+    }
+
+    @Test func defaultsHaveNoDuplicateTriggers() {
+        let triggers = KeyBindings.defaultBindings.map(\.trigger)
+        for (index, trigger) in triggers.enumerated() {
+            #expect(!triggers[(index + 1)...].contains { $0.matches(trigger) })
+        }
+    }
+
+    @Test func addingDefaultsAddsOnlyUnboundTriggers() {
+        let new: Set<RemoteCommand> = [.menu, .channelUp, .channelDown]
+        let old = KeyBindings(KeyBindings.defaultBindings.filter { !new.contains($0.command) }
+            + [InputBinding(trigger: .key(keyCode: UInt16(kVK_Tab), modifiers: []), command: .select)])
+        let migrated = old.addingDefaults(for: new)
+        #expect(migrated.bindings.count == old.bindings.count + 6)
+        // Tab stays Select.
+        #expect(migrated.binding(keyCode: UInt16(kVK_Tab), modifiers: [])?.command == .select)
+        #expect(migrated.binding(keyCode: UInt16(kVK_PageUp), modifiers: [])?.command == .channelUp)
+        #expect(migrated.binding(controller: .y)?.command == .menu)
+        // Idempotent.
+        #expect(migrated.addingDefaults(for: new) == migrated)
+    }
+
+    @Test func matchesIgnoresModifierOrder() {
+        let a = InputBinding.Trigger.key(keyCode: 96, modifiers: [.shift, .option])
+        let b = InputBinding.Trigger.key(keyCode: 96, modifiers: [.option, .shift, .option])
+        #expect(a.matches(b))
+        #expect(!a.matches(.key(keyCode: 96, modifiers: [.option])))
+        #expect(!a.matches(.key(keyCode: 97, modifiers: [.shift, .option])))
+        #expect(InputBinding.Trigger.controller(button: .a).matches(.controller(button: .a)))
+        #expect(!InputBinding.Trigger.controller(button: .a).matches(.media(key: .playPause)))
+        #expect(b.normalized == .key(keyCode: 96, modifiers: [.option, .shift]))
+    }
 }

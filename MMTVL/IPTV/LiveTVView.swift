@@ -143,7 +143,7 @@ private struct PlayerOverlayView: View {
                             .foregroundStyle(Theme.primaryText)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
-                            .background(.black.opacity(0.6), in: Capsule())
+                            .glassPanel(in: Capsule())
                     }
                     Spacer()
                 }
@@ -161,6 +161,10 @@ private struct PlayerOverlayView: View {
                         TimeshiftBarView(timeshift: state.timeshift, isPaused: state.phase == .paused)
                     }
                 }
+                // M7 L28: the banner and the bar sit on glass.
+                .padding(32)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .glassPanel()
                 .padding(.horizontal, Theme.sideMargin)
                 .padding(.top, 120)
                 .padding(.bottom, 72)
@@ -193,7 +197,7 @@ private struct PlayerOverlayView: View {
                 .foregroundStyle(Theme.secondaryText)
         }
         .padding(60)
-        .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: Theme.tileCornerRadius))
+        .glassPanel()
     }
 }
 

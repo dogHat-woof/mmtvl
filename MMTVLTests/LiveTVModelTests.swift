@@ -462,4 +462,62 @@ struct LiveTVModelTests {
         _ = model.handle(.select)
         #expect(model.handle(.home) == .leave)
     }
+
+    // MARK: Menu and Channel Up/Down (M7 L5, L22)
+
+    @Test func channelUpZapsUpTheListByDefault() async throws {
+        let (model, _, fixture) = try makeModel(state: IPTVState(lastChannelID: "id:nbatv.us"))
+        defer { fixture.cleanUp() }
+        await open(model)
+        _ = model.handle(.channelUp)
+        #expect(model.currentChannel?.name == "NFL Network")
+        _ = model.handle(.channelDown)
+        _ = model.handle(.channelDown)
+        #expect(model.currentChannel?.name == "Red Zone")
+    }
+
+    @Test func channelUpCanMeanTheHigherNumber() async throws {
+        let (model, _, fixture) = try makeModel(state: IPTVState(lastChannelID: "id:nbatv.us"))
+        defer { fixture.cleanUp() }
+        model.channelUpMovesUpList = false
+        await open(model)
+        _ = model.handle(.channelUp)
+        #expect(model.currentChannel?.name == "Red Zone")
+        _ = model.handle(.channelDown)
+        _ = model.handle(.channelDown)
+        #expect(model.currentChannel?.name == "NFL Network")
+    }
+
+    @Test func menuInThePlayerOpensTheChannelMenu() async throws {
+        let (model, _, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        #expect(model.handle(.menu) == .handled)
+        #expect(model.mode == .player)
+        #expect(model.menu?.title == "NBA TV")
+        #expect(model.menu?.items.map(\.id) == ["watch", "addToMultiview", "favorite", "matchGuide", "hide"])
+        _ = model.handle(.menu)
+        #expect(model.menu == nil)
+    }
+
+    @Test func menuInTheGuideOpensTheFocusedChannelsMenu() async throws {
+        let (model, _, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        _ = model.handle(.select)
+        _ = model.handle(.up)
+        #expect(model.handle(.menu) == .handled)
+        #expect(model.menu?.title == "NFL Network")
+    }
+
+    @Test func channelUpDownPageTheGuide() async throws {
+        let (model, player, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        _ = model.handle(.select)
+        _ = model.handle(.channelDown)
+        #expect(model.guide?.focusedChannel?.name == "Knicks @ Heat")
+        _ = model.handle(.channelUp)
+        #expect(model.guide?.focusedChannel?.name == "NFL Network")
+        #expect(model.mode == .guide)
+        #expect(player.played == [IPTVFixtures.streamURL(2)])
+    }
+
 }

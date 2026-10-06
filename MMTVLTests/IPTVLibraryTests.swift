@@ -490,7 +490,36 @@ struct IPTVLibraryTests {
         defer { fixture.cleanUp() }
         fixture.library.rememberChannel("id:nbatv.us")
         fixture.library.rememberGroup("NBA Games")
-        #expect(fixture.stateFile.load() == IPTVState(lastChannelID: "id:nbatv.us", lastGroup: "NBA Games"))
+        #expect(fixture.stateFile.load() == IPTVState(lastChannelID: "id:nbatv.us", lastGroup: "NBA Games",
+                                                      recentChannelIDs: ["id:nbatv.us"]))
+    }
+
+    // MARK: Recent channels (M7 L13)
+
+    @Test func recentChannelsAreMostRecentFirstAndCapped() async throws {
+        let fixture = try makeLibrary()
+        defer { fixture.cleanUp() }
+        let library = fixture.library
+        for n in 1...12 { library.rememberChannel("id:\(n)") }
+        #expect(library.state.recentChannelIDs == (3...12).reversed().map { "id:\($0)" })
+        library.rememberChannel("id:5")
+        #expect(library.state.recentChannelIDs.first == "id:5")
+        #expect(library.state.recentChannelIDs.count == 10)
+        #expect(library.state.recentChannelIDs.filter { $0 == "id:5" }.count == 1)
+        #expect(fixture.stateFile.load().recentChannelIDs == library.state.recentChannelIDs)
+    }
+
+    @Test func rememberingTheLastChannelStillMovesItToTheFront() throws {
+        let fixture = try makeLibrary(state: IPTVState(lastChannelID: "id:a", recentChannelIDs: ["id:b", "id:a"]))
+        defer { fixture.cleanUp() }
+        fixture.library.rememberChannel("id:a")
+        #expect(fixture.library.state.recentChannelIDs == ["id:a", "id:b"])
+        #expect(fixture.stateFile.load().recentChannelIDs == ["id:a", "id:b"])
+    }
+
+    @Test func olderStateFilesHaveNoRecents() throws {
+        let state = try JSONDecoder().decode(IPTVState.self, from: Data(#"{"lastChannelID": "id:a"}"#.utf8))
+        #expect(state.recentChannelIDs.isEmpty)
     }
 
     @Test func oldGuideKeysLoad() throws {

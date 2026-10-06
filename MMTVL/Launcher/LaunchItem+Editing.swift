@@ -29,6 +29,16 @@ nonisolated extension Array where Element == LaunchItem {
         updating(id: id) { $0.requiresPIN = on ? true : nil }
     }
 
+    /// M7 L23: nil = the web app's own start page.
+    func settingStartURL(_ url: URL?, id: String) -> [LaunchItem] {
+        updating(id: id) { $0.startURL = url }
+    }
+
+    /// M7 L24: stored as nil for the default (designed).
+    func settingArtStyle(_ style: TileArtStyle, id: String) -> [LaunchItem] {
+        updating(id: id) { $0.artStyle = style == .designed ? nil : style.rawValue }
+    }
+
     func removingItem(id: String) -> [LaunchItem] {
         filter { $0.id != id }
     }

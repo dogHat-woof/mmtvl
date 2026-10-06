@@ -2,6 +2,12 @@ import Observation
 import SwiftUI
 import os
 
+/// M7 L2: bumped on every home arrow that moved focus and on Select; the focused tile reacts (parallax nudge, press).
+struct FocusMotion: Equatable {
+    var direction: RemoteCommand?
+    var generation = 0
+}
+
 /// The current launcher screen. Receives every `RemoteCommand` from `InputRouter`
 /// and dispatches it to the active screen.
 @Observable
@@ -25,13 +31,24 @@ final class AppRouter {
     /// Kept while another screen is shown, so Back restores the previous focus position.
     private(set) var focus: LauncherFocusModel
     private(set) var shakeTriggers: [LaunchItem.ID: Int] = [:]
+    /// L2. Hover moves don't bump it.
+    private(set) var focusMotion = FocusMotion()
+    /// M7 L12: nil = the tiles have focus; else the focused card of the focused tile's shelf.
+    private(set) var shelfIndex: Int?
+    /// D20: read at init, on going home and after PIN flows, not on every render.
+    private var hasPINCache = false
     /// The PIN screen's model while `screen` is `.pin`.
     private(set) var pinEntry: PINEntryModel?
 
     @ObservationIgnored let launcher: AppLauncher
+    /// M7 L3: custom tile pictures.
+    let tileArt: TileArtStore
     let settings: SettingsModel
     @ObservationIgnored let youtube: any YouTubeHosting
     @ObservationIgnored let liveTV: any LiveTVHosting
+    @ObservationIgnored let topShelf: any TopShelfProviding
+    /// M7 step 12: card images fetched with headers (Plex).
+    @ObservationIgnored let shelfImages = ShelfImageLoader()
     @ObservationIgnored private let pinStore: PINStore
     /// Kept across PIN screens, so cancelling doesn't reset the lockout (L10).
     @ObservationIgnored private var pinLockout = PINLockout()
@@ -39,20 +56,31 @@ final class AppRouter {
     @ObservationIgnored private var screenBeforePIN: Screen = .home
     /// L8: hover only moves focus after the pointer moved since the last consumed command.
     @ObservationIgnored private var pointerLocationAtLastCommand: NSPoint?
+    /// L21: scroll distance not yet turned into a row move, and when it last changed.
+    @ObservationIgnored private var scrollAccumulator: CGFloat = 0
+    @ObservationIgnored private var lastScrollAt: Date?
+    /// Injectable clock (tests).
+    @ObservationIgnored var now: () -> Date = Date.init
     @ObservationIgnored var onExitToDesktop: (() -> Void)?
     @ObservationIgnored var onRequestAccessibility: (() -> Void)?
 
     init(items: [LaunchItem], launcher: AppLauncher, settings: SettingsModel, youtube: any YouTubeHosting,
-         liveTV: any LiveTVHosting, pinStore: PINStore) {
+         liveTV: any LiveTVHosting, pinStore: PINStore, tileArt: TileArtStore,
+         topShelf: any TopShelfProviding = NoTopShelf()) {
         self.items = items
         self.launcher = launcher
         self.settings = settings
         self.youtube = youtube
         self.liveTV = liveTV
         self.pinStore = pinStore
+        self.tileArt = tileArt
+        self.topShelf = topShelf
         let visibleItems = items.visible
         self.visibleItems = visibleItems
         focus = LauncherFocusModel(itemCount: visibleItems.count, perRow: Theme.tilesPerRow)
+        hasPINCache = pinStore.load() != nil
+        // M7 L18: a web app whose window never showed shakes its tile.
+        launcher.onLaunchFailed = { [weak self] id in self?.shakeTriggers[id, default: 0] += 1 }
     }
 
     /// Replaces the tiles (Settings edits), keeping focus on the same tile where possible.
@@ -69,6 +97,73 @@ final class AppRouter {
             newFocus.focus(index: min(oldIndex, visibleItems.count - 1))
         }
         focus = newFocus
+        shelfContentChanged()
+    }
+
+    // MARK: Top shelf (M7 D28, L12)
+
+    /// The focused tile, if any.
+    var focusedItem: LaunchItem? {
+        focus.index.flatMap { visibleItems.indices.contains($0) ? visibleItems[$0] : nil }
+    }
+
+    /// The focused tile's shelf. PIN-protected tiles only get a banner.
+    var shelfContent: ShelfContent {
+        guard let item = focusedItem else { return .banner }
+        if item.isPINProtected && hasPINCache { return .banner }
+        return topShelf.content(for: item)
+    }
+
+    /// Call when the shelf's content may have changed: clamps the card focus, or returns to the tile.
+    func shelfContentChanged() {
+        guard let index = shelfIndex else { return }
+        let count = shelfContent.cards.count
+        shelfIndex = count == 0 ? nil : min(index, count - 1)
+    }
+
+    /// Mouse hover over a card (with the pointer-moved rule, M1 L8).
+    func hoverShelfCard(_ index: Int) {
+        guard screen == .home, pointerMovedSinceLastCommand, shelfContent.cards.indices.contains(index) else { return }
+        shelfIndex = index
+    }
+
+    /// Select on a card, or a click.
+    func activateShelfCard(_ index: Int) {
+        let cards = shelfContent.cards
+        guard screen == .home, cards.indices.contains(index) else { return }
+        shelfIndex = nil
+        switch cards[index].action {
+        case .playChannel(let id):
+            openLiveTV(channelID: id)
+        case .openTile(let id):
+            guard let tileIndex = visibleItems.firstIndex(where: { $0.id == id }) else { return }
+            activate(tileIndex)
+        }
+    }
+
+    private func routeShelf(_ command: RemoteCommand, index: Int) -> Bool {
+        switch command {
+        case .left, .right:
+            let count = shelfContent.cards.count
+            let new = min(max(index + (command == .left ? -1 : 1), 0), count - 1)
+            if new != index {
+                shelfIndex = new
+                bumpFocusMotion(command)
+            }
+            return true
+        case .down, .back, .home:
+            shelfIndex = nil
+            bumpFocusMotion(.down)
+            return true
+        case .select:
+            bumpFocusMotion(.select)
+            activateShelfCard(index)
+            return true
+        case .up:
+            return true
+        case .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown:
+            return false
+        }
     }
 
     /// Returns true if the command was consumed.
@@ -84,16 +179,31 @@ final class AppRouter {
     private func route(_ command: RemoteCommand) -> Bool {
         switch screen {
         case .home:
+            shelfContentChanged()
+            if let shelfIndex { return routeShelf(command, index: shelfIndex) }
             switch command {
+            case .up where focus.position.row == 0 && !shelfContent.cards.isEmpty:
+                // L12: Up from the first row enters the shelf.
+                shelfIndex = 0
+                bumpFocusMotion(.up)
+                return true
             case .up, .down, .left, .right:
-                withAnimation(Theme.focusAnimation) { _ = focus.move(command) }
+                var moved = false
+                withAnimation(Theme.focusAnimation) { moved = focus.move(command) }
+                if moved {
+                    bumpFocusMotion(command)
+                    topShelf.refresh(focusing: focusedItem)
+                }
                 return true
             case .select:
-                if let index = focus.index { activate(index) }
+                if let index = focus.index {
+                    bumpFocusMotion(.select)
+                    activate(index)
+                }
                 return true
             case .back, .home:
                 return true
-            case .playPause, .fastForward, .rewind:
+            case .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown:
                 return false
             }
 
@@ -105,7 +215,7 @@ final class AppRouter {
             case .back, .home:
                 goHome()
                 return true
-            case .up, .down, .left, .right, .playPause, .fastForward, .rewind:
+            case .up, .down, .left, .right, .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown:
                 return false
             }
 
@@ -162,6 +272,10 @@ final class AppRouter {
         }
     }
 
+    private func bumpFocusMotion(_ direction: RemoteCommand) {
+        focusMotion = FocusMotion(direction: direction, generation: focusMotion.generation + 1)
+    }
+
     /// Shows the home screen, keeping the focus position. Leaving YouTube pauses it (L3); leaving Live TV stops it (M4 L7).
     func goHome() {
         if screen == .youtube {
@@ -173,6 +287,10 @@ final class AppRouter {
         closePINEntry()
         if screen == .settings { settings.screenDidClose() }
         screen = .home
+        hasPINCache = hasPIN
+        tileArt.reloadIfChanged()
+        topShelf.refresh(focusing: focusedItem)
+        shelfContentChanged()
     }
 
     var hasPIN: Bool { pinStore.load() != nil }
@@ -193,6 +311,7 @@ final class AppRouter {
     private func finishPIN(_ result: PINEntryModel.Result) {
         guard let purpose = pinEntry?.purpose else { return }
         closePINEntry()
+        defer { hasPINCache = hasPIN }
         switch result {
         case .cancelled:
             screen = screenBeforePIN
@@ -243,8 +362,9 @@ final class AppRouter {
         screen = .youtube
     }
 
-    func openLiveTV() {
-        liveTV.open()
+    /// nil = the last channel or Multiview; else that channel full screen (a top shelf card, M7 L13).
+    func openLiveTV(channelID: Channel.ID? = nil) {
+        liveTV.open(channelID: channelID)
         screen = .liveTV
     }
 
@@ -263,7 +383,28 @@ final class AppRouter {
 
     func hover(_ index: Int) {
         guard screen == .home, pointerMovedSinceLastCommand else { return }
-        withAnimation(Theme.focusAnimation) { _ = focus.focus(index: index) }
+        shelfIndex = nil
+        var moved = false
+        withAnimation(Theme.focusAnimation) { moved = focus.focus(index: index) }
+        if moved { topShelf.refresh(focusing: focusedItem) }
+    }
+
+    /// L21: the mouse wheel moves home focus one row per `Theme.homeScrollStep` points (trackpad) or per line (wheel).
+    /// Positive deltas (content moves down) move focus up. Other screens ignore it.
+    func scrollWheel(deltaY: CGFloat, precise: Bool) {
+        guard screen == .home, deltaY != 0 else { return }
+        let time = now()
+        if let lastScrollAt, time.timeIntervalSince(lastScrollAt) > 0.3 { scrollAccumulator = 0 }
+        lastScrollAt = time
+        // A direction change starts over.
+        if scrollAccumulator != 0 && (scrollAccumulator > 0) != (deltaY > 0) { scrollAccumulator = 0 }
+        scrollAccumulator += deltaY
+        let step = precise ? Theme.homeScrollStep : 1
+        while abs(scrollAccumulator) >= step {
+            let up = scrollAccumulator > 0
+            scrollAccumulator -= up ? step : -step
+            _ = handle(up ? .up : .down)
+        }
     }
 
     func hoverSettingsRow(_ id: String) {
@@ -352,7 +493,15 @@ struct LauncherRootView: View {
                 items: router.visibleItems,
                 focus: router.focus,
                 launcher: router.launcher,
+                tileArt: router.tileArt,
                 shakeTriggers: router.shakeTriggers,
+                focusMotion: router.focusMotion,
+                shelf: router.shelfContent,
+                shelfIndex: router.shelfIndex,
+                onHoverCard: router.hoverShelfCard,
+                onActivateCard: router.activateShelfCard,
+                onRefreshShelf: { router.topShelf.refresh(focusing: router.focusedItem) },
+                shelfImages: router.shelfImages,
                 onHover: router.hover,
                 onActivate: router.activate
             )
@@ -365,6 +514,7 @@ struct LauncherRootView: View {
             SettingsView(
                 model: router.settings,
                 launcher: router.launcher,
+                tileArt: router.tileArt,
                 onHoverRow: router.hoverSettingsRow,
                 onActivateRow: router.settings.activate
             )

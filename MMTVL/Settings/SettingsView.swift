@@ -4,6 +4,8 @@ import SwiftUI
 struct SettingsView: View {
     let model: SettingsModel
     let launcher: AppLauncher
+    /// M7 L25: Tile Art previews.
+    let tileArt: TileArtStore
     let onHoverRow: (String) -> Void
     let onActivateRow: (String) -> Void
 
@@ -16,12 +18,15 @@ struct SettingsView: View {
                 .padding(.bottom, 24)
 
             HStack(alignment: .center, spacing: Theme.settingsColumnSpacing) {
-                RowImageView(image: model.pageImage, launcher: launcher, size: Theme.settingsPageImageSize)
+                RowImageView(image: model.pageImage, launcher: launcher, size: Theme.settingsPageImageSize,
+                             tileArt: tileArt, items: model.items)
                     .frame(width: Theme.settingsSideColumnWidth)
                 list
                     .frame(width: Theme.settingsListWidth)
                     // Keeps scrolled rows from drawing over the page title and hint.
                     .clipped()
+                    // M7 L28: the list sits on one glass panel.
+                    .glassPanel()
             }
             .frame(maxHeight: .infinity)
 
@@ -67,6 +72,7 @@ struct SettingsView: View {
                     row: row,
                     isFocused: row.id == model.focusedRowID,
                     launcher: launcher,
+                    tileArt: tileArt,
                     onHover: { onHoverRow(row.id) },
                     onActivate: { onActivateRow(row.id) }
                 )

@@ -600,4 +600,107 @@ struct MultiviewLiveTVTests {
         #expect(tile.played.count == 3)
         #expect(tile.played.last == IPTVFixtures.streamURL(2))
     }
+
+    // MARK: Menu and Channel Up/Down (M7 L5, L6)
+
+    @Test func channelUpDownChangeTheHighlightedWindowSkippingShownChannels() async throws {
+        let setup = try await makeSetup(playlist: Self.sixChannels)
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, Self.nba)
+        #expect(model.multiview?.focusedSlot == 1)
+        let espn = setup.id("ESPN"), redZone = setup.id("Red Zone")
+
+        // Live Channels: NFL (shown in window 0), NBA, Red Zone, ESPN. Up the list from NBA skips NFL and wraps.
+        #expect(model.handle(.channelUp) == .handled)
+        #expect(model.multiview?.slots == [Self.nfl, espn, nil, nil, nil])
+        #expect(model.multiview?.focusedSlot == 1)
+        #expect(model.multiview?.audioSlot == 1)
+        #expect(model.banner?.channel.id == espn)
+        #expect(setup.fixture.library.state.multiview?.slots == [Self.nfl, espn, nil, nil, nil])
+
+        _ = model.handle(.channelDown)
+        _ = model.handle(.channelDown)
+        #expect(model.multiview?.slots[1] == redZone)
+    }
+
+    @Test func channelUpInAWindowCanMeanTheHigherNumber() async throws {
+        let setup = try await makeSetup(playlist: Self.sixChannels)
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        model.channelUpMovesUpList = false
+        addToMultiview(model, Self.nba)
+        _ = model.handle(.channelUp)
+        #expect(model.multiview?.slots[1] == setup.id("Red Zone"))
+    }
+
+    @Test func channelUpOnAnEmptyWindowDoesNothing() async throws {
+        let setup = try await makeSetup()
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, Self.nba)
+        _ = model.handle(.right)
+        #expect(model.multiview?.focusedSlot == 2)
+        _ = model.handle(.channelUp)
+        #expect(model.multiview?.slots == [Self.nfl, Self.nba, nil, nil, nil])
+        _ = model.handle(.menu)
+        #expect(model.menu == nil)
+    }
+
+    @Test func menuOpensTheWindowMenu() async throws {
+        let setup = try await makeSetup()
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, Self.nba)
+        #expect(model.handle(.menu) == .handled)
+        #expect(model.menu?.title == "NBA TV")
+        #expect(model.menu?.items.first?.id == "fullScreen")
+    }
+
+    @Test func menuInThePickerDoesNothing() async throws {
+        let setup = try await makeSetup()
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, Self.nba)
+        _ = model.handle(.right)
+        _ = model.handle(.select)
+        #expect(model.guidePurpose == .pick(slot: 2))
+        #expect(model.handle(.menu) == .handled)
+        #expect(model.menu == nil)
+        #expect(model.mode == .guide)
+        #expect(model.multiview?.slots == [Self.nfl, Self.nba, nil, nil, nil])
+    }
+
+
+    // MARK: A top shelf card (M7 L13)
+
+    @Test func openingOnAChannelLeavesMultiview() async throws {
+        let setup = try await makeSetup()
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, Self.nba)
+        model.leave()
+        #expect(setup.fixture.library.state.multiview?.isActive == true)
+
+        let redZone = setup.id("Red Zone")
+        model.open(channelID: redZone)
+        await model.pendingTask?.value
+        #expect(model.mode == .player)
+        #expect(model.currentChannel?.id == redZone)
+        #expect(setup.fixture.library.state.multiview?.isActive == false)
+        #expect(setup.fixture.library.state.multiview?.slots.prefix(2) == [Self.nfl, Self.nba])
+        #expect(setup.fixture.library.state.lastChannelID == redZone)
+    }
+
+    @Test func openingOnAnUnknownChannelResumesAsBefore() async throws {
+        let setup = try await makeSetup()
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        model.leave()
+        model.open(channelID: "id:gone")
+        await model.pendingTask?.value
+        #expect(model.mode == .player)
+        #expect(model.currentChannel?.id == Self.nfl)
+    }
+
 }

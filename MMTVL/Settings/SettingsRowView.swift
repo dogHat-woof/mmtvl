@@ -5,6 +5,7 @@ struct SettingsRowView: View {
     let row: SettingsRow
     let isFocused: Bool
     let launcher: AppLauncher
+    var tileArt: TileArtStore? = nil
     let onHover: () -> Void
     let onActivate: () -> Void
 
@@ -17,7 +18,8 @@ struct SettingsRowView: View {
         let shape = RoundedRectangle(cornerRadius: Theme.settingsRowCornerRadius, style: .continuous)
         HStack(spacing: 24) {
             if let image = row.image {
-                RowImageView(image: image, launcher: launcher, size: Theme.settingsRowIconSize, foreground: primary)
+                RowImageView(image: image, launcher: launcher, size: Theme.settingsRowIconSize, foreground: primary,
+                             tileArt: tileArt)
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(row.title)
@@ -80,9 +82,30 @@ struct RowImageView: View {
     let launcher: AppLauncher
     let size: CGFloat
     var foreground: Color = Theme.primaryText
+    /// M7 L25: for `.tileArt` and `.picture`.
+    var tileArt: TileArtStore? = nil
+    var items: [LaunchItem] = []
 
     var body: some View {
         switch image {
+        case .picture(let url):
+            if let preview = tileArt?.preview(of: url) {
+                Image(nsImage: preview)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: Theme.settingsRowThumbnailSize.width, height: Theme.settingsRowThumbnailSize.height)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            } else {
+                symbol("photo")
+            }
+        case .tileArt(let itemID, let choice):
+            if let art = tileArtPreview(itemID: itemID, choice) {
+                let radius = Theme.tileCornerRadius * Theme.settingsArtPreviewSize.width / Theme.tileSize.width
+                TileArtView(art: art, size: Theme.settingsArtPreviewSize, cornerRadius: radius)
+                    .glassRim(cornerRadius: radius)
+            } else {
+                symbol("photo")
+            }
         case .symbol(let name):
             symbol(name)
         case .item(let item):
@@ -99,6 +122,17 @@ struct RowImageView: View {
             } else {
                 symbol("qrcode")
             }
+        }
+    }
+
+    private func tileArtPreview(itemID: String, _ choice: TileArtChoice) -> TileArt? {
+        guard let tileArt, let item = items.first(where: { $0.id == itemID }) else { return nil }
+        let icon = launcher.icon(for: item)
+        let bundleID = launcher.bundleID(for: item)
+        switch choice {
+        case .current: return tileArt.art(for: item, icon: icon, bundleID: bundleID)
+        case .style(let style): return tileArt.styledArt(for: item, icon: icon, bundleID: bundleID, style: style)
+        case .file(let url): return tileArt.preview(of: url).map(TileArt.picture)
         }
     }
 
