@@ -21,7 +21,9 @@ nonisolated enum ExternalKeyMap {
         case .playPause: .media(SyntheticInput.NXKey.play)
         case .fastForward: .media(SyntheticInput.NXKey.next)
         case .rewind: .media(SyntheticInput.NXKey.previous)
-        case .home: nil
+        case .channelUp: .key(CGKeyCode(kVK_PageUp))
+        case .channelDown: .key(CGKeyCode(kVK_PageDown))
+        case .home, .menu: nil
         }
     }
 }

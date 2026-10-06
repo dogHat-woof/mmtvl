@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 
 /// The Settings screen (D19): a navigation stack of pages built from data (L4), driven by `RemoteCommand`s.
@@ -26,19 +27,47 @@ final class SettingsModel {
     /// Which paste row `pasteMessage` belongs to.
     private(set) var pasteMessageKind: IPTVURLKind?
     private(set) var phoneRemote: PhoneRemoteSettingsStatus
+    /// M7: Settings → Plex.
+    private(set) var plex: PlexSettingsStatus
+    /// M7: `key-bindings.json`, edited on the Remote Buttons pages.
+    private(set) var bindings: KeyBindings
+    /// M7 L25: pictures for the Tile Art page; nil while looking.
+    private(set) var pictures: [PictureFile]?
+    /// M7 L25: a failed copy; the page's message until the next push/pop.
+    private(set) var tileArtMessage: String?
+    /// M7 L23: the last start page paste error; the Start Page row's detail until the next push/pop.
+    private(set) var startURLMessage: String?
+    /// M7 L8: "No button pressed" after learning timed out; the Add a Button row's detail until the next push/pop.
+    private(set) var learnMessage: String?
+    /// How long `.learnButton` waits for a press (L8).
+    @ObservationIgnored var learnTimeout: Duration = .seconds(10)
+    /// Injectable clock (the confirm page's Select delay).
+    @ObservationIgnored var now: () -> Date = Date.init
+    /// The running learn timeout; tests await it.
+    @ObservationIgnored private(set) var learnTimeoutTask: Task<Void, Never>?
+    @ObservationIgnored private var isLearning = false
+    /// The plex.tv/link code is made and polled while the Plex link page shows (M7 L15).
+    @ObservationIgnored private var isPlexLinking = false
+    @ObservationIgnored private var learnConfirmShownAt: Date?
     @ObservationIgnored let environment: SettingsEnvironment
+    /// Channel Up/Down move focus by this many rows (M7 L5).
+    static let pageRows = 8
     /// The phone pairing code is valid while Pair a Phone shows (M5 L3).
     @ObservationIgnored private var isPairing = false
+    /// L8: a held key's auto-repeat mustn't confirm a learned button by itself.
+    static let learnConfirmDelay: TimeInterval = 0.6
 
-    init(settings: AppSettings, items: [LaunchItem], environment: SettingsEnvironment) {
+    init(settings: AppSettings, items: [LaunchItem], environment: SettingsEnvironment, bindings: KeyBindings = .defaults) {
         self.settings = settings
         self.items = items
+        self.bindings = bindings
         self.environment = environment
         isAccessibilityTrusted = environment.isAccessibilityTrusted()
         loginItemStatus = environment.loginItemStatus()
         hasPIN = environment.hasPIN()
         iptv = environment.iptvStatus()
         phoneRemote = environment.phoneRemoteStatus()
+        plex = environment.plexStatus()
     }
 
     var page: SettingsPage { stack[stack.count - 1].page }
@@ -61,10 +90,14 @@ final class SettingsModel {
         movingTileID = nil
         refreshStatus()
         syncPairing()
+        syncLearning()
+        syncPlexLink()
     }
 
-    /// Settings closed (the router went home): ends phone pairing.
+    /// Settings closed (the router went home): ends phone pairing, button learning and the Plex link code.
     func screenDidClose() {
+        syncLearning(closed: true)
+        syncPlexLink(closed: true)
         guard isPairing else { return }
         isPairing = false
         environment.setPhonePairing(false)
@@ -78,6 +111,8 @@ final class SettingsModel {
         hasPIN = environment.hasPIN()
         iptv = environment.iptvStatus()
         phoneRemote = environment.phoneRemoteStatus()
+        plex = environment.plexStatus()
+        followPlexSignIn()
     }
 
     /// Returns false only for commands it doesn't use, and for Back on the root page (the router then goes home).
@@ -95,6 +130,10 @@ final class SettingsModel {
             // L13: no value cycling.
             return true
         case .select:
+            if case .confirmLearn = page, let shownAt = learnConfirmShownAt,
+               now().timeIntervalSince(shownAt) < Self.learnConfirmDelay {
+                return true
+            }
             if movingTileID != nil {
                 movingTileID = nil
             } else if let id = focusedRowID, let action = row(id: id)?.action {
@@ -109,7 +148,13 @@ final class SettingsModel {
             guard stack.count > 1 else { return false }
             pop()
             return true
-        case .home, .playPause, .fastForward, .rewind:
+        case .channelUp, .channelDown:
+            // M7 L5: a page of rows.
+            guard movingTileID == nil else { return true }
+            let step = command == .channelUp ? -Self.pageRows : Self.pageRows
+            setFocus(ListFocus.move(ids: focusableRowIDs, current: focusedRowID, by: step))
+            return true
+        case .home, .playPause, .fastForward, .rewind, .menu:
             return false
         }
     }
@@ -211,7 +256,99 @@ final class SettingsModel {
             environment.forgetAllPhones()
             refreshStatus()
             pop()
+        case .startLearning(let command):
+            if case .confirmLearn = page { pop() }
+            push(.learnButton(command))
+        case .useLearned(let command, let trigger):
+            applyBindings(bindings.adding(trigger, for: command))
+            pop()
+            setFocus("binding.\(bindings.bindings(for: command).count - 1)")
+        case .removeBinding(let trigger):
+            guard bindings.canRemove(trigger) else { return }
+            applyBindings(bindings.removing(trigger))
+            pop()
+        case .toggleBindingGlobal(let trigger):
+            guard let binding = bindings.binding(matching: trigger) else { return }
+            applyBindings(bindings.settingGlobal(!binding.isGlobal, for: trigger))
+        case .restoreDefaultButtons:
+            applyBindings(.defaults)
+            pop()
+        case .choosePlexServer(let id):
+            environment.choosePlexServer(id)
+            if page == .plexServers { pop() }
+            refreshStatus()
+        case .signOutOfPlex:
+            environment.signOutOfPlex()
+            pop()
+            refreshStatus()
+        case .pasteTileStartURL(let id):
+            pasteStartURL(id: id)
+        case .clearTileStartURL(let id):
+            startURLMessage = nil
+            updateItems(items.settingStartURL(nil, id: id))
+            setFocus("tile.startURL")
+        case .setTileArtStyle(let id, let style):
+            updateItems(items.settingArtStyle(style, id: id))
+        case .useTileArtPicture(let id, let url):
+            tileArtMessage = environment.setTilePicture(id, url)
+            refreshStatus()
+        case .removeTileArtPicture(let id):
+            environment.removeTilePicture(id)
+            setFocus("art.designed")
+            refreshStatus()
         }
+    }
+
+    /// L15: once the link page's code is used, the page leaves: to the server list when there are several
+    /// servers, else back to the Plex page (with no server, it stays and says so).
+    private func followPlexSignIn() {
+        guard page == .plexLink, plex.isSignedIn else { return }
+        if plex.needsServerChoice {
+            pop()
+            push(.plexServers)
+        } else if plex.serverName != nil {
+            pop()
+        }
+    }
+
+    /// L23: an http(s) page on the web app's own site (else it would open in a browser tab).
+    private func pasteStartURL(id: String) {
+        guard let item = item(id: id), let webApp = environment.webAppInfo(item) else { return }
+        switch environment.pasteURL() {
+        case .failure(let problem):
+            startURLMessage = ClipboardURL.message(for: problem)
+        case .success(let url):
+            if let host = webApp.startURL?.host(), url.host()?.lowercased() != host.lowercased() {
+                startURLMessage = "Use a page on \(host)"
+                return
+            }
+            startURLMessage = nil
+            updateItems(items.settingStartURL(url, id: id))
+        }
+    }
+
+    private func applyBindings(_ new: KeyBindings) {
+        bindings = new
+        environment.applyBindings(new)
+    }
+
+    /// L8: the handler's capture. Replaces the learn page with the confirm page; ignored when not learning.
+    private func learned(_ trigger: InputBinding.Trigger) {
+        guard case .learnButton(let command) = page else { return }
+        pop()
+        push(.confirmLearn(command, trigger))
+        learnConfirmShownAt = now()
+    }
+
+    /// L8: no press within `learnTimeout`.
+    private func learnTimedOut() {
+        guard case .learnButton = page else { return }
+        pop()
+        learnMessage = "No button pressed"
+    }
+
+    func loadPictures() async {
+        pictures = await environment.findPictures()
     }
 
     func loadInstalledApps() async {
@@ -234,20 +371,64 @@ final class SettingsModel {
     private func push(_ page: SettingsPage) {
         pasteMessage = nil
         pasteMessageKind = nil
+        learnMessage = nil
+        startURLMessage = nil
+        tileArtMessage = nil
         stack.append(PageState(page: page, focusedRowID: nil))
         if page == .addTile {
             installedApps = nil
             Task { await loadInstalledApps() }
         }
+        if case .tileArt = page {
+            pictures = nil
+            Task { await loadPictures() }
+        }
         syncPairing()
+        syncLearning()
+        syncPlexLink()
+        if page == .plex { environment.refreshPlex() }
     }
 
     private func pop() {
         guard stack.count > 1 else { return }
         pasteMessage = nil
         pasteMessageKind = nil
+        learnMessage = nil
+        startURLMessage = nil
+        tileArtMessage = nil
         stack.removeLast()
         syncPairing()
+        syncLearning()
+        syncPlexLink()
+    }
+
+    /// M7 L15: the link code is made and polled exactly while the Plex link page shows.
+    private func syncPlexLink(closed: Bool = false) {
+        let active = !closed && page == .plexLink
+        guard active != isPlexLinking else { return }
+        isPlexLinking = active
+        environment.setPlexLinking(active)
+    }
+
+    /// M7 L8: the capture handler is set exactly while the learn page shows (and Settings is open).
+    private func syncLearning(closed: Bool = false) {
+        var active = false
+        if !closed, case .learnButton = page { active = true }
+        guard active != isLearning else { return }
+        isLearning = active
+        learnTimeoutTask?.cancel()
+        learnTimeoutTask = nil
+        if active {
+            environment.setButtonLearning { [weak self] trigger in self?.learned(trigger) }
+            let timeout = learnTimeout
+            learnTimeoutTask = Task { [weak self] in
+                try? await Task.sleep(for: timeout)
+                guard !Task.isCancelled else { return }
+                self?.learnTimedOut()
+            }
+        } else {
+            environment.setButtonLearning(nil)
+        }
     }
 
     /// M5 L3: pairing is active exactly while the Pair a Phone page shows.

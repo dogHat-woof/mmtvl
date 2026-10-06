@@ -28,9 +28,10 @@ nonisolated enum MediaKey: String, Codable, Hashable, Sendable {
     case playPause, next, previous, fastForward, rewind
 }
 
-nonisolated enum ControllerButton: String, Codable, Hashable, Sendable {
+nonisolated enum ControllerButton: String, Codable, Hashable, Sendable, CaseIterable {
     case dpadUp, dpadDown, dpadLeft, dpadRight   // left thumbstick feeds these too
     case a, b, x, y, leftShoulder, rightShoulder, menu, options, home
+    case leftTrigger, rightTrigger               // M7: pressed past the threshold
 }
 
 /// One entry of `key-bindings.json` (D16).
@@ -61,5 +62,22 @@ nonisolated struct InputBinding: Codable, Hashable, Sendable {
         command = try container.decode(RemoteCommand.self, forKey: .command)
         isGlobal = try container.decodeIfPresent(Bool.self, forKey: .isGlobal) ?? false
         label = try container.decodeIfPresent(String.self, forKey: .label)
+    }
+}
+
+nonisolated extension InputBinding.Trigger {
+    /// M7 L9: key triggers match when key codes and modifier *sets* are equal (as lookups do); others by equality.
+    func matches(_ other: InputBinding.Trigger) -> Bool {
+        if case .key(let code, let modifiers) = self, case .key(let otherCode, let otherModifiers) = other {
+            return code == otherCode && Set(modifiers) == Set(otherModifiers)
+        }
+        return self == other
+    }
+
+    /// Key modifiers sorted in `KeyModifier.allCases` order, duplicates removed.
+    var normalized: InputBinding.Trigger {
+        guard case .key(let code, let modifiers) = self else { return self }
+        let set = Set(modifiers)
+        return .key(keyCode: code, modifiers: KeyModifier.allCases.filter(set.contains))
     }
 }

@@ -26,7 +26,7 @@ struct LiveMenuView: View {
             }
             .padding(32)
             .frame(width: menu.isWide ? Theme.liveMenuWideWidth : Theme.liveMenuWidth, alignment: .leading)
-            .background(.black.opacity(0.92), in: RoundedRectangle(cornerRadius: Theme.tileCornerRadius))
+            .glassPanel()
         }
         .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height)
     }

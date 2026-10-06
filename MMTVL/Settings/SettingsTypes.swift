@@ -4,6 +4,13 @@ nonisolated enum SettingsPage: Hashable, Sendable {
     case root, homeScreen, tile(id: String), addTile, confirmRestoreDefaults, confirmClearYouTube
     case liveTV, confirmRemoveIPTV, guideSource(id: String), iptvGroups, iptvHiddenChannels
     case phoneRemote, pairPhone, confirmForgetPhones
+    /// M7: Settings → Remote Buttons (D27).
+    case remoteButtons, remoteCommand(RemoteCommand), remoteBinding(RemoteCommand, InputBinding.Trigger)
+    case learnButton(RemoteCommand), confirmLearn(RemoteCommand, InputBinding.Trigger), confirmRestoreButtons
+    /// M7: Settings → Plex (D28, L15).
+    case plex, plexLink, plexServers, confirmPlexSignOut
+    /// M7 L25: Settings → a tile → Tile Art.
+    case tileArt(id: String)
 }
 
 /// Which Live TV address a paste row fills (M4 L2).
@@ -74,9 +81,39 @@ nonisolated struct PhoneRemoteSettingsStatus: Equatable, Sendable {
     var canControlOtherApps = false
 }
 
+/// What Settings → Plex shows (M7 L15). Built by the app from `PlexAccount`; never tokens.
+nonisolated struct PlexSettingsStatus: Equatable, Sendable {
+    struct Server: Identifiable, Equatable, Sendable {
+        /// The server's machine identifier.
+        var id: String
+        var name: String
+        /// "Yours", "Shared with you".
+        var detail: String
+    }
+
+    var isSignedIn = false
+    /// While the link page shows.
+    var linkCode: String?
+    /// `PlexAPI.linkURL(code:)` for the QR code.
+    var linkURL: String?
+    /// The chosen server.
+    var serverName: String?
+    /// The account's servers (after sign-in).
+    var servers: [Server] = []
+    /// "Connected · 7 items", "Can't reach the server", "Sign in again"…
+    var statusLine = ""
+    var itemCount = 0
+    /// Signed in, but the account has no server.
+    var hasNoServer = false
+    /// Signed in with several servers and none chosen yet.
+    var needsServerChoice = false
+}
+
 /// The `settings.json` toggles.
 nonisolated enum SettingKey: String, CaseIterable, Sendable {
     case globalInputEnabled, controllersEnabled, cursorAutoHide, launchAtLogin, phoneRemoteEnabled
+    /// M7 L22: its row shows "Up the List" / "Higher Number" instead of On/Off.
+    case channelUpMovesUpList
 
     var keyPath: WritableKeyPath<AppSettings, Bool> {
         switch self {
@@ -85,6 +122,7 @@ nonisolated enum SettingKey: String, CaseIterable, Sendable {
         case .cursorAutoHide: \.cursorAutoHide
         case .launchAtLogin: \.launchAtLogin
         case .phoneRemoteEnabled: \.phoneRemoteEnabled
+        case .channelUpMovesUpList: \.channelUpMovesUpList
         }
     }
 }
@@ -118,6 +156,21 @@ nonisolated enum SettingsAction: Hashable, Sendable {
     case refreshIPTV
     case removeIPTVSource
     case forgetAllPhones
+    /// M7 L8: pushes `.learnButton`, or replaces `.confirmLearn` with it (Try Again).
+    case startLearning(RemoteCommand)
+    case useLearned(RemoteCommand, InputBinding.Trigger)
+    case removeBinding(InputBinding.Trigger)
+    case toggleBindingGlobal(InputBinding.Trigger)
+    case restoreDefaultButtons
+    case choosePlexServer(id: String)
+    case signOutOfPlex
+    /// M7 L23: a web app tile's start page from the clipboard, or back to the app's own.
+    case pasteTileStartURL(id: String)
+    case clearTileStartURL(id: String)
+    /// M7 L25.
+    case setTileArtStyle(id: String, TileArtStyle)
+    case useTileArtPicture(id: String, URL)
+    case removeTileArtPicture(id: String)
 }
 
 nonisolated enum RowImage: Hashable, Sendable {
@@ -129,6 +182,18 @@ nonisolated enum RowImage: Hashable, Sendable {
     case app(URL)
     /// A QR code for the string (M5 pairing), drawn at `Theme.settingsQRCodeSize`.
     case qrCode(String)
+    /// M7 L25: a tile's art as it would look with this choice, at preview size.
+    case tileArt(itemID: String, TileArtChoice)
+    /// M7 L25: a small thumbnail of a picture file.
+    case picture(URL)
+}
+
+/// What Settings → Tile Art previews (M7 L25).
+nonisolated enum TileArtChoice: Hashable, Sendable {
+    /// What the tile shows now.
+    case current
+    case style(TileArtStyle)
+    case file(URL)
 }
 
 nonisolated struct SettingsRow: Identifiable, Hashable, Sendable {

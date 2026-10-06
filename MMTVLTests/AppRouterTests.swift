@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import MMTVL
 
@@ -6,11 +7,12 @@ struct AppRouterTests {
         items: [LaunchItem] = LaunchItem.defaults,
         youtube: FakeYouTube = FakeYouTube(),
         liveTV: FakeLiveTV = FakeLiveTV(),
-        pin: String? = nil
+        pin: String? = nil,
+        topShelf: any TopShelfProviding = NoTopShelf()
     ) -> AppRouter {
         let (settings, _) = makeSettingsModel(items: items)
         return AppRouter(items: items, launcher: AppLauncher(), settings: settings, youtube: youtube, liveTV: liveTV,
-                         pinStore: .inMemory(pin))
+                         pinStore: .inMemory(pin), tileArt: makeTestTileArt(), topShelf: topShelf)
     }
 
     private func enterPIN(_ code: String, _ router: AppRouter) {
@@ -37,7 +39,7 @@ struct AppRouterTests {
         let items = LaunchItem.defaults
         let (settings, recorder) = makeSettingsModel(items: items)
         let router = AppRouter(items: items, launcher: AppLauncher(), settings: settings, youtube: FakeYouTube(),
-                               liveTV: FakeLiveTV(), pinStore: .inMemory())
+                               liveTV: FakeLiveTV(), pinStore: .inMemory(), tileArt: makeTestTileArt())
         openSettingsFromTile(router)
         router.settings.perform(.push(.phoneRemote))
         router.settings.perform(.push(.pairPhone))
@@ -45,6 +47,21 @@ struct AppRouterTests {
         router.goHome()
         #expect(router.screen == .home)
         #expect(recorder.pairingCalls == [true, false])
+    }
+
+    @Test func goHomeFromSettingsStopsButtonLearning() {
+        let items = LaunchItem.defaults
+        let (settings, recorder) = makeSettingsModel(items: items)
+        let router = AppRouter(items: items, launcher: AppLauncher(), settings: settings, youtube: FakeYouTube(),
+                               liveTV: FakeLiveTV(), pinStore: .inMemory(), tileArt: makeTestTileArt())
+        openSettingsFromTile(router)
+        router.settings.perform(.push(.remoteButtons))
+        router.settings.perform(.push(.remoteCommand(.select)))
+        router.settings.perform(.startLearning(.select))
+        #expect(recorder.learningHandler != nil)
+        _ = router.handle(.home)
+        #expect(router.screen == .home)
+        #expect(recorder.learningHandler == nil)
     }
 
     @Test func settingsTileOpensSettings() {
@@ -238,13 +255,210 @@ struct AppRouterTests {
         #expect(router.screen == .settings)
         #expect(!router.hasPIN)
     }
+    // MARK: Focus motion (M7 L2)
+
+    @Test func movingArrowsBumpFocusMotion() {
+        let router = makeRouter()
+        #expect(router.focusMotion == FocusMotion())
+        _ = router.handle(.right)
+        #expect(router.focusMotion == FocusMotion(direction: .right, generation: 1))
+        _ = router.handle(.down)
+        #expect(router.focusMotion == FocusMotion(direction: .down, generation: 2))
+    }
+
+    @Test func blockedArrowsAndHoverDontBumpFocusMotion() {
+        let router = makeRouter()
+        _ = router.handle(.left)
+        _ = router.handle(.up)
+        #expect(router.focusMotion.generation == 0)
+        router.hover(3)
+        #expect(router.focusMotion.generation == 0)
+    }
+
+    @Test func selectBumpsFocusMotion() {
+        let router = makeRouter()
+        router.openSettings()
+        router.goHome()
+        _ = router.handle(.down)   // Settings tile
+        _ = router.handle(.select)
+        #expect(router.focusMotion.direction == .select)
+        #expect(router.focusMotion.generation == 2)
+    }
+
+    // MARK: Top shelf (M7 L12)
+
+    private func card(_ id: String, _ action: ShelfCard.Action) -> ShelfCard {
+        ShelfCard(id: id, title: id, subtitle: "", image: .channelLogo(nil), progress: nil, action: action)
+    }
+
+    /// Plex (the first tile) has three cards.
+    private func shelfRouter(pin: String? = nil, liveTV: FakeLiveTV = FakeLiveTV()) -> (AppRouter, FakeTopShelf) {
+        let shelf = FakeTopShelf()
+        shelf.contents["plex"] = .cards(title: "Continue Watching", [
+            card("a", .openTile(id: "plex")), card("b", .playChannel("id:nbatv.us")), card("c", .openTile(id: "youtube")),
+        ])
+        return (makeRouter(liveTV: liveTV, pin: pin, topShelf: shelf), shelf)
+    }
+
+    @Test func upFromTheFirstRowEntersTheShelfOnlyWithCards() {
+        let (router, _) = shelfRouter()
+        #expect(router.handle(.up))
+        #expect(router.shelfIndex == 0)
+        #expect(router.focus.index == 0)
+
+        let (other, _) = shelfRouter()
+        _ = other.handle(.right)          // YouTube: banner
+        _ = other.handle(.up)
+        #expect(other.shelfIndex == nil)
+    }
+
+    @Test func upFromTheSecondRowMovesToTheFirst() {
+        let (router, _) = shelfRouter()
+        _ = router.handle(.down)
+        _ = router.handle(.up)
+        #expect(router.shelfIndex == nil)
+        #expect(router.focus.index == 0)
+    }
+
+    @Test func downAndBackReturnToTheTile() {
+        let (router, _) = shelfRouter()
+        _ = router.handle(.up)
+        _ = router.handle(.down)
+        #expect(router.shelfIndex == nil)
+        #expect(router.focus.index == 0)
+        _ = router.handle(.up)
+        _ = router.handle(.back)
+        #expect(router.shelfIndex == nil)
+        #expect(router.screen == .home)
+        _ = router.handle(.up)
+        _ = router.handle(.up)
+        #expect(router.shelfIndex == 0)
+    }
+
+    @Test func leftRightClampInTheShelf() {
+        let (router, _) = shelfRouter()
+        _ = router.handle(.up)
+        _ = router.handle(.left)
+        #expect(router.shelfIndex == 0)
+        _ = router.handle(.right)
+        _ = router.handle(.right)
+        _ = router.handle(.right)
+        #expect(router.shelfIndex == 2)
+        #expect(router.focus.index == 0)
+    }
+
+    @Test func selectOnAChannelCardOpensLiveTVOnIt() {
+        let liveTV = FakeLiveTV()
+        let (router, _) = shelfRouter(liveTV: liveTV)
+        _ = router.handle(.up)
+        _ = router.handle(.right)
+        _ = router.handle(.select)
+        #expect(router.screen == .liveTV)
+        #expect(liveTV.openedChannelIDs == ["id:nbatv.us"])
+        #expect(router.shelfIndex == nil)
+    }
+
+    @Test func selectOnATileCardOpensThatTile() {
+        let (router, _) = shelfRouter()
+        _ = router.handle(.up)
+        _ = router.handle(.right)
+        _ = router.handle(.right)
+        _ = router.handle(.select)
+        #expect(router.screen == .youtube)
+    }
+
+    @Test func aTileCardAsksForThePINWhenTheTileNeedsIt() {
+        var items = LaunchItem.defaults
+        items[1].requiresPIN = true
+        let shelf = FakeTopShelf()
+        shelf.contents["plex"] = .cards(title: "Cards", [card("c", .openTile(id: "youtube"))])
+        let router = makeRouter(items: items, pin: "1234", topShelf: shelf)
+        _ = router.handle(.up)
+        _ = router.handle(.select)
+        #expect(router.screen == .pin(.openTile(id: "youtube")))
+    }
+
+    @Test func aPINProtectedTileNeverEntersItsShelf() {
+        var items = LaunchItem.defaults
+        items[0].requiresPIN = true
+        let shelf = FakeTopShelf()
+        shelf.contents["plex"] = .cards(title: "Cards", [card("a", .openTile(id: "plex"))])
+        let router = makeRouter(items: items, pin: "1234", topShelf: shelf)
+        #expect(router.shelfContent == .banner)
+        _ = router.handle(.up)
+        #expect(router.shelfIndex == nil)
+        // Without a PIN set, the flag doesn't matter.
+        let open = makeRouter(items: items, topShelf: shelf)
+        _ = open.handle(.up)
+        #expect(open.shelfIndex == 0)
+    }
+
+    @Test func shrinkingContentClampsOrLeavesTheShelf() {
+        let (router, shelf) = shelfRouter()
+        _ = router.handle(.up)
+        _ = router.handle(.right)
+        _ = router.handle(.right)
+        shelf.contents["plex"] = .cards(title: "Fewer", [card("a", .openTile(id: "plex"))])
+        router.shelfContentChanged()
+        #expect(router.shelfIndex == 0)
+        shelf.contents["plex"] = .banner
+        router.shelfContentChanged()
+        #expect(router.shelfIndex == nil)
+    }
+
+    @Test func focusChangesAndGoingHomeRefreshTheShelf() {
+        let (router, shelf) = shelfRouter()
+        _ = router.handle(.right)
+        router.openSettings()
+        router.goHome()
+        #expect(shelf.refreshes == ["youtube", "youtube"])
+    }
+
+    // MARK: Mouse wheel (M7 L21)
+
+    @Test func twoPreciseDeltasMoveOneRow() {
+        let router = makeRouter()
+        router.scrollWheel(deltaY: -25, precise: true)
+        #expect(router.focus.position.row == 0)
+        router.scrollWheel(deltaY: -25, precise: true)
+        #expect(router.focus.position.row == 1)
+        router.scrollWheel(deltaY: 40, precise: true)
+        #expect(router.focus.position.row == 0)
+    }
+
+    @Test func oneWheelLineMovesOneRow() {
+        let router = makeRouter()
+        router.scrollWheel(deltaY: -1, precise: false)
+        #expect(router.focus.position.row == 1)
+        router.scrollWheel(deltaY: 1, precise: false)
+        #expect(router.focus.position.row == 0)
+    }
+
+    @Test func scrollAccumulatorResetsAfterAPause() {
+        let router = makeRouter()
+        var time = Date(timeIntervalSince1970: 0)
+        router.now = { time }
+        router.scrollWheel(deltaY: -25, precise: true)
+        time += 0.5
+        router.scrollWheel(deltaY: -25, precise: true)
+        #expect(router.focus.position.row == 0)
+    }
+
+    @Test func wheelOnAnotherScreenDoesNothing() {
+        let router = makeRouter()
+        router.openSettings()
+        router.scrollWheel(deltaY: -3, precise: false)
+        router.goHome()
+        #expect(router.focus.position.row == 0)
+    }
+
 }
 
 struct AppRouterLiveTVTests {
     private func makeRouter(liveTV: FakeLiveTV, pin: String? = nil) -> AppRouter {
         let (settings, _) = makeSettingsModel()
         return AppRouter(items: LaunchItem.defaults, launcher: AppLauncher(), settings: settings, youtube: FakeYouTube(),
-                         liveTV: liveTV, pinStore: .inMemory(pin))
+                         liveTV: liveTV, pinStore: .inMemory(pin), tileArt: makeTestTileArt())
     }
 
     /// The Live TV tile is the third tile in the defaults.
@@ -316,4 +530,5 @@ struct AppRouterLiveTVTests {
         _ = router.handle(.back)
         #expect(router.screen == .home)
     }
+
 }

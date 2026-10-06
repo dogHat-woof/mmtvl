@@ -6,7 +6,8 @@ enum LiveTVOutcome: Equatable { case handled, leave, openSettings }
 
 /// What the router needs; tests use a fake.
 protocol LiveTVHosting: AnyObject {
-    func open()
+    /// nil = the last channel or Multiview (M4/M6); a channel id plays that channel full screen (M7 L13).
+    func open(channelID: Channel.ID?)
     func leave()
     func handle(_ command: RemoteCommand) -> LiveTVOutcome
 }
@@ -55,6 +56,9 @@ final class LiveTVModel: LiveTVHosting {
     /// Windows that failed after their playlist refresh (M6 L14).
     private(set) var failedWindows: Set<Channel.ID> = []
     let library: IPTVLibrary
+    /// M7 L22 (`settings.json` `channelUpMovesUpList`): Channel Up zaps up the list like the Up arrow;
+    /// false = the higher channel number. Channel Down is the opposite. List paging ignores it.
+    @ObservationIgnored var channelUpMovesUpList = true
     /// The last async work started by open()/commands; tests await it.
     @ObservationIgnored private(set) var pendingTask: Task<Void, Never>?
     @ObservationIgnored private let now: () -> Date
@@ -83,7 +87,7 @@ final class LiveTVModel: LiveTVHosting {
 
     // MARK: - LiveTVHosting
 
-    func open() {
+    func open(channelID: Channel.ID? = nil) {
         pendingTask?.cancel()
         playbackError = nil
         guard library.hasPlaylist else {
@@ -103,6 +107,15 @@ final class LiveTVModel: LiveTVHosting {
                 } else {
                     mode = .unavailable("The playlist has no channels")
                 }
+                return
+            }
+            // M7 L13: a top shelf card plays its channel full screen, leaving Multiview (kept, inactive).
+            if let channelID, let channel = library.channels.first(where: { $0.id == channelID }) {
+                if var snapshot = library.state.multiview, snapshot.isActive {
+                    snapshot.isActive = false
+                    library.rememberMultiview(snapshot)
+                }
+                play(channel)
                 return
             }
             if let snapshot = library.state.multiview, snapshot.isActive {
@@ -273,8 +286,19 @@ final class LiveTVModel: LiveTVHosting {
             hideOverlays()
         case .home:
             return .leave
+        case .menu:
+            // M7 L5: the channel menu of the playing channel (no Move Up/Down: the guide isn't open).
+            if let current = currentChannel { menu = channelMenu(for: current.id) }
+        case .channelUp, .channelDown:
+            zap(channelStep(command))
         }
         return .handled
+    }
+
+    /// M7 L22: the zap step for Channel Up/Down.
+    private func channelStep(_ command: RemoteCommand) -> Int {
+        let up = channelUpMovesUpList ? -1 : 1
+        return command == .channelUp ? up : -up
     }
 
     private func channel(_ id: Channel.ID) -> Channel? {
@@ -299,6 +323,8 @@ final class LiveTVModel: LiveTVHosting {
             previewPlayer.togglePause()
             return .handled
         }
+        // M7 L5: the picker has no channel menu.
+        if command == .menu, case .pick = guidePurpose { return .handled }
         guard var guide else { return .leave }
         let action = guide.handle(command, now: now())
         self.guide = guide
@@ -427,7 +453,8 @@ final class LiveTVModel: LiveTVHosting {
             let library = library
             pendingTask = Task {
                 let options = await library.guideMatchOptions(for: channel)
-                guard !Task.isCancelled, self.mode == .guide, self.menu == nil else { return }
+                // M7: also from the player's channel menu (Menu in the player).
+                guard !Task.isCancelled, self.mode == .guide || self.mode == .player, self.menu == nil else { return }
                 self.menu = self.matchMenu(channel, options)
             }
         case .matchGuide(let id, let choice):
@@ -602,8 +629,30 @@ final class LiveTVModel: LiveTVHosting {
             exitMultiview()
         case .home:
             return .leave
+        case .menu:
+            // M7 L5: the window menu, as Select on a filled window; nothing on an empty one.
+            if multiview?.focusedChannelID != nil { menu = windowMenu() }
+        case .channelUp, .channelDown:
+            zapWindow(channelStep(command))
         }
         return .handled
+    }
+
+    /// M7 L6: the highlighted window steps through the zap list, skipping channels shown in other windows.
+    private func zapWindow(_ step: Int) {
+        guard let multiview, let id = multiview.focusedChannelID, let current = channel(id) else { return }
+        let others = Set(multiview.slots.compactMap { $0 }).subtracting([id])
+        let list = zapList(around: current).filter { !others.contains($0.id) }
+        guard !list.isEmpty else { return }
+        let next: Channel
+        if let index = list.firstIndex(where: { $0.id == id }) {
+            guard list.count > 1 else { return }
+            next = list[(index + step + list.count) % list.count]
+        } else {
+            next = step > 0 ? list[0] : list[list.count - 1]
+        }
+        assignWindow(next.id, to: multiview.focusedSlot)
+        showWindowChip()
     }
 
     /// L12: the highlighted window (else the one with sound, else the first) goes full screen without reconnecting.
@@ -744,14 +793,7 @@ final class LiveTVModel: LiveTVHosting {
     /// else every visible channel. Wraps. A channel not in the list (hidden while playing): Down plays the first, Up the last.
     private func zap(_ step: Int) {
         guard let current = currentChannel else { return }
-        let lineup = library.lineup
-        var list: [Channel] = []
-        if let group = library.state.lastGroup {
-            let remembered = lineup.channels(in: group)
-            if remembered.contains(where: { $0.id == current.id }) { list = remembered }
-        }
-        if list.isEmpty { list = lineup.channels(in: current.group) }
-        if list.isEmpty { list = lineup.visibleChannels }
+        let list = zapList(around: current)
         guard !list.isEmpty else { return }
         guard let index = list.firstIndex(where: { $0.id == current.id }) else {
             play(step > 0 ? list[0] : list[list.count - 1])
@@ -759,6 +801,17 @@ final class LiveTVModel: LiveTVHosting {
         }
         guard list.count > 1 else { return }
         play(list[(index + step + list.count) % list.count])
+    }
+
+    /// The list zapping steps through from `current` (see `zap`).
+    private func zapList(around current: Channel) -> [Channel] {
+        let lineup = library.lineup
+        if let group = library.state.lastGroup {
+            let remembered = lineup.channels(in: group)
+            if remembered.contains(where: { $0.id == current.id }) { return remembered }
+        }
+        let own = lineup.channels(in: current.group)
+        return own.isEmpty ? lineup.visibleChannels : own
     }
 
     private func seek(_ seconds: Double) {

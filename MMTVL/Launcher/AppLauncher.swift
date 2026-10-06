@@ -30,6 +30,50 @@ nonisolated struct LaunchCancellation: Sendable {
     }
 }
 
+/// A Chromium web app (PWA) shim's identity, from its Info.plist (M7 L18, L23).
+nonisolated struct WebAppInfo: Equatable, Sendable {
+    /// `CrAppModeShortcutID`, the browser's app id.
+    var appID: String
+    /// `CrAppModeShortcutName`, the window title's start.
+    var name: String
+    /// `CrAppModeShortcutURL`, the app's own start page.
+    var startURL: URL?
+    /// `CrBundleIdentifier`, e.g. com.brave.Browser.
+    var browserBundleID: String
+}
+
+nonisolated enum WebApp {
+    /// nil for a bundle that isn't a Chromium web app shim.
+    static func info(bundleURL: URL) -> WebAppInfo? {
+        let plistURL = bundleURL.appending(path: "Contents/Info.plist")
+        guard let data = try? Data(contentsOf: plistURL),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let appID = plist["CrAppModeShortcutID"] as? String, !appID.isEmpty,
+              let browserBundleID = plist["CrBundleIdentifier"] as? String, !browserBundleID.isEmpty
+        else { return nil }
+        let name = plist["CrAppModeShortcutName"] as? String
+            ?? plist["CFBundleName"] as? String ?? appID
+        return WebAppInfo(appID: appID, name: name,
+                          startURL: (plist["CrAppModeShortcutURL"] as? String).flatMap(URL.init(string:)),
+                          browserBundleID: browserBundleID)
+    }
+
+    /// L23: Chromium's switches for a web app's shortcut-menu item, used for any page of the app.
+    static func launchArguments(appID: String, startURL: URL) -> [String] {
+        ["--app-id=\(appID)", "--app-launch-url-for-shortcuts-menu-item=\(startURL.absoluteString)"]
+    }
+}
+
+/// L18: a web app shim that quits this soon after its launch handed off to the browser.
+nonisolated struct WebAppHandoff {
+    static let quickQuit: TimeInterval = 5
+
+    static func isHandoff(launchedAt: Date, quitAt: Date) -> Bool {
+        let elapsed = quitAt.timeIntervalSince(launchedAt)
+        return elapsed >= 0 && elapsed <= quickQuit
+    }
+}
+
 /// Launches external apps and URLs (D13) and brings the launcher back when an app it launched quits,
 /// or when an app comes forward after Home cancelled its launch.
 final class AppLauncher {
@@ -42,6 +86,12 @@ final class AppLauncher {
 
     /// Called when an app we launched quits and nothing else took the foreground (L5).
     var onReturnToLauncher: (() -> Void)?
+    /// M7 L18: a web app's window never showed; the router shakes the tile (its id).
+    var onLaunchFailed: ((String) -> Void)?
+
+    /// L18: how long to look for a web app's window after a hand-off, and how often.
+    static let webAppWindowSearch: Duration = .seconds(10)
+    static let webAppWindowPoll: Duration = .milliseconds(300)
 
     /// Chromium browsers honor `--start-fullscreen`, but only when they aren't already running.
     /// Other browsers (Safari), and already-running ones, get full screen via Accessibility (`WindowFullScreener`).
@@ -60,6 +110,8 @@ final class AppLauncher {
 
     private let fullScreener = WindowFullScreener()
     private var launchedPIDs: Set<pid_t> = []
+    /// L18: launched web app shims, to tell a hand-off (a quick quit) from the app closing.
+    private var webAppLaunches: [pid_t: (item: LaunchItem, info: WebAppInfo, launchedAt: Date)] = [:]
     private var iconCache: [URL: NSImage] = [:]
     private var terminationObserver: NSObjectProtocol?
     private var activationObserver: NSObjectProtocol?
@@ -117,6 +169,16 @@ final class AppLauncher {
         return name
     }
 
+    /// The app behind a tile (M7 L24 designed art): its bundle id, or the default browser's.
+    func bundleID(for item: LaunchItem) -> String? {
+        switch item.kind {
+        case .application(let bundleID): bundleID
+        case .defaultBrowser: defaultBrowserURL().flatMap { Bundle(url: $0)?.bundleIdentifier }
+        case .url(_, let browserBundleID): browserBundleID
+        case .internalDestination, .system: nil
+        }
+    }
+
     func icon(for item: LaunchItem) -> NSImage? {
         let url: URL?
         switch item.kind {
@@ -136,6 +198,12 @@ final class AppLauncher {
         return icon
     }
 
+    /// M7 L18: the tile's Chromium web app identity; nil for other tiles.
+    func webAppInfo(for item: LaunchItem) -> WebAppInfo? {
+        guard case .application(let bundleID) = item.kind, let url = appURL(for: bundleID) else { return nil }
+        return WebApp.info(bundleURL: url)
+    }
+
     func launch(_ item: LaunchItem) async throws {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
@@ -145,10 +213,18 @@ final class AppLauncher {
             guard let url = appURL(for: bundleID) else {
                 throw LaunchError.notInstalled(bundleID: bundleID)
             }
+            let webApp = WebApp.info(bundleURL: url)
+            if let webApp, let startURL = item.startURL {
+                try await launchWebApp(item, bundleID: bundleID, info: webApp, startURL: startURL)
+                return
+            }
             Self.logger.info("Launching \(bundleID, privacy: .public)")
             cancellation.began(bundleID, at: Date())
             let app = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
             launchedPIDs.insert(app.processIdentifier)
+            if let webApp {
+                webAppLaunches[app.processIdentifier] = (item, webApp, Date())
+            }
             makeFullScreenIfWanted(item, pid: app.processIdentifier)
 
         case .defaultBrowser(let fullScreen):
@@ -181,6 +257,49 @@ final class AppLauncher {
         }
     }
 
+    /// L23: the browser opens the web app on `startURL` through a short-lived forwarding instance (not tracked);
+    /// then the web app's own window is looked for as after a hand-off (L18).
+    private func launchWebApp(_ item: LaunchItem, bundleID: String, info: WebAppInfo, startURL: URL) async throws {
+        guard let browserURL = appURL(for: info.browserBundleID) else {
+            throw LaunchError.notInstalled(bundleID: info.browserBundleID)
+        }
+        Self.logger.info("Launching web app \(bundleID, privacy: .public) on a page at \(startURL.host() ?? "?", privacy: .public)")
+        // Home during the launch cancels the web app coming forward, not the browser.
+        cancellation.began(bundleID, at: Date())
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.createsNewApplicationInstance = true
+        configuration.arguments = WebApp.launchArguments(appID: info.appID, startURL: startURL)
+        _ = try await NSWorkspace.shared.openApplication(at: browserURL, configuration: configuration)
+        Task { await findWebAppWindow(item, bundleID: bundleID, info: info, excluding: nil) }
+    }
+
+    /// L18: up to 10 s, a running shim with a window (tracked), else a browser window titled with the app's name.
+    /// Nothing: the tile shakes.
+    private func findWebAppWindow(_ item: LaunchItem, bundleID: String, info: WebAppInfo, excluding deadPID: pid_t?) async {
+        let deadline = ContinuousClock.now + Self.webAppWindowSearch
+        while ContinuousClock.now < deadline {
+            let shims = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+                .filter { $0.processIdentifier != deadPID && !$0.isTerminated }
+            if let shim = shims.first(where: { fullScreener.hasWindow(pid: $0.processIdentifier) }) {
+                Self.logger.info("Web app \(bundleID, privacy: .public) is open")
+                launchedPIDs.insert(shim.processIdentifier)
+                makeFullScreenIfWanted(item, pid: shim.processIdentifier)
+                return
+            }
+            for browser in NSRunningApplication.runningApplications(withBundleIdentifier: info.browserBundleID) {
+                if let window = fullScreener.findWindow(pid: browser.processIdentifier, titlePrefix: info.name) {
+                    Self.logger.info("Web app \(bundleID, privacy: .public) opened in a browser window")
+                    if item.wantsFullScreen { await fullScreener.makeFullScreen(window: window) }
+                    return
+                }
+            }
+            try? await Task.sleep(for: Self.webAppWindowPoll)
+        }
+        Self.logger.error("Web app \(bundleID, privacy: .public) didn't open; check the browser")
+        onLaunchFailed?(item.id)
+    }
+
     /// D15: also covers apps that were already running, where `--start-fullscreen` has no effect.
     private func makeFullScreenIfWanted(_ item: LaunchItem, pid: pid_t) {
         guard item.wantsFullScreen && AccessibilityPermission.isTrusted else { return }
@@ -202,6 +321,15 @@ final class AppLauncher {
     }
 
     private func applicationDidTerminate(pid: pid_t) {
+        if let webApp = webAppLaunches.removeValue(forKey: pid),
+           WebAppHandoff.isHandoff(launchedAt: webApp.launchedAt, quitAt: Date()),
+           case .application(let bundleID) = webApp.item.kind {
+            // L18: the shim handed off to the browser; the app isn't closed. Look for its window instead.
+            launchedPIDs.remove(pid)
+            Self.logger.info("Web app \(bundleID, privacy: .public) handed off to the browser; looking for its window")
+            Task { await findWebAppWindow(webApp.item, bundleID: bundleID, info: webApp.info, excluding: pid) }
+            return
+        }
         guard launchedPIDs.remove(pid) != nil else { return }
 
         // L5: only come back if the user hasn't deliberately switched to another app.

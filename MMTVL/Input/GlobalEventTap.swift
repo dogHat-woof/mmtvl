@@ -123,6 +123,15 @@ final class GlobalEventTap {
 
         case .key(let code, let flags, let isRepeat):
             let modifiers = KeyModifier.set(from: CGEventFlags(rawValue: flags))
+            if inputRouter.captureHandler != nil && NSApp.isActive {
+                // M7 L8: learning a button. ⌘-combos pass through; repeats are swallowed.
+                if modifiers.contains(.command) { return false }
+                if !isRepeat {
+                    let trigger = InputBinding.Trigger.key(keyCode: code, modifiers: Array(modifiers)).normalized
+                    DispatchQueue.main.async { [inputRouter] in inputRouter.capture(trigger) }
+                }
+                return true
+            }
             // Non-global keys pass through; the local monitor handles them while we're active.
             guard let binding = inputRouter.bindings.binding(keyCode: code, modifiers: modifiers),
                   binding.isGlobal
@@ -136,6 +145,13 @@ final class GlobalEventTap {
             return true
 
         case .media(let subtype, let data1):
+            if inputRouter.captureHandler != nil && NSApp.isActive,
+               let parsed = MediaKeyEvent.parse(subtype: subtype, data1: data1) {
+                if parsed.isKeyDown && !parsed.isRepeat {
+                    DispatchQueue.main.async { [inputRouter] in inputRouter.capture(.media(key: parsed.key)) }
+                }
+                return true
+            }
             guard NSApp.isActive,
                   let parsed = MediaKeyEvent.parse(subtype: subtype, data1: data1),
                   let binding = inputRouter.bindings.binding(media: parsed.key)

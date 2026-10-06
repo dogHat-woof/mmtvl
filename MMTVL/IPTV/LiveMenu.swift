@@ -53,12 +53,19 @@ nonisolated struct LiveMenu: Equatable, Sendable {
     var hasHiddenAbove: Bool { firstVisibleIndex > 0 }
     var hasHiddenBelow: Bool { visibleRange.upperBound < items.count }
 
-    /// Up/Down move (clamped); Select → .choose(focused action); Back → .close; everything else → .none.
+    /// Up/Down move (clamped), Channel Up/Down by a page; Select → .choose(focused action); Back and Menu → .close;
+    /// everything else → .none.
     mutating func handle(_ command: RemoteCommand) -> Outcome {
         switch command {
-        case .up, .down:
+        case .up, .down, .channelUp, .channelDown:
             guard !items.isEmpty else { return .none }
-            focusedIndex = min(max(focusedIndex + (command == .up ? -1 : 1), 0), items.count - 1)
+            let step = switch command {
+            case .up: -1
+            case .down: 1
+            case .channelUp: -Self.visibleRows   // M7 L5: a page
+            default: Self.visibleRows
+            }
+            focusedIndex = min(max(focusedIndex + step, 0), items.count - 1)
             if focusedIndex < firstVisibleIndex {
                 firstVisibleIndex = focusedIndex
             } else if focusedIndex >= firstVisibleIndex + Self.visibleRows {
@@ -67,7 +74,7 @@ nonisolated struct LiveMenu: Equatable, Sendable {
             return .none
         case .select:
             return focusedItem.map { .choose($0.action) } ?? .none
-        case .back:
+        case .back, .menu:
             return .close
         case .left, .right, .playPause, .fastForward, .rewind, .home:
             return .none

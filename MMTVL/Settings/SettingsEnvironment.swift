@@ -44,4 +44,27 @@ struct SettingsEnvironment {
     /// `PhoneRemote.setPairing(_:)`: true while Pair a Phone shows (M5 L3).
     var setPhonePairing: (Bool) -> Void
     var forgetAllPhones: () -> Void
+    /// M7: apply to `InputRouter` + save `key-bindings.json`.
+    var applyBindings: (KeyBindings) -> Void
+    /// M7 L8: non-nil while learning a button (`InputRouter.captureHandler`); nil stops.
+    var setButtonLearning: (((InputBinding.Trigger) -> Void)?) -> Void
+    /// M7 L3: the tile's custom picture, e.g. "plex.png"; nil when none.
+    var tileArtFileName: (String) -> String?
+    /// M7 L15: Settings → Plex.
+    var plexStatus: () -> PlexSettingsStatus
+    /// True exactly while the Plex link page shows (makes and polls a plex.tv/link code).
+    var setPlexLinking: (Bool) -> Void
+    var choosePlexServer: (String) -> Void
+    var signOutOfPlex: () -> Void
+    /// L17: opening the Plex page retries a failed connection.
+    var refreshPlex: () -> Void
+    /// M7 L23: the tile's Chromium web app identity; nil for other tiles.
+    var webAppInfo: (LaunchItem) -> WebAppInfo?
+    /// Reads the clipboard as a web address (`ClipboardURL.parse`).
+    var pasteURL: () -> Result<URL, ClipboardURL.Problem>
+    /// M7 L25: pictures in Downloads, Pictures and Desktop (run off the main actor; may ask for folder access).
+    var findPictures: () async -> [PictureFile]
+    /// Copies a picture into `tile-art/` for the tile. Returns an error message, or nil.
+    var setTilePicture: (String, URL) -> String?
+    var removeTilePicture: (String) -> Void
 }

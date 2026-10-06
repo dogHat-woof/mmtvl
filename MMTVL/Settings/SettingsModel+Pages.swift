@@ -1,3 +1,5 @@
+import Foundation
+
 /// Builds the sections and rows for each Settings page.
 extension SettingsModel {
     var sections: [SettingsSection] {
@@ -16,6 +18,17 @@ extension SettingsModel {
         case .phoneRemote: phoneRemoteSections
         case .pairPhone: pairPhoneSections
         case .confirmForgetPhones: confirmForgetPhonesSections
+        case .remoteButtons: remoteButtonsSections
+        case .remoteCommand(let command): remoteCommandSections(command)
+        case .remoteBinding(let command, let trigger): remoteBindingSections(command, trigger)
+        case .learnButton(let command): learnButtonSections(command)
+        case .confirmLearn(let command, let trigger): confirmLearnSections(command, trigger)
+        case .confirmRestoreButtons: confirmRestoreButtonsSections
+        case .plex: plexSections
+        case .plexLink: plexLinkSections
+        case .tileArt(let id): tileArtSections(id: id)
+        case .plexServers: plexServersSections
+        case .confirmPlexSignOut: confirmPlexSignOutSections
         }
     }
 
@@ -35,6 +48,17 @@ extension SettingsModel {
         case .phoneRemote: "Phone Remote"
         case .pairPhone: "Pair a Phone"
         case .confirmForgetPhones: "Forget All Phones?"
+        case .remoteButtons: "Remote Buttons"
+        case .remoteCommand(let command): command.title
+        case .remoteBinding(_, let trigger): TriggerName.describe(trigger)
+        case .learnButton: "Press a Button"
+        case .confirmLearn(let command, let trigger): "Use \(TriggerName.describe(trigger)) for \(command.title)?"
+        case .confirmRestoreButtons: "Restore Default Buttons?"
+        case .plex: "Plex"
+        case .plexLink: "Sign In to Plex"
+        case .tileArt: "Tile Art"
+        case .plexServers: "Plex Server"
+        case .confirmPlexSignOut: "Sign Out of Plex?"
         }
     }
 
@@ -54,18 +78,29 @@ extension SettingsModel {
         case .phoneRemote: .symbol("iphone")
         case .pairPhone: phoneRemote.pairingURL.map(RowImage.qrCode) ?? .symbol("iphone")
         case .confirmForgetPhones: .symbol("iphone.slash")
+        case .remoteButtons, .remoteCommand, .remoteBinding, .confirmLearn: .symbol("appletvremote.gen4")
+        case .learnButton: .symbol("hand.point.up.left")
+        case .confirmRestoreButtons: .symbol("arrow.counterclockwise")
+        case .plex, .plexServers: .symbol("play.square.stack")
+        case .plexLink: plex.linkURL.map(RowImage.qrCode) ?? .symbol("play.square.stack")
+        case .confirmPlexSignOut: .symbol("rectangle.portrait.and.arrow.right")
+        case .tileArt(let id): .tileArt(itemID: id, tileArtPreviewChoice)
         }
     }
 
     var hint: String {
         switch page {
-        case .root, .tile, .liveTV, .phoneRemote, .guideSource, .iptvGroups, .iptvHiddenChannels:
+        case .root, .tile, .liveTV, .phoneRemote, .guideSource, .iptvGroups, .iptvHiddenChannels,
+             .remoteButtons, .remoteCommand, .remoteBinding, .plex, .plexServers, .tileArt:
             "Select: choose · Back: return"
+        case .plexLink: "Back: cancel"
+        case .learnButton: "Waiting for a button…"
         case .pairPhone: "Back: done"
         case .homeScreen:
             movingTileID == nil ? "Select: edit tile · Back: return" : "Up/Down: move · Select or Back: done"
         case .addTile: "Select: add · Back: return"
-        case .confirmRestoreDefaults, .confirmClearYouTube, .confirmRemoveIPTV, .confirmForgetPhones:
+        case .confirmRestoreDefaults, .confirmClearYouTube, .confirmRemoveIPTV, .confirmForgetPhones,
+             .confirmLearn, .confirmRestoreButtons, .confirmPlexSignOut:
             "Select: choose · Back: cancel"
         }
     }
@@ -107,6 +142,11 @@ extension SettingsModel {
                             action: .toggle(.globalInputEnabled)),
                 SettingsRow(id: "controllers", title: "Game Controllers",
                             value: Self.onOff(settings.controllersEnabled), action: .toggle(.controllersEnabled)),
+                SettingsRow(id: "remoteButtons", title: "Remote Buttons", showsDisclosure: true,
+                            action: .push(.remoteButtons)),
+                SettingsRow(id: "channelUp", title: "Channel Up",
+                            value: settings.channelUpMovesUpList ? "Up the List" : "Higher Number",
+                            detail: "Changes channel in Live TV", action: .toggle(.channelUpMovesUpList)),
                 SettingsRow(id: "cursorAutoHide", title: "Hide Pointer During Remote Use",
                             value: Self.onOff(settings.cursorAutoHide), action: .toggle(.cursorAutoHide)),
                 SettingsRow(id: "phoneRemote", title: "Phone Remote", value: Self.onOff(settings.phoneRemoteEnabled),
@@ -129,6 +169,10 @@ extension SettingsModel {
                 SettingsRow(id: "youtube.clear", title: "Sign Out & Clear YouTube Data", showsDisclosure: true,
                             action: .push(.confirmClearYouTube)),
             ], footer: "To keep kids in their own profile, set a Parent code in YouTube → Settings → Parent code."),
+            SettingsSection(id: "plex", title: "Plex", rows: [
+                SettingsRow(id: "plex", title: "Plex", value: plex.isSignedIn ? "Signed In" : "Not Signed In",
+                            showsDisclosure: true, action: .push(.plex)),
+            ]),
             SettingsSection(id: "liveTV", title: "Live TV", rows: [
                 SettingsRow(id: "liveTV", title: "Live TV",
                             value: iptv.hasPlaylist ? Self.channelCount(iptv.channelCount) : "Not Set Up",
@@ -188,6 +232,7 @@ extension SettingsModel {
         guard let item = item(id: id) else { return [] }
         if item.isSettingsTile {
             return [SettingsSection(id: "options", rows: [
+                tileArtRow(id: id),
                 SettingsRow(id: "tile.move", title: "Move", action: .startMove(id: id)),
             ], footer: "Settings is always on the Home screen and asks for the PIN when one is set.")]
         }
@@ -201,6 +246,9 @@ extension SettingsModel {
                                     detail: isAccessibilityTrusted ? nil : "Needs Accessibility access",
                                     action: .toggleTileFullScreen(id: id)))
         }
+        if environment.webAppInfo(item) != nil {
+            rows.append(contentsOf: startURLRows(item))
+        }
         if !item.isExitToDesktop {
             rows.append(SettingsRow(id: "tile.requiresPIN", title: "Require PIN",
                                     value: Self.onOff(item.requiresPIN == true),
@@ -208,12 +256,98 @@ extension SettingsModel {
                                     action: .toggleTileRequiresPIN(id: id)))
         }
         let isDefault = LaunchItem.defaults.contains { $0.id == id }
+        rows.append(tileArtRow(id: id))
         rows.append(SettingsRow(id: "tile.move", title: "Move", action: .startMove(id: id)))
         rows.append(SettingsRow(id: "tile.remove", title: "Remove from Home Screen",
                                 detail: isDefault ? "You can add it back from Add Tile" : nil,
                                 action: .removeTile(id: id)))
         let footer = item.isExitToDesktop ? "Exit to Desktop always asks for the PIN when one is set." : nil
         return [SettingsSection(id: "options", rows: rows, footer: footer)]
+    }
+
+    /// M7 L23: web app tiles only.
+    private func startURLRows(_ item: LaunchItem) -> [SettingsRow] {
+        var rows = [SettingsRow(id: "tile.startURL", title: "Start Page",
+                                value: item.startURL.map(Self.startURLLabel) ?? "App's Own",
+                                detail: startURLMessage ?? "Copy a page address on this Mac or your iPhone, then select",
+                                action: .pasteTileStartURL(id: item.id))]
+        if item.startURL != nil {
+            rows.append(SettingsRow(id: "tile.startURL.clear", title: "Use the App's Own Start Page",
+                                    action: .clearTileStartURL(id: item.id)))
+        }
+        return rows
+    }
+
+    /// Host + path (+ "?" + query), cut to 48 characters.
+    static func startURLLabel(_ url: URL) -> String {
+        var label = (url.host() ?? "") + url.path()
+        if let query = url.query(), !query.isEmpty { label += "?" + query }
+        return label.count > 48 ? String(label.prefix(47)) + "…" : label
+    }
+
+    /// M7 L3, L25: opens the Tile Art page.
+    private func tileArtRow(id: String) -> SettingsRow {
+        let value = environment.tileArtFileName(id)
+            ?? (item(id: id)?.tileArtStyle == .icon ? "App Icon" : "Designed")
+        return SettingsRow(id: "tile.art", title: "Tile Art", value: value, showsDisclosure: true,
+                           action: .push(.tileArt(id: id)))
+    }
+
+    /// L25: the style for apps; only designed art for built-ins and web addresses.
+    private func offersIconStyle(_ item: LaunchItem) -> Bool {
+        switch item.kind {
+        case .application, .defaultBrowser: true
+        case .url, .internalDestination, .system: false
+        }
+    }
+
+    private func tileArtSections(id: String) -> [SettingsSection] {
+        guard let item = item(id: id) else { return [] }
+        let custom = environment.tileArtFileName(id)
+        let styleDetail = custom == nil ? nil : "Used when there's no picture"
+        var styleRows = [SettingsRow(id: "art.designed", title: "Designed",
+                                     value: item.tileArtStyle == .designed ? "Selected" : nil, detail: styleDetail,
+                                     action: .setTileArtStyle(id: id, .designed))]
+        if offersIconStyle(item) {
+            styleRows.append(SettingsRow(id: "art.icon", title: "App Icon",
+                                         value: item.tileArtStyle == .icon ? "Selected" : nil, detail: styleDetail,
+                                         action: .setTileArtStyle(id: id, .icon)))
+        }
+        var sections = [SettingsSection(id: "style", title: "Style", rows: styleRows)]
+        if let custom {
+            sections.append(SettingsSection(id: "custom", title: "Your Picture", rows: [
+                SettingsRow(id: "art.custom", title: custom, value: "In Use"),
+                SettingsRow(id: "art.removeCustom", title: "Remove Picture", action: .removeTileArtPicture(id: id)),
+            ]))
+        }
+        var pictureRows: [SettingsRow]
+        if let pictures {
+            pictureRows = pictures.enumerated().map { index, file in
+                SettingsRow(id: "art.file.\(index)", title: file.name, detail: PictureFinder.detail(file),
+                            image: .picture(file.url), action: .useTileArtPicture(id: id, file.url))
+            }
+            if pictureRows.isEmpty {
+                pictureRows.append(SettingsRow(id: "art.file.none", title: "No pictures in Downloads, Pictures or Desktop"))
+            }
+        } else {
+            pictureRows = [SettingsRow(id: "art.file.loading", title: "Looking for pictures…")]
+        }
+        if let tileArtMessage {
+            pictureRows.insert(SettingsRow(id: "art.message", title: tileArtMessage), at: 0)
+        }
+        sections.append(SettingsSection(id: "pictures", title: "Pictures on This Mac", rows: pictureRows,
+                                        footer: "You can also put a 5:3 picture named \(id).png in …/MMTVL/tile-art."))
+        return sections
+    }
+
+    /// L25: the side column previews the focused option.
+    private var tileArtPreviewChoice: TileArtChoice {
+        guard let id = focusedRowID, let action = row(id: id)?.action else { return .current }
+        switch action {
+        case .setTileArtStyle(_, let style): return .style(style)
+        case .useTileArtPicture(_, let url): return .file(url)
+        default: return .current
+        }
     }
 
     private var confirmRestoreSections: [SettingsSection] {
@@ -434,5 +568,138 @@ extension SettingsModel {
         }
         sections.append(SettingsSection(id: "apps", title: "Applications", rows: appRows))
         return sections
+    }
+
+    // MARK: - Remote Buttons (M7, D27)
+
+    private var remoteButtonsSections: [SettingsSection] {
+        let rows = RemoteCommand.allCases.map { command in
+            let names = bindings.bindings(for: command).map { TriggerName.describe($0.trigger) }
+            var value = names.prefix(2).joined(separator: " · ")
+            if names.count > 2 { value += " +\(names.count - 2)" }
+            return SettingsRow(id: "command.\(command.rawValue)", title: command.title, value: names.isEmpty ? "None" : value,
+                               showsDisclosure: true, action: .push(.remoteCommand(command)))
+        }
+        return [
+            SettingsSection(id: "commands", title: "Commands", rows: rows),
+            SettingsSection(id: "manage", rows: [
+                SettingsRow(id: "restoreButtons", title: "Restore Default Buttons", showsDisclosure: true,
+                            action: .push(.confirmRestoreButtons)),
+            ], footer: "Buttons apply at once. Phone remote buttons can't be changed."),
+        ]
+    }
+
+    private func remoteCommandSections(_ command: RemoteCommand) -> [SettingsSection] {
+        var rows = bindings.bindings(for: command).enumerated().map { index, binding in
+            var detail = TriggerName.kind(binding.trigger)
+            if binding.isGlobal { detail += " · Works in other apps" }
+            return SettingsRow(id: "binding.\(index)", title: TriggerName.describe(binding.trigger), detail: detail,
+                               showsDisclosure: true, action: .push(.remoteBinding(command, binding.trigger)))
+        }
+        if rows.isEmpty {
+            rows.append(SettingsRow(id: "binding.none", title: "No buttons"))
+        }
+        rows.append(SettingsRow(id: "learn", title: "Add a Button", detail: learnMessage, action: .startLearning(command)))
+        var footer: String?
+        if command == .home {
+            footer = "Home buttons can work in other apps too (needs Accessibility)."
+        } else if KeyBindings.essentialCommands.contains(command) {
+            footer = "Keep at least one button for \(command.title)."
+        }
+        return [SettingsSection(id: "buttons", title: "Buttons", rows: rows, footer: footer)]
+    }
+
+    private func remoteBindingSections(_ command: RemoteCommand, _ trigger: InputBinding.Trigger) -> [SettingsSection] {
+        var rows: [SettingsRow] = []
+        if command == .home {
+            let isGlobal = bindings.binding(matching: trigger)?.isGlobal == true
+            rows.append(SettingsRow(id: "binding.global", title: "Works in Other Apps", value: Self.onOff(isGlobal),
+                                    detail: isAccessibilityTrusted ? nil : "Needs Accessibility access",
+                                    action: .toggleBindingGlobal(trigger)))
+        }
+        if bindings.canRemove(trigger) {
+            rows.append(SettingsRow(id: "binding.remove", title: "Remove Button", action: .removeBinding(trigger)))
+        } else {
+            rows.append(SettingsRow(id: "binding.cantRemove", title: "The last button for \(command.title) can't be removed"))
+        }
+        return [SettingsSection(id: "binding", rows: rows)]
+    }
+
+    private func learnButtonSections(_ command: RemoteCommand) -> [SettingsSection] {
+        [SettingsSection(id: "learn", rows: [
+            SettingsRow(id: "learn.prompt", title: "Press the button to use for \(command.title)",
+                        detail: "On the remote, a keyboard or a game controller. Waits 10 seconds."),
+            SettingsRow(id: "learn.cancel", title: "Cancel", action: .pop),
+        ])]
+    }
+
+    private func confirmLearnSections(_ command: RemoteCommand, _ trigger: InputBinding.Trigger) -> [SettingsSection] {
+        var detail: String?
+        if let existing = bindings.binding(matching: trigger) {
+            detail = existing.command == command
+                ? "Already used for \(command.title)"
+                : "Now used for \(existing.command.title); it moves to \(command.title)"
+        }
+        return [SettingsSection(id: "confirm", rows: [
+            SettingsRow(id: "confirm.use", title: "Use This Button", detail: detail, action: .useLearned(command, trigger)),
+            SettingsRow(id: "confirm.retry", title: "Try Again", action: .startLearning(command)),
+            SettingsRow(id: "confirm.cancel", title: "Cancel", action: .pop),
+        ])]
+    }
+
+    private var confirmRestoreButtonsSections: [SettingsSection] {
+        [SettingsSection(id: "confirm", rows: [
+            SettingsRow(id: "confirm.cancel", title: "Cancel", action: .pop),
+            SettingsRow(id: "confirm.restoreButtons", title: "Restore Defaults", action: .restoreDefaultButtons),
+        ], footer: "Replaces every button with the defaults.")]
+    }
+
+    // MARK: - Plex (M7 D28, L15)
+
+    private var plexSections: [SettingsSection] {
+        guard plex.isSignedIn else {
+            return [SettingsSection(id: "plex", rows: [
+                SettingsRow(id: "plex.signIn", title: "Sign In", detail: "Shows Continue Watching on the Home screen",
+                            showsDisclosure: true, action: .push(.plexLink)),
+            ], footer: "Signing in uses a code at plex.tv/link; no password is typed here.")]
+        }
+        let canChoose = plex.servers.count > 1
+        return [SettingsSection(id: "plex", rows: [
+            SettingsRow(id: "plex.server", title: "Server", value: plex.serverName ?? "None",
+                        showsDisclosure: canChoose, action: canChoose ? .push(.plexServers) : nil),
+            SettingsRow(id: "plex.status", title: "Status", value: plex.statusLine),
+            SettingsRow(id: "plex.signOut", title: "Sign Out", showsDisclosure: true, action: .push(.confirmPlexSignOut)),
+        ], footer: "Selecting a Continue Watching item opens Plex.")]
+    }
+
+    private var plexLinkSections: [SettingsSection] {
+        if plex.isSignedIn && plex.hasNoServer {
+            return [SettingsSection(id: "link", rows: [
+                SettingsRow(id: "plexLink.noServer", title: "No Plex Media Server on this account"),
+                SettingsRow(id: "plexLink.cancel", title: "Done", action: .pop),
+            ])]
+        }
+        return [SettingsSection(id: "link", rows: [
+            SettingsRow(id: "plexLink.code", title: "Code", value: plex.linkCode ?? "…"),
+            SettingsRow(id: "plexLink.where", title: "plex.tv/link",
+                        detail: "On a phone or computer, open plex.tv/link and enter the code, or scan the QR code"),
+            SettingsRow(id: "plexLink.cancel", title: "Cancel", action: .pop),
+        ])]
+    }
+
+    private var plexServersSections: [SettingsSection] {
+        let rows = plex.servers.map { server in
+            SettingsRow(id: "plexServer.\(server.id)", title: server.name,
+                        value: server.name == plex.serverName ? "Selected" : nil, detail: server.detail,
+                        action: .choosePlexServer(id: server.id))
+        }
+        return [SettingsSection(id: "servers", rows: rows, footer: "Continue Watching comes from this server.")]
+    }
+
+    private var confirmPlexSignOutSections: [SettingsSection] {
+        [SettingsSection(id: "confirm", rows: [
+            SettingsRow(id: "confirm.cancel", title: "Cancel", action: .pop),
+            SettingsRow(id: "confirm.signOutOfPlex", title: "Sign Out", action: .signOutOfPlex),
+        ], footer: "Removes this Mac from your Plex account's sign-in here. Plex HTPC stays signed in.")]
     }
 }

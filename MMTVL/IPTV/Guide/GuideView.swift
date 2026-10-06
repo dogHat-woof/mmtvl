@@ -229,6 +229,6 @@ struct GuideView: View {
         .frame(width: Theme.guideGroupPanelWidth,
                height: Theme.guideTimeHeaderHeight + CGFloat(GuideModel.visibleRows) * Theme.guideRowHeight,
                alignment: .topLeading)
-        .background(.black.opacity(0.92), in: RoundedRectangle(cornerRadius: Theme.tileCornerRadius))
+        .glassPanel()
     }
 }

@@ -15,6 +15,10 @@ final class InputRouter {
     /// Called for every command dispatched while the launcher is active (cursor auto-hide).
     @ObservationIgnored var onCommandDispatched: (() -> Void)?
     @ObservationIgnored var bindings: KeyBindings
+    /// M7 L21: mouse wheel / trackpad scrolling (`scrollingDeltaY`, `hasPreciseScrollingDeltas`). The event passes on.
+    @ObservationIgnored var onScrollWheel: ((CGFloat, Bool) -> Void)?
+    /// M7 L8: set while Settings learns a button; the next trigger is captured instead of dispatched.
+    @ObservationIgnored var captureHandler: ((InputBinding.Trigger) -> Void)?
 
     @ObservationIgnored private var monitor: Any?
 
@@ -24,13 +28,16 @@ final class InputRouter {
 
     func start() {
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .systemDefined]) { [weak self] event in
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .systemDefined, .scrollWheel]) { [weak self] event in
             // L6: our own synthetic events (phone text, keys for other apps) pass through untouched.
             if let cg = event.cgEvent, SyntheticInput.isOwn(cg) { return event }
             guard let self else { return event }
             switch event.type {
             case .keyDown: return self.handleKeyDown(event) ? nil : event
             case .systemDefined: return self.handleSystemDefined(event) ? nil : event
+            case .scrollWheel:
+                self.onScrollWheel?(event.scrollingDeltaY, event.hasPreciseScrollingDeltas)
+                return event
             default: return event
             }
         }
@@ -41,6 +48,15 @@ final class InputRouter {
             NSEvent.removeMonitor(monitor)
         }
         monitor = nil
+    }
+
+    /// L8: with a handler and MMTVL active, hands the trigger to the handler and returns true (consume);
+    /// otherwise false. Clears nothing: Settings stops learning by setting the handler to nil.
+    @discardableResult
+    func capture(_ trigger: InputBinding.Trigger) -> Bool {
+        guard let captureHandler, NSApp.isActive else { return false }
+        captureHandler(trigger)
+        return true
     }
 
     /// The single entry point for every input source. Returns true if consumed.
@@ -59,6 +75,14 @@ final class InputRouter {
 
     private func handleKeyDown(_ event: NSEvent) -> Bool {
         let modifiers = KeyModifier.set(from: event.modifierFlags)
+        if captureHandler != nil && NSApp.isActive {
+            // L8: ⌘-combos pass through (⌘Q still quits); repeats are swallowed; the first press is captured.
+            if modifiers.contains(.command) { return false }
+            if !event.isARepeat {
+                capture(InputBinding.Trigger.key(keyCode: event.keyCode, modifiers: Array(modifiers)).normalized)
+            }
+            return true
+        }
         guard let binding = bindings.binding(keyCode: event.keyCode, modifiers: modifiers) else {
             // L6: only the local monitor logs keys, i.e. only while MMTVL is frontmost.
             let names = modifiers.map(\.rawValue).sorted()
@@ -71,9 +95,13 @@ final class InputRouter {
 
     /// Bound media keys are always swallowed while MMTVL is frontmost (L5), so they don't start Music.
     private func handleSystemDefined(_ event: NSEvent) -> Bool {
-        guard let parsed = MediaKeyEvent.parse(subtype: event.subtype.rawValue, data1: event.data1),
-              let binding = bindings.binding(media: parsed.key)
-        else { return false }
+        guard let parsed = MediaKeyEvent.parse(subtype: event.subtype.rawValue, data1: event.data1) else { return false }
+        if captureHandler != nil && NSApp.isActive {
+            // L8: down and up are both swallowed; only a fresh key down is captured.
+            if parsed.isKeyDown && !parsed.isRepeat { capture(.media(key: parsed.key)) }
+            return true
+        }
+        guard let binding = bindings.binding(media: parsed.key) else { return false }
         if parsed.isKeyDown && !parsed.isRepeat {
             dispatch(binding.command, isGlobal: binding.isGlobal)
         }

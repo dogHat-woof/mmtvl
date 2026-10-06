@@ -1,5 +1,13 @@
 import Foundation
 
+/// M7 L24: how a tile without a custom picture looks.
+nonisolated enum TileArtStyle: String, Codable, Sendable, CaseIterable {
+    /// Brand gradient + the app's icon (built-ins: their designed gradient).
+    case designed
+    /// The app icon on a blurred backdrop of itself (L4).
+    case icon
+}
+
 nonisolated struct LaunchItem: Codable, Identifiable, Hashable, Sendable {
     enum Kind: Codable, Hashable, Sendable {
         case application(bundleID: String)
@@ -19,6 +27,12 @@ nonisolated struct LaunchItem: Codable, Identifiable, Hashable, Sendable {
     var launchFullScreen: Bool?   // nil = the kind's default; Optional so older files decode
     var isHidden: Bool?           // nil/false = shown; Optional so older files decode; stored as nil when shown
     var requiresPIN: Bool?        // D20: asks for the launcher PIN when one is set; stored as nil when off
+    /// M7 L23: a Chromium web app tile's own start page (e.g. Google Meet's calling screen); nil = the app's own.
+    var startURL: URL?
+    /// M7 L24: "designed" (default when nil or unknown) or "icon". A custom picture in `tile-art/` wins over both.
+    var artStyle: String?
+
+    var tileArtStyle: TileArtStyle { artStyle.flatMap(TileArtStyle.init(rawValue:)) ?? .designed }
 
     var isVisible: Bool { isHidden != true }
 

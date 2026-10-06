@@ -118,3 +118,25 @@ struct LaunchItemPINTests {
         #expect(items.first?.requiresPIN == nil)
     }
 }
+
+/// M7 L23.
+struct LaunchItemStartURLTests {
+    private let meet = LaunchItem(id: "app.meet", title: "Google Meet",
+                                  kind: .application(bundleID: "com.brave.Browser.app.kjgfgldnnfoeklkmfkjfagphfepbbdan"))
+
+    @Test func olderFilesDecodeWithoutAStartPage() throws {
+        let json = #"{"id":"app.meet","title":"Google Meet","kind":{"application":{"bundleID":"x"}}}"#
+        let item = try JSONDecoder().decode(LaunchItem.self, from: Data(json.utf8))
+        #expect(item.startURL == nil)
+        let encoded = try String(decoding: JSONEncoder().encode(item), as: UTF8.self)
+        #expect(!encoded.contains("startURL"))
+    }
+
+    @Test func aStartPageRoundTrips() throws {
+        let items = [meet].settingStartURL(URL(string: "https://meet.google.com/home?calling=1"), id: "app.meet")
+        #expect(items[0].startURL?.absoluteString == "https://meet.google.com/home?calling=1")
+        let decoded = try JSONDecoder().decode([LaunchItem].self, from: JSONEncoder().encode(items))
+        #expect(decoded == items)
+        #expect(items.settingStartURL(nil, id: "app.meet")[0].startURL == nil)
+    }
+}

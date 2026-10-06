@@ -142,6 +142,12 @@ nonisolated struct GuideModel: Equatable, Sendable {
             return focusedChannel.map { .play($0.id) } ?? .none
         case .back:
             return .close
+        case .menu:
+            // M7 L5: the channel menu, as Select on the channel cell.
+            return focusedChannel.map { .channelMenu($0.id) } ?? .none
+        case .channelUp, .channelDown:
+            moveRow(by: command == .channelUp ? -Self.visibleRows : Self.visibleRows)
+            return .none
         case .playPause, .home:
             return .none
         }
@@ -162,6 +168,12 @@ nonisolated struct GuideModel: Equatable, Sendable {
             return focusedChannel.map { .channelMenu($0.id) } ?? .none
         case .back:
             return .close
+        case .menu:
+            // M7 L5: the channel menu, as Select on the channel cell.
+            return focusedChannel.map { .channelMenu($0.id) } ?? .none
+        case .channelUp, .channelDown:
+            moveRow(by: command == .channelUp ? -Self.visibleRows : Self.visibleRows)
+            return .none
         case .playPause, .home:
             return .none
         }
@@ -186,14 +198,24 @@ nonisolated struct GuideModel: Equatable, Sendable {
         case .back, .left:
             focus = .grid
             return .none
-        case .playPause, .home, .fastForward, .rewind:
+        case .channelUp, .channelDown:
+            guard !groups.isEmpty else { return .none }
+            let step = command == .channelUp ? -Self.visibleRows : Self.visibleRows
+            focus = .groups(min(max(index + step, 0), groups.count - 1))
+            return .none
+        case .playPause, .home, .fastForward, .rewind, .menu:
             return .none
         }
     }
 
     private mutating func moveRow(_ command: RemoteCommand) {
+        moveRow(by: command == .up ? -1 : 1)
+    }
+
+    /// Clamped; M7 L5 pages with Channel Up/Down.
+    private mutating func moveRow(by step: Int) {
         guard !channels.isEmpty else { return }
-        row = min(max(row + (command == .up ? -1 : 1), 0), channels.count - 1)
+        row = min(max(row + step, 0), channels.count - 1)
         keepRowVisible()
     }
 

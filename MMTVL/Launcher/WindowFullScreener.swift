@@ -29,6 +29,38 @@ final class WindowFullScreener {
         Self.logger.error("Gave up making pid \(pid) full screen after \(timeout, privacy: .public)")
     }
 
+    /// M7 L18: full screen for one window (a browser window showing a web app). Polls like `makeFullScreen(pid:)`.
+    func makeFullScreen(window: AXUIElement, timeout: Duration = .seconds(5)) async {
+        guard AccessibilityPermission.isTrusted else { return }
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline, !Task.isCancelled {
+            if Self.isFullScreen(window) { return }
+            AXUIElementSetAttributeValue(window, Self.fullScreenAttribute as CFString, true as CFBoolean)
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+        Self.logger.error("Gave up making a web app window full screen after \(timeout, privacy: .public)")
+    }
+
+    /// M7 L18: the app's first window whose title begins with `titlePrefix`.
+    func findWindow(pid: pid_t, titlePrefix: String) -> AXUIElement? {
+        guard AccessibilityPermission.isTrusted else { return nil }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 1.0)
+        let windows: [AXUIElement] = Self.copyAttribute(app, kAXWindowsAttribute) ?? []
+        return windows.first { window in
+            let title: String? = Self.copyAttribute(window, kAXTitleAttribute)
+            return title?.hasPrefix(titlePrefix) == true
+        }
+    }
+
+    /// M7 L18: whether the app shows a window. Without Accessibility it can't tell and answers true.
+    func hasWindow(pid: pid_t) -> Bool {
+        guard AccessibilityPermission.isTrusted else { return true }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 1.0)
+        return Self.mainWindow(of: app) != nil
+    }
+
     /// Focused window, else main window, else the first standard window.
     private static func mainWindow(of app: AXUIElement) -> AXUIElement? {
         for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {

@@ -11,9 +11,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let launcher = AppLauncher()
     private var youtube: YouTubeController?
     private var iptvLibrary: IPTVLibrary?
+    private var plex: PlexAccount?
     private var liveTV: LiveTVModel?
     private var settings = AppSettings()
     private var settingsFile: JSONConfigFile<AppSettings>?
+    private var bindingsFile: JSONConfigFile<[InputBinding]>?
     private var accessibilityWaitTask: Task<Void, Never>?
     private var inputRouter: InputRouter?
     private var router: AppRouter?
@@ -33,10 +35,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settingsFile = JSONConfigFile(url: directory.appending(path: AppSettings.fileName), defaultValue: AppSettings())
         self.settingsFile = settingsFile
         settings = settingsFile.load()
-        let bindings = KeyBindings(JSONConfigFile(
-            url: directory.appending(path: KeyBindings.fileName),
-            defaultValue: KeyBindings.defaultBindings
-        ).load())
+        let bindingsFile = JSONConfigFile(url: directory.appending(path: KeyBindings.fileName),
+                                          defaultValue: KeyBindings.defaultBindings)
+        self.bindingsFile = bindingsFile
+        let bindings = migrateBindings(KeyBindings(bindingsFile.load()))
         let inputRouter = InputRouter(bindings: bindings)
         let kiosk = !AppEnvironment.windowedMode
 
@@ -52,13 +54,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let iptvLibrary = makeIPTVLibrary(directory: directory)
         self.iptvLibrary = iptvLibrary
-        let settingsModel = SettingsModel(settings: settings, items: items, environment: makeSettingsEnvironment(kiosk: kiosk))
+        let plex = PlexAccount(network: .live,
+                               configFile: JSONConfigFile(url: directory.appending(path: PlexConfig.fileName),
+                                                          defaultValue: PlexConfig()),
+                               tokens: .keychain)
+        self.plex = plex
+        let settingsModel = SettingsModel(settings: settings, items: items, environment: makeSettingsEnvironment(kiosk: kiosk),
+                                          bindings: bindings)
         let youtube = YouTubeController(userAgent: YouTubeConfig.userAgent(override: settings.youtubeUserAgent))
         self.youtube = youtube
         let liveTV = LiveTVModel(player: MPVPlayerController(), makePlayer: { MPVPlayerController() }, library: iptvLibrary)
+        liveTV.channelUpMovesUpList = settings.channelUpMovesUpList
         self.liveTV = liveTV
+        let topShelf = TopShelfModel(live: .library(iptvLibrary), plex: plex)
         let router = AppRouter(items: items, launcher: launcher, settings: settingsModel, youtube: youtube,
-                               liveTV: liveTV, pinStore: .keychain)
+                               liveTV: liveTV, pinStore: .keychain, tileArt: TileArtStore(), topShelf: topShelf)
+        topShelf.onChange = { [weak router] in router?.shelfContentChanged() }
         let windowController = KioskWindowController(
             rootView: LauncherRootView(router: router, youtube: youtube, liveTV: liveTV),
             hidesCursor: settings.cursorAutoHide
@@ -75,7 +86,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if router?.screen == .youtube { router?.goHome() }
         }
         iptvLibrary.onStatusChange = { [weak router] in router?.settings.refreshStatus() }
+        plex.onChange = { [weak router] in
+            router?.settings.refreshStatus()
+            router?.shelfContentChanged()
+        }
         inputRouter.handler = router.handle
+        inputRouter.onScrollWheel = { [weak router] deltaY, precise in router?.scrollWheel(deltaY: deltaY, precise: precise) }
         inputRouter.onGlobalCommand = { [weak self] command in self?.handleGlobal(command) }
         // Reads the current setting, which Settings can change live.
         inputRouter.onCommandDispatched = { [weak self] in
@@ -105,6 +121,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await iptvLibrary.refreshGuideIfStale()
             }
         }
+    }
+
+    /// M7 L7: an older `key-bindings.json` gets the defaults of the new commands once (only triggers not bound yet).
+    private func migrateBindings(_ bindings: KeyBindings) -> KeyBindings {
+        guard settings.keyBindingsRevision < KeyBindings.currentRevision else { return bindings }
+        let migrated = bindings.addingDefaults(for: [.menu, .channelUp, .channelDown])
+        do {
+            try bindingsFile?.save(migrated.bindings)
+            settings.keyBindingsRevision = KeyBindings.currentRevision
+            try settingsFile?.save(settings)
+            Self.logger.info("Added default buttons for Menu and Channel Up/Down")
+        } catch {
+            Self.logger.error("Failed to save key bindings: \(error.localizedDescription, privacy: .public)")
+        }
+        return migrated
     }
 
     /// M5: the phone remote server, its coordinator and the volume routes (D24, D25).
@@ -199,6 +230,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             status.connectedCount = phoneRemote.connectedCount
         }
         status.canControlOtherApps = SyntheticInput.canPost
+        return status
+    }
+
+    /// What Settings → Plex shows (L15). Never tokens.
+    private func plexSettingsStatus() -> PlexSettingsStatus {
+        guard let plex else { return PlexSettingsStatus() }
+        var status = PlexSettingsStatus()
+        status.isSignedIn = plex.isSignedIn
+        status.linkCode = plex.linkCode
+        status.linkURL = plex.linkCode.map(PlexAPI.linkURL(code:))
+        status.serverName = plex.serverName
+        status.servers = plex.servers.map { server in
+            PlexSettingsStatus.Server(id: server.clientIdentifier, name: server.name,
+                                      detail: server.owned == false ? "Shared with you" : "Yours")
+        }
+        status.statusLine = plex.statusLine
+        status.itemCount = plex.continueWatching.count
+        status.hasNoServer = plex.status == .noServer && plex.servers.isEmpty
+        status.needsServerChoice = plex.status == .noServer && plex.servers.count > 1
         return status
     }
 
@@ -353,6 +403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         windowController?.hidesCursor = new.cursorAutoHide
+        liveTV?.channelUpMovesUpList = new.channelUpMovesUpList
         if new.phoneRemoteEnabled != old.phoneRemoteEnabled {
             if new.phoneRemoteEnabled {
                 startPhoneRemote()
@@ -362,6 +413,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if kiosk && new.launchAtLogin != old.launchAtLogin {
             LoginItem.apply(enabled: new.launchAtLogin)
+        }
+    }
+
+    /// M7: a Remote Buttons edit applies at once everywhere (`InputRouter.bindings` is read on every event).
+    private func applyBindings(_ bindings: KeyBindings) {
+        inputRouter?.bindings = bindings
+        do {
+            try bindingsFile?.save(bindings.bindings)
+        } catch {
+            Self.logger.error("Failed to save key bindings: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -477,7 +538,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             phoneRemoteStatus: { [weak self] in self?.phoneRemoteSettingsStatus() ?? PhoneRemoteSettingsStatus() },
             setPhonePairing: { [weak self] in self?.phoneRemote?.setPairing($0) },
-            forgetAllPhones: { [weak self] in self?.phoneRemote?.forgetAll() }
+            forgetAllPhones: { [weak self] in self?.phoneRemote?.forgetAll() },
+            applyBindings: { [weak self] in self?.applyBindings($0) },
+            setButtonLearning: { [weak self] handler in self?.inputRouter?.captureHandler = handler },
+            tileArtFileName: { [weak self] in self?.router?.tileArt.customFileName(for: $0) },
+            plexStatus: { [weak self] in self?.plexSettingsStatus() ?? PlexSettingsStatus() },
+            setPlexLinking: { [weak self] in self?.plex?.setLinking($0) },
+            choosePlexServer: { [weak self] id in
+                guard let plex = self?.plex else { return }
+                Task { await plex.chooseServer(id: id) }
+            },
+            signOutOfPlex: { [weak self] in self?.plex?.signOut() },
+            refreshPlex: { [weak self] in self?.plex?.startRefresh(maxAge: .seconds(120)) },
+            webAppInfo: { [launcher] in launcher.webAppInfo(for: $0) },
+            pasteURL: { ClipboardURL.parse(NSPasteboard.general.string(forType: .string)) },
+            findPictures: {
+                await Task.detached { PictureFinder.find(in: PictureFinder.defaultFolders) }.value
+            },
+            setTilePicture: { [weak self] id, url in
+                do {
+                    try self?.router?.tileArt.setPicture(from: url, for: id)
+                    return nil
+                } catch {
+                    Self.logger.error("Can't copy tile art: \(error.localizedDescription, privacy: .public)")
+                    return "Couldn't copy that picture"
+                }
+            },
+            removeTilePicture: { [weak self] in self?.router?.tileArt.removePicture(for: $0) }
         )
     }
 

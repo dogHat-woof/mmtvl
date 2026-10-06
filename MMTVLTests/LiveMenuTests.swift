@@ -88,4 +88,26 @@ struct LiveMenuTests {
         #expect(!menu.hasHiddenAbove && !menu.hasHiddenBelow)
         #expect(!menu.isWide)
     }
+
+    // MARK: M7 L5
+
+    @Test func menuCloses() {
+        var menu = menu()
+        #expect(menu.handle(.menu) == .close)
+    }
+
+    @Test func channelUpDownPageByEight() {
+        let items = (0..<20).map { LiveMenu.Item(id: "i\($0)", title: "\($0)", action: .watch("id:\($0)")) }
+        var menu = LiveMenu(title: "Long", items: items)
+        #expect(menu.handle(.channelDown) == .none)
+        #expect(menu.focusedIndex == 8)
+        #expect(menu.visibleRange.contains(8))
+        _ = menu.handle(.channelDown)
+        _ = menu.handle(.channelDown)
+        #expect(menu.focusedIndex == 19)
+        _ = menu.handle(.channelUp)
+        #expect(menu.focusedIndex == 11)
+        #expect(menu.visibleRange.contains(11))
+    }
+
 }

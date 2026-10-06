@@ -95,9 +95,14 @@ final class IPTVLibrary {
     /// Playlist channels with guide data.
     var matchedChannelCount: Int { epgMatches.count }
 
+    /// Also moves it to the front of `recentChannelIDs` (M7 L13).
     func rememberChannel(_ id: Channel.ID) {
-        guard state.lastChannelID != id else { return }
-        updateState { $0.lastChannelID = id }
+        let recents = Array(([id] + state.recentChannelIDs.filter { $0 != id }).prefix(IPTVState.maxRecentChannels))
+        guard state.lastChannelID != id || state.recentChannelIDs != recents else { return }
+        updateState {
+            $0.lastChannelID = id
+            $0.recentChannelIDs = recents
+        }
     }
 
     func rememberGroup(_ group: String) {

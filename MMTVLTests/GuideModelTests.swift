@@ -260,4 +260,51 @@ struct GuideModelTests {
         #expect(model.handle(.back, now: now) == .close)
         #expect(model.handle(.playPause, now: now) == .none)
     }
+
+    // MARK: M7 L5
+
+    @Test func menuOpensTheChannelMenuFromTheGridAndTheChannelCell() {
+        var model = model(group: "Live", focused: "id:c3")
+        #expect(model.handle(.menu, now: now) == .channelMenu("id:c3"))
+        model = self.model(group: "Live", focused: "id:c1")
+        _ = model.handle(.left, now: now)          // A → the channel cell
+        #expect(model.focus == .channel)
+        #expect(model.handle(.menu, now: now) == .channelMenu("id:c1"))
+    }
+
+    @Test func menuInTheGroupsColumnDoesNothing() {
+        var model = model(group: "Live", focused: "id:c1")
+        _ = model.handle(.left, now: now)
+        _ = model.handle(.left, now: now)
+        #expect(model.handle(.menu, now: now) == .none)
+    }
+
+    @Test func channelUpDownPageTheRows() {
+        var model = GuideModel(allChannels: channels, group: "All Channels", focusedChannelID: "id:c2", now: now)
+        #expect(model.handle(.channelDown, now: now) == .none)
+        #expect(model.focusedChannel?.id == "id:c8")
+        #expect(model.firstVisibleRow == 2)
+        _ = model.handle(.channelDown, now: now)
+        #expect(model.focusedChannel?.id == "id:c10")
+        _ = model.handle(.channelUp, now: now)
+        #expect(model.focusedChannel?.id == "id:c4")
+        _ = model.handle(.channelUp, now: now)
+        #expect(model.focusedChannel?.id == "id:c1")
+        #expect(model.firstVisibleRow == 0)
+    }
+
+    @Test func channelUpDownPageTheGroups() {
+        var model = model(group: "Live", focused: "id:c1")
+        _ = model.handle(.left, now: now)
+        _ = model.handle(.left, now: now)
+        guard case .groups = model.focus else {
+            Issue.record("Not in the groups column")
+            return
+        }
+        _ = model.handle(.channelDown, now: now)
+        #expect(model.focus == .groups(model.groups.count - 1))
+        _ = model.handle(.channelUp, now: now)
+        #expect(model.focus == .groups(0))
+    }
+
 }

@@ -39,7 +39,7 @@ struct AccessibilityOnboardingView: View {
             .foregroundStyle(Theme.primaryText)
             .padding(.horizontal, 48)
             .padding(.vertical, 20)
-            .background(Capsule().fill(Theme.tileFill))
+            .glassPanel(in: Capsule())
             .overlay {
                 if isFocused {
                     Capsule().strokeBorder(Theme.focusHighlight, lineWidth: Theme.focusHighlightWidth)
