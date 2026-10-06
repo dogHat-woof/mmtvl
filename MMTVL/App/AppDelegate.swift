@@ -28,6 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var volume: VolumeController?
     private var appActivationObserver: NSObjectProtocol?
     private var castReceiver: CastReceiver?
+    /// M7b L15: the last AirPlay probe; refreshed when Settings → Casting opens.
+    private var airPlayState: AirPlayReceiverState = .unknown
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !AppEnvironment.isRunningTests else { return }
@@ -265,6 +267,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         status.canControlOtherApps = SyntheticInput.canPost
         return status
+    }
+
+    /// What Settings → Casting shows (M7b L14, L16).
+    private func castingSettingsStatus() -> CastingSettingsStatus {
+        var status = CastingSettingsStatus()
+        if settings.youtubeCastEnabled {
+            status.youtube = switch castReceiver?.state ?? .off {
+            case .off: .off
+            case .starting: .starting
+            case .ready: .ready
+            case .failed(let message): .failed(message)
+            }
+        }
+        status.airPlay = airPlayState
+        let plexHTPC = "tv.plex.htpc"
+        if !NSRunningApplication.runningApplications(withBundleIdentifier: plexHTPC).isEmpty {
+            status.plexHTPC = .running
+        } else if NSWorkspace.shared.urlForApplication(withBundleIdentifier: plexHTPC) != nil {
+            status.plexHTPC = .notRunning
+        }
+        return status
+    }
+
+    private func refreshCasting() {
+        Task {
+            airPlayState = await AirPlayReceiverProbe.check()
+            router?.settings.refreshStatus()
+        }
     }
 
     /// What Settings → Plex shows (L15). Never tokens.
@@ -606,7 +636,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return "Couldn't copy that picture"
                 }
             },
-            removeTilePicture: { [weak self] in self?.router?.tileArt.removePicture(for: $0) }
+            removeTilePicture: { [weak self] in self?.router?.tileArt.removePicture(for: $0) },
+            castingStatus: { [weak self] in self?.castingSettingsStatus() ?? CastingSettingsStatus() },
+            refreshCasting: { [weak self] in self?.refreshCasting() },
+            openAirPlaySettings: {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.AirDrop-Handoff-Settings.extension") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
         )
     }
 

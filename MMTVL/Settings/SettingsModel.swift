@@ -29,6 +29,8 @@ final class SettingsModel {
     private(set) var phoneRemote: PhoneRemoteSettingsStatus
     /// M7: Settings → Plex.
     private(set) var plex: PlexSettingsStatus
+    /// M7b: Settings → Casting.
+    private(set) var casting: CastingSettingsStatus
     /// M7: `key-bindings.json`, edited on the Remote Buttons pages.
     private(set) var bindings: KeyBindings
     /// M7 L25: pictures for the Tile Art page; nil while looking.
@@ -68,6 +70,7 @@ final class SettingsModel {
         iptv = environment.iptvStatus()
         phoneRemote = environment.phoneRemoteStatus()
         plex = environment.plexStatus()
+        casting = environment.castingStatus()
     }
 
     var page: SettingsPage { stack[stack.count - 1].page }
@@ -112,6 +115,7 @@ final class SettingsModel {
         iptv = environment.iptvStatus()
         phoneRemote = environment.phoneRemoteStatus()
         plex = environment.plexStatus()
+        casting = environment.castingStatus()
         followPlexSignIn()
     }
 
@@ -277,6 +281,8 @@ final class SettingsModel {
             environment.choosePlexServer(id)
             if page == .plexServers { pop() }
             refreshStatus()
+        case .openAirPlaySettings:
+            environment.openAirPlaySettings()
         case .signOutOfPlex:
             environment.signOutOfPlex()
             pop()
@@ -387,6 +393,7 @@ final class SettingsModel {
         syncLearning()
         syncPlexLink()
         if page == .plex { environment.refreshPlex() }
+        if page == .casting { environment.refreshCasting() }
     }
 
     private func pop() {
