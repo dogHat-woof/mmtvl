@@ -2,7 +2,7 @@ import Foundation
 
 nonisolated enum SettingsPage: Hashable, Sendable {
     case root, homeScreen, tile(id: String), addTile, confirmRestoreDefaults, confirmClearYouTube
-    case liveTV, confirmRemoveIPTV
+    case liveTV, confirmRemoveIPTV, guideSource(id: String), iptvGroups, iptvHiddenChannels
     case phoneRemote, pairPhone, confirmForgetPhones
 }
 
@@ -19,11 +19,41 @@ nonisolated struct IPTVSettingsStatus: Equatable, Sendable {
     var channelCount = 0
     /// "Loading…", "Updated 10:42 PM", "Failed: Server error (HTTP 403)"
     var playlistLine: String = ""
-    var guideKind: GuideKind = .none
-    /// "1,234 programmes · Updated 10:43 PM", "Loading…", "Failed: …", "No guide"
-    var guideLine: String = ""
+    /// The guides in use, in priority order (M6b L1).
+    var guideSources: [GuideSourceStatus] = []
+    /// Pasted guides; the add row disappears at `IPTVLibrary.maxGuideSources`.
+    var customGuideCount = 0
+    /// Playlist channels with guide data.
+    var matchedChannelCount = 0
+    /// Playlist groups, in playlist order (M6b L5).
+    var groups: [GroupStatus] = []
+    /// Hidden playlist channels, in playlist order.
+    var hiddenChannels: [HiddenChannelStatus] = []
 
-    enum GuideKind: Equatable, Sendable { case none, playlist(String), custom(String) }
+    struct GuideSourceStatus: Identifiable, Equatable, Sendable {
+        /// GuideSource.id.
+        var id: String
+        /// GuideSource.label: host, plus the file name when it looks like a guide file (M6b L2).
+        var label: String
+        /// "1,234 programmes · 40 channels · Updated 10:43 PM", "Loading…", "Failed: …", "Not loaded yet"
+        var line: String
+        var isFromPlaylist: Bool
+    }
+
+    struct GroupStatus: Identifiable, Equatable, Sendable {
+        var name: String
+        var channelCount: Int
+        var isHidden: Bool
+        var id: String { name }
+    }
+
+    struct HiddenChannelStatus: Identifiable, Equatable, Sendable {
+        /// Channel.ID.
+        var id: String
+        var number: Int
+        var name: String
+        var group: String
+    }
 }
 
 /// What the Phone Remote rows show (M5). Built by the app from `RemoteServer` and `PhoneRemote`.
@@ -81,7 +111,10 @@ nonisolated enum SettingsAction: Hashable, Sendable {
     case reloadYouTube
     case clearYouTubeData
     case pasteIPTVURL(IPTVURLKind)
-    case useIPTVPlaylistGuide
+    case moveGuideSource(id: String, by: Int)
+    case removeGuideSource(id: String)
+    case toggleIPTVGroupHidden(String)
+    case unhideIPTVChannel(id: String)
     case refreshIPTV
     case removeIPTVSource
     case forgetAllPhones

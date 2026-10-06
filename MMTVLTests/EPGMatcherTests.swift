@@ -82,4 +82,47 @@ struct EPGMatcherTests {
         #expect(result[redZone.id] == nil)
         #expect(result[cbs.id] == nil)
     }
+
+    // MARK: - Several guides (M6b L3)
+
+    private func source(_ id: String, _ channels: EPGChannel...) -> EPGSourceChannels {
+        EPGSourceChannels(sourceID: id, channels: channels)
+    }
+
+    @Test func emptyOverrideMeansNoGuide() {
+        let nba = channel("NBA TV", tvgID: "nbatv.us")
+        #expect(EPGMatcher.match([nba], to: [epg("nbatv.us", "NBA TV")], overrides: ["NBA TV": ""]).isEmpty)
+        #expect(EPGMatcher.match([nba], to: [epg("nbatv.us", "NBA TV")], overrides: ["NBATV.us": ""]).isEmpty)
+    }
+
+    @Test func idInALowerGuideBeatsANameInAHigherOne() {
+        let nba = channel("NBA TV", tvgID: "nbatv.us")
+        let result = EPGMatcher.match([nba], sources: [source("one", epg("NBA.TV.HD.us2", "NBA TV")),
+                                                       source("two", epg("nbatv.us", "Something"))])
+        #expect(result[nba.id] == EPGRef(sourceID: "two", epgID: "nbatv.us"))
+    }
+
+    @Test func sameRuleHigherGuideWins() {
+        let espn = channel("ESPN")
+        let byName = EPGMatcher.match([espn], sources: [source("one", epg("ESPN.one", "ESPN")), source("two", epg("ESPN.two", "ESPN"))])
+        #expect(byName[espn.id] == EPGRef(sourceID: "one", epgID: "espn.one"))
+
+        let nba = channel("NBA TV", tvgID: "nbatv.us")
+        let byID = EPGMatcher.match([nba], sources: [source("one", epg("nbatv.us")), source("two", epg("nbatv.us"))])
+        #expect(byID[nba.id] == EPGRef(sourceID: "one", epgID: "nbatv.us"))
+    }
+
+    @Test func overrideTargetInTheSecondGuide() {
+        let redZone = channel("Red Zone")
+        let result = EPGMatcher.match([redZone], sources: [source("one", epg("ESPN.one", "ESPN")),
+                                                           source("two", epg("NFL.RedZone.us", "NFL RedZone"))],
+                                      overrides: ["Red Zone": "NFL.RedZone.us"])
+        #expect(result[redZone.id] == EPGRef(sourceID: "two", epgID: "nfl.redzone.us"))
+    }
+
+    @Test func tokens() {
+        #expect(EPGMatcher.tokens("NBC Sports Bay Area+ HD") == ["nbc", "sports", "bay", "area", "plus"])
+        #expect(EPGMatcher.tokens("NBA TV TV") == ["nba", "tv"])
+        #expect(EPGMatcher.normalize("NBA TV TV") == "nbatvtv")
+    }
 }

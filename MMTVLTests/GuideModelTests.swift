@@ -53,6 +53,44 @@ struct GuideModelTests {
         #expect(model.firstVisibleRow + GuideModel.visibleRows > model.row)
     }
 
+    @Test func favoritesAreTheDefaultGroup() {
+        let lineup = ChannelLineup(channels: channels, preferences: ChannelPreferences(favorites: ["id:c9", "id:c2"]))
+        let model = GuideModel(lineup: lineup, group: nil, focusedChannelID: "id:c2", now: now)
+        #expect(model.groups == ["Favorites", "All Channels", "Live", "NBA", "NHL"])
+        #expect(model.selectedGroup == "Favorites")
+        #expect(model.channels.map(\.id) == ["id:c9", "id:c2"])
+        #expect(model.row == 1)
+    }
+
+    @Test func focusedChannelOutsideFavoritesOpensAllChannels() {
+        let lineup = ChannelLineup(channels: channels, preferences: ChannelPreferences(favorites: ["id:c9"]))
+        let model = GuideModel(lineup: lineup, group: nil, focusedChannelID: "id:c4", now: now)
+        #expect(model.selectedGroup == "All Channels")
+        #expect(model.focusedChannel?.id == "id:c4")
+
+        // With one visible group there is no All Channels: its own group.
+        let oneGroup = ChannelLineup(channels: channels,
+                                     preferences: ChannelPreferences(favorites: ["id:c1"], hiddenGroups: ["NBA", "NHL"]))
+        let other = GuideModel(lineup: oneGroup, group: nil, focusedChannelID: "id:c4", now: now)
+        #expect(other.groups == ["Favorites", "Live"])
+        #expect(other.selectedGroup == "Live")
+        #expect(other.focusedChannel?.id == "id:c4")
+    }
+
+    @Test func setLineupThatDropsTheFocusedChannelKeepsTheRow() {
+        var last = model(group: "Live", focused: "id:c6")
+        #expect(last.row == 5)
+        last.setLineup(ChannelLineup(channels: channels, preferences: ChannelPreferences(hiddenChannels: ["id:c6"])))
+        #expect(last.selectedGroup == "Live")
+        #expect(last.row == 4)
+        #expect(last.focusedChannel?.id == "id:c5")
+
+        var middle = model(group: "Live", focused: "id:c3")
+        middle.setLineup(ChannelLineup(channels: channels, preferences: ChannelPreferences(hiddenChannels: ["id:c3"])))
+        #expect(middle.row == 2)
+        #expect(middle.focusedChannel?.id == "id:c4")
+    }
+
     @Test func upDownClampAndScroll() {
         var model = model(group: "All Channels")
         _ = model.handle(.up, now: now)

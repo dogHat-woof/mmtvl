@@ -10,6 +10,9 @@ extension SettingsModel {
         case .confirmClearYouTube: confirmClearYouTubeSections
         case .liveTV: liveTVSections
         case .confirmRemoveIPTV: confirmRemoveIPTVSections
+        case .guideSource(let id): guideSourceSections(id: id)
+        case .iptvGroups: iptvGroupsSections
+        case .iptvHiddenChannels: iptvHiddenChannelsSections
         case .phoneRemote: phoneRemoteSections
         case .pairPhone: pairPhoneSections
         case .confirmForgetPhones: confirmForgetPhonesSections
@@ -26,6 +29,9 @@ extension SettingsModel {
         case .confirmClearYouTube: "Sign Out of YouTube?"
         case .liveTV: "Live TV"
         case .confirmRemoveIPTV: "Remove Live TV Source?"
+        case .guideSource(let id): guideSource(id: id)?.label ?? "Guide"
+        case .iptvGroups: "Groups"
+        case .iptvHiddenChannels: "Hidden Channels"
         case .phoneRemote: "Phone Remote"
         case .pairPhone: "Pair a Phone"
         case .confirmForgetPhones: "Forget All Phones?"
@@ -42,6 +48,9 @@ extension SettingsModel {
         case .confirmClearYouTube: .symbol("play.rectangle")
         case .liveTV: .symbol("tv")
         case .confirmRemoveIPTV: .symbol("tv.slash")
+        case .guideSource: .symbol("list.bullet.rectangle")
+        case .iptvGroups: .symbol("folder")
+        case .iptvHiddenChannels: .symbol("eye.slash")
         case .phoneRemote: .symbol("iphone")
         case .pairPhone: phoneRemote.pairingURL.map(RowImage.qrCode) ?? .symbol("iphone")
         case .confirmForgetPhones: .symbol("iphone.slash")
@@ -50,7 +59,8 @@ extension SettingsModel {
 
     var hint: String {
         switch page {
-        case .root, .tile, .liveTV, .phoneRemote: "Select: choose · Back: return"
+        case .root, .tile, .liveTV, .phoneRemote, .guideSource, .iptvGroups, .iptvHiddenChannels:
+            "Select: choose · Back: return"
         case .pairPhone: "Back: done"
         case .homeScreen:
             movingTileID == nil ? "Select: edit tile · Back: return" : "Up/Down: move · Select or Back: done"
@@ -237,39 +247,97 @@ extension SettingsModel {
         }
         playlistRows.append(SettingsRow(id: "iptv.playlist.paste",
                                         title: iptv.hasPlaylist ? "Replace with Clipboard URL" : "Paste Playlist URL",
-                                        detail: pasteMessage ?? "Copy the M3U address on this Mac or your iPhone first",
+                                        detail: pasteMessage(for: .playlist) ?? "Copy the M3U address on this Mac or your iPhone first",
                                         action: .pasteIPTVURL(.playlist)))
         var sections = [SettingsSection(id: "playlist", title: "Playlist", rows: playlistRows)]
         guard iptv.hasPlaylist else { return sections }
 
-        let guideTitle: String
-        let guideDetail: String
-        switch iptv.guideKind {
-        case .none:
-            guideTitle = "No guide"
-            guideDetail = "Paste an XMLTV guide URL to see what's on"
-        case .playlist(let host):
-            guideTitle = "From the playlist: \(host)"
-            guideDetail = iptv.guideLine
-        case .custom(let host):
-            guideTitle = "Custom: \(host)"
-            guideDetail = iptv.guideLine
-        }
-        var guideRows = [
-            SettingsRow(id: "iptv.guide.info", title: guideTitle, detail: guideDetail),
-            SettingsRow(id: "iptv.guide.paste", title: "Paste Guide URL", action: .pasteIPTVURL(.guide)),
-        ]
-        if case .custom = iptv.guideKind {
-            guideRows.append(SettingsRow(id: "iptv.guide.usePlaylist", title: "Use the Playlist's Guide",
-                                         action: .useIPTVPlaylistGuide))
-        }
-        sections.append(SettingsSection(id: "guide", title: "Guide", rows: guideRows))
+        sections.append(guidesSection)
+        sections.append(channelsSection)
         sections.append(SettingsSection(id: "manage", rows: [
             SettingsRow(id: "iptv.refresh", title: "Refresh Now", action: .refreshIPTV),
             SettingsRow(id: "iptv.remove", title: "Remove Live TV Source", showsDisclosure: true,
                         action: .push(.confirmRemoveIPTV)),
         ], footer: "Addresses are kept in the Keychain. The first paste may ask for permission; choose Allow."))
         return sections
+    }
+
+    private func pasteMessage(for kind: IPTVURLKind) -> String? {
+        pasteMessageKind == kind ? pasteMessage : nil
+    }
+
+    private func guideSource(id: String) -> IPTVSettingsStatus.GuideSourceStatus? {
+        iptv.guideSources.first { $0.id == id }
+    }
+
+    /// M6b L1: the guides in priority order; pasted ones open their own page.
+    private var guidesSection: SettingsSection {
+        var rows = iptv.guideSources.enumerated().map { index, source in
+            SettingsRow(id: "iptv.guide.\(source.id)", title: source.label,
+                        value: source.isFromPlaylist ? "From Playlist" : "\(index + 1)", detail: source.line,
+                        showsDisclosure: !source.isFromPlaylist,
+                        action: source.isFromPlaylist ? nil : .push(.guideSource(id: source.id)))
+        }
+        if rows.isEmpty {
+            rows.append(SettingsRow(id: "iptv.guide.none", title: "No guide",
+                                    detail: "Copy an XMLTV guide address, then add it below"))
+        }
+        if iptv.customGuideCount < IPTVLibrary.maxGuideSources {
+            rows.append(SettingsRow(id: "iptv.guide.add", title: "Add Guide from Clipboard",
+                                    detail: pasteMessage(for: .guide) ?? "Copy an XMLTV address on this Mac or your iPhone first",
+                                    action: .pasteIPTVURL(.guide)))
+        }
+        return SettingsSection(id: "guides", title: "Guides", rows: rows,
+                               footer: "Guide data for \(iptv.matchedChannelCount) of \(iptv.channelCount) channels. A channel uses the first guide in this list that has it.")
+    }
+
+    /// M6b L5: groups and hidden channels; favorites and single channels are managed from the guide.
+    private var channelsSection: SettingsSection {
+        let hiddenGroups = iptv.groups.filter(\.isHidden).count
+        return SettingsSection(id: "channels", title: "Channels", rows: [
+            SettingsRow(id: "iptv.groups", title: "Groups", value: hiddenGroups == 0 ? "All Shown" : "\(hiddenGroups) Hidden",
+                        showsDisclosure: true, action: .push(.iptvGroups)),
+            SettingsRow(id: "iptv.hiddenChannels", title: "Hidden Channels",
+                        value: iptv.hiddenChannels.isEmpty ? "None" : "\(iptv.hiddenChannels.count)",
+                        showsDisclosure: true, action: .push(.iptvHiddenChannels)),
+        ], footer: "To favorite, hide or match one channel: in the guide, press Left on the programme airing now, then Select.")
+    }
+
+    private var iptvGroupsSections: [SettingsSection] {
+        let rows = iptv.groups.map { group in
+            SettingsRow(id: "group.\(group.name)", title: group.name, value: group.isHidden ? "Hidden" : "Shown",
+                        detail: "\(group.channelCount) channels", isDimmed: group.isHidden,
+                        action: .toggleIPTVGroupHidden(group.name))
+        }
+        return [SettingsSection(id: "groups", rows: rows,
+                                footer: "Hidden groups and their channels don't show in the guide or when changing channels.")]
+    }
+
+    private var iptvHiddenChannelsSections: [SettingsSection] {
+        var rows = iptv.hiddenChannels.map { channel in
+            SettingsRow(id: "hidden.\(channel.id)", title: "\(channel.number)  \(channel.name)", value: "Show",
+                        detail: channel.group, action: .unhideIPTVChannel(id: channel.id))
+        }
+        if rows.isEmpty {
+            rows.append(SettingsRow(id: "hidden.none", title: "No hidden channels"))
+        }
+        return [SettingsSection(id: "hiddenChannels", rows: rows, footer: "Select a channel to show it again.")]
+    }
+
+    /// M6b: one pasted guide.
+    private func guideSourceSections(id: String) -> [SettingsSection] {
+        let pasted = iptv.guideSources.filter { !$0.isFromPlaylist }
+        guard let index = pasted.firstIndex(where: { $0.id == id }) else { return [] }
+        var rows = [SettingsRow(id: "guideSource.status", title: "Status", detail: pasted[index].line)]
+        if index > 0 {
+            rows.append(SettingsRow(id: "guideSource.moveUp", title: "Move Up", action: .moveGuideSource(id: id, by: -1)))
+        }
+        if index < pasted.count - 1 {
+            rows.append(SettingsRow(id: "guideSource.moveDown", title: "Move Down", action: .moveGuideSource(id: id, by: 1)))
+        }
+        rows.append(SettingsRow(id: "guideSource.remove", title: "Remove Guide", action: .removeGuideSource(id: id)))
+        return [SettingsSection(id: "guideSource", rows: rows,
+                                footer: "When two guides have the same channel, the higher one wins.")]
     }
 
     private var confirmRemoveIPTVSections: [SettingsSection] {

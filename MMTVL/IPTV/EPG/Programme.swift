@@ -19,8 +19,11 @@ nonisolated struct Programme: Codable, Sendable, Hashable, Identifiable, Fetchab
     var category: String?
     /// onscreen text, else xmltv_ns as "S2 E1".
     var episode: String?
+    /// GuideSource.id. Last, with a default, so XMLTVParser's memberwise calls still compile.
+    var sourceID: String = ""
 
     enum Columns {
+        static let sourceID = Column(CodingKeys.sourceID)
         static let channelID = Column(CodingKeys.channelID)
         static let start = Column(CodingKeys.start)
         static let stop = Column(CodingKeys.stop)
@@ -37,4 +40,13 @@ nonisolated struct EPGChannel: Codable, Sendable, Hashable, FetchableRecord, Per
     var id: String
     /// display-names in file order (GRDB stores the array as JSON text).
     var names: [String]
+    /// GuideSource.id.
+    var sourceID: String = ""
+}
+
+/// One guide channel in one guide.
+nonisolated struct EPGRef: Hashable, Codable, Sendable {
+    var sourceID: String
+    /// Lowercased EPG channel id.
+    var epgID: String
 }

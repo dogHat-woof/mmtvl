@@ -10,9 +10,13 @@ struct EPGStoreTests {
                   stop: t0.addingTimeInterval(stopHours * 3600), title: title)
     }
 
+    private func ref(_ id: String, _ source: String = "s1") -> EPGRef {
+        EPGRef(sourceID: source, epgID: id)
+    }
+
     @Test func overlapQueryAndGrouping() async throws {
         let store = try EPGStore.inMemory()
-        try await store.replaceAll(channels: [EPGChannel(id: "a", names: ["A"]), EPGChannel(id: "b", names: ["B"])], programmes: [
+        try await store.replaceSource("s1", channels: [EPGChannel(id: "a", names: ["A"]), EPGChannel(id: "b", names: ["B"])], programmes: [
             programme("a", -1, 0, "ends at start"),
             programme("a", -0.5, 0.5, "spans start"),
             programme("a", 0.5, 1.5, "inside"),
@@ -21,36 +25,37 @@ struct EPGStoreTests {
             programme("c", 0, 1, "c not asked"),
         ])
 
-        let result = try await store.programmes(channelIDs: ["a", "b"], overlapping: DateInterval(start: t0, end: t0.addingTimeInterval(2 * 3600)))
-        #expect(result["a"]?.map(\.title) == ["spans start", "inside"])
-        #expect(result["b"]?.map(\.title) == ["b inside"])
-        #expect(result["c"] == nil)
+        let result = try await store.programmes(refs: [ref("a"), ref("b")], overlapping: DateInterval(start: t0, end: t0.addingTimeInterval(2 * 3600)))
+        #expect(result[ref("a")]?.map(\.title) == ["spans start", "inside"])
+        #expect(result[ref("b")]?.map(\.title) == ["b inside"])
+        #expect(result[ref("c")] == nil)
         #expect(try await store.programmeCount() == 6)
     }
 
-    @Test func replaceAllReplaces() async throws {
+    @Test func replaceSourceReplaces() async throws {
         let store = try EPGStore.inMemory()
-        try await store.replaceAll(channels: [EPGChannel(id: "a", names: ["A"])], programmes: [programme("a", 0, 1, "old")])
-        try await store.replaceAll(channels: [EPGChannel(id: "b", names: ["B"])], programmes: [programme("b", 0, 1, "new")])
-        #expect(try await store.channels().map(\.id) == ["b"])
+        try await store.replaceSource("s1", channels: [EPGChannel(id: "a", names: ["A"])], programmes: [programme("a", 0, 1, "old")])
+        try await store.replaceSource("s1", channels: [EPGChannel(id: "b", names: ["B"])], programmes: [programme("b", 0, 1, "new")])
+        #expect(try await store.channelsBySource()["s1"]?.map(\.id) == ["b"])
         #expect(try await store.programmeCount() == 1)
-        let result = try await store.programmes(channelIDs: ["a", "b"], overlapping: DateInterval(start: t0, duration: 3600))
-        #expect(result.keys.sorted() == ["b"])
+        let result = try await store.programmes(refs: [ref("a"), ref("b")], overlapping: DateInterval(start: t0, duration: 3600))
+        #expect(result.keys.map(\.epgID) == ["b"])
     }
 
     @Test func removeAll() async throws {
         let store = try EPGStore.inMemory()
-        try await store.replaceAll(channels: [EPGChannel(id: "a", names: ["A"])], programmes: [programme("a", 0, 1, "x")])
+        try await store.replaceSource("s1", channels: [EPGChannel(id: "a", names: ["A"])], programmes: [programme("a", 0, 1, "x")])
         try await store.removeAll()
-        #expect(try await store.channels().isEmpty)
+        #expect(try await store.channelsBySource().isEmpty)
         #expect(try await store.programmeCount() == 0)
     }
 
     @Test func channelsRoundTripWithNames() async throws {
         let store = try EPGStore.inMemory()
         let channels = [EPGChannel(id: "nfl.network.hd.us2", names: ["NFL Network HD", "NFL Network"]), EPGChannel(id: "x", names: [])]
-        try await store.replaceAll(channels: channels, programmes: [])
-        #expect(Set(try await store.channels()) == Set(channels))
+        try await store.replaceSource("s1", channels: channels, programmes: [])
+        let stored = try await store.channelsBySource()
+        #expect(Set(stored["s1"] ?? []) == Set(channels.map { var c = $0; c.sourceID = "s1"; return c }))
     }
 
     @Test func programmeFieldsRoundTrip() async throws {
@@ -60,11 +65,42 @@ struct EPGStoreTests {
         original.summary = "Desc"
         original.category = "Sports"
         original.episode = "S2 E1"
-        try await store.replaceAll(channels: [], programmes: [original])
-        let fetched = try #require(try await store.programmes(channelIDs: ["a"], overlapping: DateInterval(start: t0, duration: 60))["a"]?.first)
+        try await store.replaceSource("s1", channels: [], programmes: [original])
+        let fetched = try #require(try await store.programmes(refs: [ref("a")], overlapping: DateInterval(start: t0, duration: 60))[ref("a")]?.first)
         #expect(fetched.id != nil)
         original.id = fetched.id
+        original.sourceID = "s1"
         #expect(fetched == original)
+    }
+
+    @Test func sourcesStaySeparate() async throws {
+        let store = try EPGStore.inMemory()
+        try await store.replaceSource("s1", channels: [EPGChannel(id: "a", names: ["A"])],
+                                      programmes: [programme("a", 0, 1, "one a"), programme("b", 0, 1, "one b")])
+        try await store.replaceSource("s2", channels: [EPGChannel(id: "a", names: ["A2"]), EPGChannel(id: "c", names: ["C"])],
+                                      programmes: [programme("a", 0, 1, "two a")])
+        // Replacing one guide leaves the other's rows.
+        try await store.replaceSource("s1", channels: [EPGChannel(id: "a", names: ["A"])], programmes: [programme("a", 0, 1, "one a")])
+        #expect(try await store.programmeCounts() == ["s1": 1, "s2": 1])
+        #expect(try await store.programmeCount(for: ref("a", "s2")) == 1)
+        #expect(try await store.programmeCount(for: ref("b", "s1")) == 0)
+        let bySource = try await store.channelsBySource()
+        #expect(bySource["s1"]?.map(\.id) == ["a"])
+        #expect(Set(bySource["s2"]?.map(\.id) ?? []) == ["a", "c"])
+
+        // Same EPG id in two guides: only the pair asked for.
+        let window = DateInterval(start: t0, duration: 3600)
+        let one = try await store.programmes(refs: [ref("a", "s2")], overlapping: window)
+        #expect(Array(one.keys) == [ref("a", "s2")])
+        #expect(one[ref("a", "s2")]?.map(\.title) == ["two a"])
+        let both = try await store.programmes(refs: [ref("a", "s1"), ref("a", "s2")], overlapping: window)
+        #expect(both[ref("a", "s1")]?.map(\.title) == ["one a"])
+        #expect(both[ref("a", "s2")]?.map(\.title) == ["two a"])
+
+        try await store.removeSources(keeping: ["s2"])
+        #expect(try await store.programmeCounts() == ["s2": 1])
+        #expect(try await store.channelsBySource().keys.sorted() == ["s2"])
+        #expect(try await store.programmeCount() == 1)
     }
 
     @Test func openOnDisk() async throws {
@@ -72,7 +108,7 @@ struct EPGStoreTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appending(path: "guide.sqlite")
         let store = try EPGStore.open(at: url)
-        try await store.replaceAll(channels: [EPGChannel(id: "a", names: ["A"])], programmes: [programme("a", 0, 1, "x")])
+        try await store.replaceSource("s1", channels: [EPGChannel(id: "a", names: ["A"])], programmes: [programme("a", 0, 1, "x")])
         #expect(try await EPGStore.open(at: url).programmeCount() == 1)
 
         // A corrupt file is replaced.

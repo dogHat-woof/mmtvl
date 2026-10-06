@@ -26,21 +26,26 @@ nonisolated struct GuideModel: Equatable, Sendable {
     private(set) var focusTime: Date
     private(set) var firstVisibleRow = 0
     private(set) var timeline: GuideTimeline
-    private var allChannels: [Channel]
+    private var lineup: ChannelLineup
 
-    init(allChannels: [Channel], group: String?, focusedChannelID: Channel.ID?, now: Date) {
-        self.allChannels = allChannels
-        let groups = ChannelList.guideGroups(of: allChannels)
+    /// The default group (no remembered one) is the first: Favorites when it exists (M6b L11).
+    init(lineup: ChannelLineup, group: String?, focusedChannelID: Channel.ID?, now: Date) {
+        self.lineup = lineup
+        let groups = lineup.groups
         self.groups = groups
         groupIndex = group.flatMap { groups.firstIndex(of: $0) } ?? 0
         channels = []
         focusTime = now
         timeline = GuideTimeline(now: now)
         channels = channelsOfSelectedGroup()
-        if let focusedChannelID, !channels.contains(where: { $0.id == focusedChannelID }),
-           groups.first == ChannelList.allChannelsGroup {
-            groupIndex = 0
-            channels = channelsOfSelectedGroup()
+        if let focusedChannelID, !channels.contains(where: { $0.id == focusedChannelID }) {
+            // Show the focused channel: All Channels if there is one, else its own group.
+            let channelGroup = lineup.visibleChannels.first { $0.id == focusedChannelID }?.group
+            if let index = groups.firstIndex(of: ChannelList.allChannelsGroup)
+                ?? channelGroup.flatMap({ groups.firstIndex(of: $0) }) {
+                groupIndex = index
+                channels = channelsOfSelectedGroup()
+            }
         }
         row = focusedChannelID.flatMap { id in channels.firstIndex { $0.id == id } } ?? 0
         firstVisibleRow = min(row, max(0, channels.count - Self.visibleRows))
@@ -75,12 +80,21 @@ nonisolated struct GuideModel: Equatable, Sendable {
         }
     }
 
-    /// After a playlist refresh: keep group/row by id where possible.
+    /// Tests and callers without preferences.
+    init(allChannels: [Channel], group: String?, focusedChannelID: Channel.ID?, now: Date) {
+        self.init(lineup: ChannelLineup(channels: allChannels), group: group, focusedChannelID: focusedChannelID, now: now)
+    }
+
     mutating func setChannels(allChannels: [Channel]) {
+        setLineup(ChannelLineup(channels: allChannels))
+    }
+
+    /// After a playlist refresh or a favorites/hiding change: keep group/row by id where possible, else the row index.
+    mutating func setLineup(_ lineup: ChannelLineup) {
         let focusedID = focusedChannel?.id
         let group = selectedGroup
-        self.allChannels = allChannels
-        groups = ChannelList.guideGroups(of: allChannels)
+        self.lineup = lineup
+        groups = lineup.groups
         groupIndex = group.flatMap { groups.firstIndex(of: $0) } ?? 0
         channels = channelsOfSelectedGroup()
         row = focusedID.flatMap { id in channels.firstIndex { $0.id == id } } ?? min(row, max(0, channels.count - 1))
@@ -95,7 +109,7 @@ nonisolated struct GuideModel: Equatable, Sendable {
 
     private func channelsOfSelectedGroup() -> [Channel] {
         guard let group = selectedGroup else { return [] }
-        return ChannelList.channels(in: group, of: allChannels)
+        return lineup.channels(in: group)
     }
 
     private func focusedCellIndex(in cells: [Cell]) -> Int? {

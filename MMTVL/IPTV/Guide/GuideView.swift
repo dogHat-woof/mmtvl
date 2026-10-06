@@ -8,6 +8,8 @@ struct GuideView: View {
     let phase: PlayerState.Phase
     /// The Multiview picker guide (M6 L11): Select puts the channel in a window.
     var isPicking = false
+    /// Starred in the channel cell (M6b).
+    var favoriteIDs: Set<Channel.ID> = []
 
     var body: some View {
         TimelineView(.everyMinute) { context in
@@ -166,6 +168,11 @@ struct GuideView: View {
                 .font(Theme.guideChannelFont)
                 .foregroundStyle(isFocused ? Theme.focusedRowText : Theme.primaryText)
                 .lineLimit(1)
+            if favoriteIDs.contains(channel.id) {
+                Image(systemName: "star.fill")
+                    .font(.system(size: Theme.guideFavoriteSymbolSize))
+                    .foregroundStyle(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText)
+            }
             if channel.id == currentChannel?.id {
                 Image(systemName: "speaker.wave.2.fill")
                     .font(Theme.guideCellTimeFont)

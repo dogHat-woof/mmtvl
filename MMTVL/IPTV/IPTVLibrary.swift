@@ -3,14 +3,20 @@ import Foundation
 import Observation
 import os
 
-/// Live TV data: channels (in memory, D23), guide (SQLite, D8), refresh policy (L4, L5), guide source (L3).
+/// Live TV data: channels (in memory, D23), guides (SQLite, D8), refresh policy (L4, L5), guide sources (M6b L1).
 @Observable
 final class IPTVLibrary {
     enum Status: Equatable { case idle, loading, loaded(Date), failed(String) }
-    enum GuideSource: Equatable { case none, playlist(URL), custom(URL) }
+    enum AddGuideProblem: Equatable { case duplicate, full }
+    struct GuideSourceInfo: Equatable {
+        var status: Status = .idle
+        var programmeCount = 0
+        var matchedChannels = 0
+    }
 
     static let playlistStaleness: TimeInterval = 10 * 60
     static let guideStaleness: TimeInterval = 12 * 3600
+    static let maxGuideSources = 6
 
     private(set) var channels: [Channel] = []
     private(set) var playlistStatus: Status = .idle
@@ -20,39 +26,58 @@ final class IPTVLibrary {
     private(set) var guideRevision = 0
     /// Loaded from the state file at init; saved on every change.
     private(set) var state: IPTVState
-    @ObservationIgnored private(set) var epgIDs: [Channel.ID: String] = [:]
+    /// Favorites and hidden channels/groups (M6b L5). Loaded at init; saved on every change.
+    private(set) var preferences: ChannelPreferences
+    /// What Live TV lists show (M6b L11); recomputed when channels or preferences change.
+    private(set) var lineup = ChannelLineup(channels: [])
+    /// The guides in use, in priority order (M6b L1): the pasted ones, else the playlist's.
+    private(set) var guideSources: [GuideSource] = []
+    /// By GuideSource.id.
+    private(set) var guideSourceInfo: [String: GuideSourceInfo] = [:]
+    @ObservationIgnored private(set) var epgMatches: [Channel.ID: EPGRef] = [:]
     @ObservationIgnored private var playlistGuideURLs: [URL] = []
     @ObservationIgnored private var lastPlaylistFetch: Date?
+    /// Guide imports run one at a time; requests made meanwhile join the running loop (M6b L4).
+    @ObservationIgnored private var queuedSourceIDs: Set<String> = []
+    @ObservationIgnored private var isImportingGuide = false
     /// AppDelegate → settings.refreshStatus().
     @ObservationIgnored var onStatusChange: (() -> Void)?
 
     private var playlistURL: URL?
-    private var customGuideURL: URL?
+    private var customGuideURLs: [URL] = []
 
     @ObservationIgnored private let sources: IPTVSourceStore
     @ObservationIgnored private let store: EPGStore?
     @ObservationIgnored private let network: IPTVNetwork
     @ObservationIgnored private let stateFile: JSONConfigFile<IPTVState>
     @ObservationIgnored private let overridesFile: JSONConfigFile<[String: String]>
+    @ObservationIgnored private let preferencesFile: JSONConfigFile<ChannelPreferences>
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "IPTV")
 
     init(sources: IPTVSourceStore, store: EPGStore?, network: IPTVNetwork,
          stateFile: JSONConfigFile<IPTVState>, overridesFile: JSONConfigFile<[String: String]>,
-         now: @escaping () -> Date = Date.init) {
+         preferencesFile: JSONConfigFile<ChannelPreferences>, now: @escaping () -> Date = Date.init) {
         self.sources = sources
         self.store = store
         self.network = network
         self.stateFile = stateFile
         self.overridesFile = overridesFile
+        self.preferencesFile = preferencesFile
         self.now = now
         state = stateFile.load()
+        preferences = preferencesFile.load()
         playlistURL = sources.playlistURL()
-        customGuideURL = sources.guideURL()
+        customGuideURLs = sources.guideURLs()
+        updateGuideSources()
         if let store {
             Task { [weak self] in
-                let count = (try? await store.programmeCount()) ?? 0
-                self?.guideProgrammeCount = count
+                let counts = (try? await store.programmeCounts()) ?? [:]
+                guard let self else { return }
+                for (id, count) in counts {
+                    guideSourceInfo[id, default: GuideSourceInfo()].programmeCount = count
+                }
+                updateProgrammeCount()
             }
         } else {
             guideStatus = .failed("Guide storage unavailable")
@@ -64,19 +89,11 @@ final class IPTVLibrary {
     /// Host only (L2).
     var playlistHost: String? { playlistURL?.host() }
 
-    /// L3: a pasted guide URL wins, else the playlist's first url-tvg, else none.
-    var guideSource: GuideSource {
-        if let customGuideURL { return .custom(customGuideURL) }
-        if let first = playlistGuideURLs.first { return .playlist(first) }
-        return .none
-    }
+    /// Pasted guides (the playlist's don't count).
+    var customGuideCount: Int { customGuideURLs.count }
 
-    private var guideURL: URL? {
-        switch guideSource {
-        case .none: nil
-        case .playlist(let url), .custom(let url): url
-        }
-    }
+    /// Playlist channels with guide data.
+    var matchedChannelCount: Int { epgMatches.count }
 
     func rememberChannel(_ id: Channel.ID) {
         guard state.lastChannelID != id else { return }
@@ -104,6 +121,8 @@ final class IPTVLibrary {
             guard url == playlistURL else { return }    // replaced or removed meanwhile
             channels = ChannelList.make(from: playlist)
             playlistGuideURLs = playlist.guideURLs
+            updateGuideSources()
+            updateLineup()
             lastPlaylistFetch = now()
             logger.info("Loaded \(self.channels.count) channels from \(url.host() ?? "?", privacy: .public)")
             await rematch()
@@ -121,47 +140,77 @@ final class IPTVLibrary {
         }
     }
 
-    /// No-op while loading. Idle when there is no guide source. Skipped while there are no channels to match,
-    /// so an import never records an empty guide as fresh.
+    /// Every guide (Refresh Now). Idle when there is no guide.
     func refreshGuide() async {
-        guard guideStatus != .loading else { return }
+        guard store != nil, !guideSources.isEmpty else {
+            await refreshGuide(sourceIDs: [])
+            return
+        }
+        await refreshGuide(sourceIDs: Set(guideSources.map(\.id)))
+    }
+
+    /// Imports these guides one at a time (M6b L4). While a run is going, the ids join its queue and this returns.
+    /// Skipped while there are no channels to match (the queue is kept), so an import never records an empty
+    /// guide as fresh. A run ends by pruning guides no longer in use and one rematch.
+    func refreshGuide(sourceIDs ids: Set<String>) async {
         guard let store else {
             setGuideStatus(.failed("Guide storage unavailable"))
             return
         }
-        guard let url = guideURL else {
+        queuedSourceIDs.formUnion(ids)
+        guard !isImportingGuide else { return }
+        if guideSources.isEmpty {
+            queuedSourceIDs = []
+            await pruneUnusedGuides()
+            await rematch()
             setGuideStatus(.idle)
             return
         }
-        guard !channels.isEmpty else { return }
+        guard !channels.isEmpty, !queuedSourceIDs.isEmpty else { return }
+        isImportingGuide = true
         setGuideStatus(.loading)
-        do {
-            let outcome = try await GuideImporter.importGuide(
-                from: url, channels: channels, overrides: overridesFile.load(),
-                store: store, network: network, now: now())
-            guideProgrammeCount = outcome.programmeCount
-            updateState {
-                $0.lastGuideImport = now()
-                $0.lastGuideSourceHash = Self.hash(url)
+        var succeeded = 0
+        var firstFailure: String?
+        while let source = guideSources.first(where: { queuedSourceIDs.contains($0.id) }) {
+            queuedSourceIDs.remove(source.id)
+            guideSourceInfo[source.id, default: GuideSourceInfo()].status = .loading
+            onStatusChange?()
+            do {
+                let outcome = try await GuideImporter.importGuide(
+                    from: source.url, sourceID: source.id, channels: channels, overrides: overridesFile.load(),
+                    store: store, network: network, now: now())
+                guideSourceInfo[source.id, default: GuideSourceInfo()].programmeCount = outcome.programmeCount
+                guideSourceInfo[source.id, default: GuideSourceInfo()].status = .loaded(now())
+                updateState { $0.guideImports[source.id] = now() }
+                succeeded += 1
+            } catch {
+                logger.error("Guide from \(source.url.host() ?? "?", privacy: .public) failed: \(Self.redact(error.localizedDescription), privacy: .public)")
+                let message = Self.message(for: error)
+                guideSourceInfo[source.id, default: GuideSourceInfo()].status = .failed(message)
+                firstFailure = firstFailure ?? message
             }
-            await rematch()
+        }
+        queuedSourceIDs = []    // ids of guides removed meanwhile
+        await pruneUnusedGuides()
+        await rematch()
+        isImportingGuide = false
+        if let firstFailure, succeeded == 0 {
+            setGuideStatus(.failed(firstFailure))
+        } else {
             setGuideStatus(.loaded(now()))
-        } catch {
-            logger.error("Guide from \(url.host() ?? "?", privacy: .public) failed: \(Self.redact(error.localizedDescription), privacy: .public)")
-            setGuideStatus(.failed(Self.message(for: error)))
         }
     }
 
-    /// L5: when the last import is more than 12 hours old or the guide URL changed.
+    /// M6b L4: the guides whose last import is missing or more than 12 hours old.
     func refreshGuideIfStale() async {
-        guard let url = guideURL else { return }
-        let stale = state.lastGuideImport.map { now().timeIntervalSince($0) > Self.guideStaleness } ?? true
-        if stale || state.lastGuideSourceHash != Self.hash(url) {
-            await refreshGuide()
+        let stale = guideSources.filter { source in
+            state.guideImports[source.id].map { now().timeIntervalSince($0) > Self.guideStaleness } ?? true
         }
+        guard !stale.isEmpty else { return }
+        await refreshGuide(sourceIDs: Set(stale.map(\.id)))
     }
 
-    /// Playlist, then guide (forced).
+    /// Playlist, then every guide (forced).
     func refreshAll() async {
         await refreshPlaylist()
         await refreshGuide()
@@ -178,25 +227,58 @@ final class IPTVLibrary {
         logger.info("Playlist source set to \(url.host() ?? "?", privacy: .public)")
         playlistURL = url
         channels = []
-        epgIDs = [:]
+        epgMatches = [:]
         playlistGuideURLs = []
+        updateGuideSources()
+        updateLineup()
         lastPlaylistFetch = nil
         playlistStatus = .idle
         await refreshAll()
     }
 
-    /// nil = use the playlist's guide.
-    func setGuideURL(_ url: URL?) async {
-        do {
-            try sources.setGuideURL(url)
-        } catch {
-            logger.error("Failed to save the guide URL: \(error.localizedDescription, privacy: .public)")
-            setGuideStatus(.failed("Couldn't save the address"))
-            return
+    // MARK: - Guides (M6b L1)
+
+    /// Why a pasted guide can't be added, or nil.
+    func guideAddProblem(_ url: URL) -> AddGuideProblem? {
+        let id = Self.hash(url)
+        if customGuideURLs.contains(where: { Self.hash($0) == id }) { return .duplicate }
+        if customGuideURLs.count >= Self.maxGuideSources { return .full }
+        return nil
+    }
+
+    /// Appends a pasted guide and imports it. The first one replaces the playlist's guides.
+    func addGuideURL(_ url: URL) async {
+        guard guideAddProblem(url) == nil else { return }
+        guard saveCustomGuideURLs(customGuideURLs + [url]) else { return }
+        logger.info("Guide added from \(url.host() ?? "?", privacy: .public)")
+        await refreshGuide(sourceIDs: [Self.hash(url)])
+    }
+
+    /// Removes a pasted guide and its rows, and rematches (no download). Removing the last one brings back the
+    /// playlist's guides, imported if stale.
+    func removeGuideSource(_ id: String) async {
+        guard let url = customGuideURLs.first(where: { Self.hash($0) == id }) else { return }
+        guard saveCustomGuideURLs(customGuideURLs.filter { Self.hash($0) != id }) else { return }
+        logger.info("Guide from \(url.host() ?? "?", privacy: .public) removed")
+        updateState { $0.guideImports[id] = nil }
+        await pruneUnusedGuides()
+        await rematch()
+        onStatusChange?()
+        if customGuideURLs.isEmpty, !playlistGuideURLs.isEmpty {
+            await refreshGuideIfStale()
         }
-        logger.info("Guide source set to \(url?.host() ?? "the playlist's", privacy: .public)")
-        customGuideURL = url
-        await refreshGuide()
+    }
+
+    /// Moves a pasted guide up (−1) or down (+1) in priority, and rematches (no download).
+    func moveGuideSource(_ id: String, by step: Int) async {
+        guard let index = customGuideURLs.firstIndex(where: { Self.hash($0) == id }) else { return }
+        let target = min(max(index + step, 0), customGuideURLs.count - 1)
+        guard target != index else { return }
+        var urls = customGuideURLs
+        urls.insert(urls.remove(at: index), at: target)
+        guard saveCustomGuideURLs(urls) else { return }
+        await rematch()
+        onStatusChange?()
     }
 
     /// Keychain items, the stored guide, state and memory.
@@ -212,10 +294,14 @@ final class IPTVLibrary {
             logger.error("Failed to clear the guide: \(error.localizedDescription, privacy: .public)")
         }
         playlistURL = nil
-        customGuideURL = nil
+        customGuideURLs = []
         channels = []
-        epgIDs = [:]
+        epgMatches = [:]
         playlistGuideURLs = []
+        guideSources = []
+        guideSourceInfo = [:]
+        queuedSourceIDs = []
+        updateLineup()    // preferences are kept (M6b L5)
         lastPlaylistFetch = nil
         guideProgrammeCount = 0
         updateState { $0 = IPTVState() }
@@ -226,18 +312,150 @@ final class IPTVLibrary {
         onStatusChange?()
     }
 
+    // MARK: - Channels (M6b L5, L11)
+
+    func isFavorite(_ id: Channel.ID) -> Bool {
+        preferences.favorites.contains(id)
+    }
+
+    /// Adding appends (favorites are in the order added); removing deletes.
+    func setFavorite(_ id: Channel.ID, _ isFavorite: Bool) {
+        guard isFavorite != self.isFavorite(id) else { return }
+        updatePreferences { preferences in
+            if isFavorite {
+                preferences.favorites.append(id)
+            } else {
+                preferences.favorites.removeAll { $0 == id }
+            }
+        }
+    }
+
+    /// Swaps with the neighbor among the visible favorites; past either end does nothing.
+    func moveFavorite(_ id: Channel.ID, by step: Int) {
+        let visible = lineup.favorites.map(\.id)
+        guard let index = visible.firstIndex(of: id), visible.indices.contains(index + step),
+              let from = preferences.favorites.firstIndex(of: id),
+              let to = preferences.favorites.firstIndex(of: visible[index + step])
+        else { return }
+        updatePreferences { $0.favorites.swapAt(from, to) }
+    }
+
+    func setChannelHidden(_ id: Channel.ID, _ hidden: Bool) {
+        guard hidden != preferences.hiddenChannels.contains(id) else { return }
+        updatePreferences { preferences in
+            if hidden {
+                preferences.hiddenChannels.append(id)
+            } else {
+                preferences.hiddenChannels.removeAll { $0 == id }
+            }
+        }
+    }
+
+    func setGroupHidden(_ group: String, _ hidden: Bool) {
+        guard hidden != preferences.hiddenGroups.contains(group) else { return }
+        updatePreferences { preferences in
+            if hidden {
+                preferences.hiddenGroups.append(group)
+            } else {
+                preferences.hiddenGroups.removeAll { $0 == group }
+            }
+        }
+    }
+
+    // MARK: - Matching (M6b L6, L9)
+
+    /// The guide's short label ("guide-source_US2"), for a guide in use.
+    func guideLabel(for ref: EPGRef) -> String? {
+        guideSources.first { $0.id == ref.sourceID }?.shortLabel
+    }
+
+    /// What Match Guide offers for `channel`: its current choice and match, then ranked suggestions from every guide.
+    func guideMatchOptions(for channel: Channel) async -> GuideMatchOptions {
+        let bySource: [String: [EPGChannel]]
+        do {
+            bySource = try await store?.channelsBySource() ?? [:]
+        } catch {
+            logger.error("Reading guide channels failed: \(error.localizedDescription, privacy: .public)")
+            bySource = [:]
+        }
+        let sources = guideSources.map { EPGSourceChannels(sourceID: $0.id, channels: bySource[$0.id] ?? []) }
+        let suggestions = await EPGSuggester.suggest(for: channel, in: sources)
+
+        let current = epgMatches[channel.id]
+        let choice: GuideMatchChoice
+        switch Self.override(for: channel, in: overridesFile.load()) {
+        case "": choice = .none
+        case let target? where current != nil && current?.epgID == target.lowercased(): choice = .epg(current!)
+        default: choice = .automatic
+        }
+
+        let labels = Dictionary(guideSources.map { ($0.id, $0.shortLabel) }, uniquingKeysWith: { first, _ in first })
+        var candidates: [GuideCandidate] = []
+        if let current {
+            let epg = bySource[current.sourceID]?.first { $0.id.lowercased() == current.epgID }
+            candidates.append(GuideCandidate(ref: current, name: epg?.names.first ?? current.epgID,
+                                             sourceLabel: labels[current.sourceID] ?? ""))
+        }
+        for suggestion in suggestions where suggestion.ref != current {
+            candidates.append(GuideCandidate(ref: suggestion.ref, name: suggestion.name,
+                                             sourceLabel: labels[suggestion.ref.sourceID] ?? ""))
+        }
+        return GuideMatchOptions(choice: choice, current: current, candidates: candidates)
+    }
+
+    /// Writes the choice to epg-overrides.json under the channel's name (L6), then re-imports the chosen guide if
+    /// that channel's programmes weren't kept, else only rematches.
+    func setGuideMatch(_ choice: GuideMatchChoice, for channel: Channel) async {
+        var overrides = overridesFile.load()
+        let keys = Set([channel.name, channel.tvgID ?? ""].filter { !$0.isEmpty }.map { $0.lowercased() })
+        overrides = overrides.filter { !keys.contains($0.key.lowercased()) }
+        switch choice {
+        case .automatic: break
+        case .none: overrides[channel.name] = ""
+        case .epg(let ref): overrides[channel.name] = ref.epgID
+        }
+        do {
+            try overridesFile.save(overrides)
+        } catch {
+            logger.error("Failed to save \(IPTVState.overridesFileName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        if case .epg(let ref) = choice, await !hasProgrammes(ref) {
+            await refreshGuide(sourceIDs: [ref.sourceID])
+            return
+        }
+        await rematch()
+        onStatusChange?()
+        // Automatic after No Guide: the automatic match's programmes weren't kept at import.
+        if choice == .automatic, let ref = epgMatches[channel.id], await !hasProgrammes(ref) {
+            await refreshGuide(sourceIDs: [ref.sourceID])
+        }
+    }
+
+    private func hasProgrammes(_ ref: EPGRef) async -> Bool {
+        guard let store else { return true }
+        return ((try? await store.programmeCount(for: ref)) ?? 0) > 0
+    }
+
+    /// The override value for `channel` (by name, then tvg-id, ignoring case), as the matcher reads it.
+    private static func override(for channel: Channel, in overrides: [String: String]) -> String? {
+        var lower: [String: String] = [:]
+        for (key, value) in overrides { lower[key.lowercased()] = value }
+        return lower[channel.name.lowercased()] ?? channel.tvgID.flatMap { lower[$0.lowercased()] }
+    }
+
     // MARK: - Queries
 
     /// Keyed by Channel.ID; channels without an EPG match are absent.
     func programmes(for channels: [Channel], in interval: DateInterval) async -> [Channel.ID: [Programme]] {
         guard let store else { return [:] }
-        let pairs = channels.compactMap { channel in epgIDs[channel.id].map { (channel.id, $0) } }
+        let pairs = channels.compactMap { channel in epgMatches[channel.id].map { (channel.id, $0) } }
         guard !pairs.isEmpty else { return [:] }
         do {
-            let byEPG = try await store.programmes(channelIDs: Set(pairs.map(\.1)), overlapping: interval)
+            let byRef = try await store.programmes(refs: Set(pairs.map(\.1)), overlapping: interval)
             var result: [Channel.ID: [Programme]] = [:]
-            for (channelID, epgID) in pairs {
-                if let programmes = byEPG[epgID] { result[channelID] = programmes }
+            for (channelID, ref) in pairs {
+                if let programmes = byRef[ref] { result[channelID] = programmes }
             }
             return result
         } catch is CancellationError {
@@ -257,16 +475,82 @@ final class IPTVLibrary {
 
     // MARK: - Private
 
+    /// Matches every channel over every guide in use, in priority order (M6b L3).
     private func rematch() async {
-        let epgChannels: [EPGChannel]
+        let bySource: [String: [EPGChannel]]
         do {
-            epgChannels = try await store?.channels() ?? []
+            bySource = try await store?.channelsBySource() ?? [:]
         } catch {
             logger.error("Reading guide channels failed: \(error.localizedDescription, privacy: .public)")
-            epgChannels = []
+            bySource = [:]
         }
-        epgIDs = EPGMatcher.match(channels, to: epgChannels, overrides: overridesFile.load())
+        let sources = guideSources.map { EPGSourceChannels(sourceID: $0.id, channels: bySource[$0.id] ?? []) }
+        epgMatches = EPGMatcher.match(channels, sources: sources, overrides: overridesFile.load())
+        var matched: [String: Int] = [:]
+        for ref in epgMatches.values {
+            matched[ref.sourceID, default: 0] += 1
+        }
+        for source in guideSources {
+            guideSourceInfo[source.id, default: GuideSourceInfo()].matchedChannels = matched[source.id] ?? 0
+        }
         guideRevision += 1
+    }
+
+    /// Deletes the rows of guides no longer in use, and their bookkeeping.
+    private func pruneUnusedGuides() async {
+        let ids = Set(guideSources.map(\.id))
+        do {
+            try await store?.removeSources(keeping: ids)
+        } catch {
+            logger.error("Pruning old guides failed: \(error.localizedDescription, privacy: .public)")
+        }
+        guideSourceInfo = guideSourceInfo.filter { ids.contains($0.key) }
+        if state.guideImports.keys.contains(where: { !ids.contains($0) }) {
+            updateState { $0.guideImports = $0.guideImports.filter { ids.contains($0.key) } }
+        }
+        updateProgrammeCount()
+    }
+
+    /// Saves the pasted guides and recomputes the guides in use. Logs and returns false on a Keychain error.
+    private func saveCustomGuideURLs(_ urls: [URL]) -> Bool {
+        do {
+            try sources.setGuideURLs(urls)
+        } catch {
+            logger.error("Failed to save the guide URLs: \(error.localizedDescription, privacy: .public)")
+            setGuideStatus(.failed("Couldn't save the address"))
+            return false
+        }
+        customGuideURLs = urls
+        updateGuideSources()
+        return true
+    }
+
+    /// M6b L1: the pasted guides when there are any, else the playlist's.
+    private func updateGuideSources() {
+        guideSources = customGuideURLs.isEmpty
+            ? playlistGuideURLs.map { GuideSource(url: $0, isFromPlaylist: true) }
+            : customGuideURLs.map { GuideSource(url: $0, isFromPlaylist: false) }
+    }
+
+    private func updateProgrammeCount() {
+        guideProgrammeCount = guideSourceInfo.values.reduce(0) { $0 + $1.programmeCount }
+    }
+
+    /// Saves iptv-channels.json, recomputes the lineup and tells Settings.
+    private func updatePreferences(_ change: (inout ChannelPreferences) -> Void) {
+        change(&preferences)
+        do {
+            try preferencesFile.save(preferences)
+        } catch {
+            logger.error("Failed to save \(ChannelPreferences.fileName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+        updateLineup()
+        onStatusChange?()
+    }
+
+    private func updateLineup() {
+        let lineup = ChannelLineup(channels: channels, preferences: preferences)
+        if lineup != self.lineup { self.lineup = lineup }
     }
 
     private func setPlaylistStatus(_ status: Status) {
@@ -293,7 +577,7 @@ final class IPTVLibrary {
         text.replacing(/https?:\/\/\S+/, with: "<url>")
     }
 
-    static func hash(_ url: URL) -> String {
+    nonisolated static func hash(_ url: URL) -> String {
         SHA256.hash(data: Data(url.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 

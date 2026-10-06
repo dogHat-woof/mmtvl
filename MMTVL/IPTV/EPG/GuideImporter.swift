@@ -12,8 +12,9 @@ nonisolated enum GuideImporter {
 
     /// MUST be @concurrent: parsing a big file must not run on the main actor.
     /// Keeps programmes overlapping [now − 6 h, now + 4 d], only for EPG channels matched to a playlist channel,
-    /// and every <channel>. Deletes the temporary files afterwards (also on error).
-    @concurrent static func importGuide(from url: URL, channels: [Channel], overrides: [String: String],
+    /// and every <channel>. Replaces only this guide's rows (`sourceID`, M6b L3). Deletes the temporary files
+    /// afterwards (also on error).
+    @concurrent static func importGuide(from url: URL, sourceID: String, channels: [Channel], overrides: [String: String],
                                         store: EPGStore, network: IPTVNetwork, now: Date) async throws -> Outcome {
         let downloaded = try await network.download(url)
         defer { try? FileManager.default.removeItem(at: downloaded) }
@@ -38,7 +39,7 @@ nonisolated enum GuideImporter {
             matched = matches.count
             return Set(matches.values)
         }
-        try await store.replaceAll(channels: result.channels, programmes: result.programmes)
+        try await store.replaceSource(sourceID, channels: result.channels, programmes: result.programmes)
         logger.info("Guide from \(url.host() ?? "?", privacy: .public): \(result.channels.count) channels, \(result.programmes.count) programmes, \(matched) playlist channels matched")
         return Outcome(programmeCount: result.programmes.count, matchedChannels: matched)
     }
