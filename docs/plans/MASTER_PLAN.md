@@ -19,7 +19,7 @@ This file is the **single source of truth** for vision, decisions, architecture,
 
 - App Store distribution or sandboxing. Personal use only.
 - Recording / DVR.
-- Acting as a Google Cast (Chromecast) receiver (Google limits this to certified devices).
+- Acting as a Google Cast (Chromecast) receiver ourselves (Google limits this to certified devices). Android screen mirroring goes through the third-party **Reflector 4** app, which MMTVL only manages (D32).
 - Re-skinning third-party apps (Plex, Prime Video). They are launched as-is.
 
 ## 3. Environment & constraints
@@ -33,6 +33,7 @@ This file is the **single source of truth** for vision, decisions, architecture,
 | IPTV provider | the IPTV provider: a plain M3U URL with an embedded token (**not** Xtream; verified 2026-10-06). About 118 entries (97 US sports channels + game event streams), all live HLS (720p H.264, ~3–4 Mb/s, 40 s server window), no built-in EPG. **5 concurrent streams** observed. |
 | EPG | User-supplied XMLTV sources (multiple) |
 | Volume | HDMI output has no macOS volume. **SoundSource** (Rogue Amoeba, installed on the mini) provides it; see D25. |
+| Screen mirroring | **Reflector 4** (Squirrels, v4.1.2) on the mini for Android Google Cast mirroring only; iPhones use macOS's AirPlay Receiver (D32). |
 | Remote | Not purchased. Candidates: Siri Remote + Remote Buddy 2, WeChip G20S Pro, Flirc + IR remote. The app must work with any remote that emits key events. |
 
 ## 4. Key decisions
@@ -52,7 +53,7 @@ Record every architecture-level decision here. Sub plans may make local decision
 | D9 | Secrets (IPTV URL/credentials, PINs) live in the **Keychain**, never in config files or the repo. | — |
 | D10 | Non-secret config (launch items, bindings, settings, EPG channel overrides, `plex.json`) is JSON in `~/Library/Application Support/MMTVL/`; custom tile pictures are files in its `tile-art/` folder (M7). IPTV source and guide URLs and Plex tokens are Keychain items (D23, D28). | Easy to inspect and back up. |
 | D11 | The phone remote is a **web page served by the launcher** (Network.framework HTTP + WebSocket on the LAN), protected by a pairing code. A native iOS app is optional later. Details in D24. | Works on iOS and Android with no install. Supports text entry. |
-| D12 | Casting: **AirPlay = macOS's built-in AirPlay Receiver** (a setting, no code). Plex = Plex HTPC as a Plex Companion player. YouTube = "Link with TV code" in the TV UI. No Chromecast receiver. | Zero/low code and reliable. |
+| D12 | Casting: **AirPlay = macOS's built-in AirPlay Receiver** (a setting, no code). Plex = Plex HTPC as a Plex Companion player. YouTube = "Link with TV code" in the TV UI, plus DIAL casting from M7b (D30). Android screen mirroring = Reflector 4 (D32). No Chromecast receiver of our own. | Zero/low code and reliable. |
 | D13 | Prime Video and the generic browser are launched as **external apps** (Prime Video Mac app or Safari/Chrome). | DRM (Widevine/FairPlay) does not work reliably in our WKWebView. |
 | D14 | Multiview: up to **5 windows** in six layouts (**1 + 4** default, 1 + 3, 2 × 2, 1 + 2, Side by Side, Picture in Picture). Each window is its own mpv core, taken from a pool of at most 5 that is reused and never destroyed. Sound follows the highlighted window; the others are muted. Entered from the guide's channel menu. The playing channel keeps its player (no reconnect) when Multiview opens or closes. (M6) | User choice (2026-10-06): the 1 + 4 layout from their TV setup. It uses all 5 of the provider's streams, leaving none for another device; accepted. The guide picker reuses a window's video, so it needs no extra stream. |
 | D15 | Launched apps open **full screen**. M1: Chromium browsers get `--start-fullscreen` (only works on a cold launch). M2: a general path that sets `AXFullScreen` on the app's main window through the Accessibility API, covering Safari, Prime Video and apps that are already running. The browser tile opens the **system default browser** (Brave). | TV use needs no window chrome. Accessibility is already required for D4, so the general path adds no new permission. |
@@ -70,6 +71,9 @@ Record every architecture-level decision here. Sub plans may make local decision
 | D27 | Three more `RemoteCommand`s (M7): **`menu`** (channel menu in Live TV, window menu in Multiview, closes menus), **`channelUp`/`channelDown`** (zap in the player and in a Multiview window; page through lists). Channel Up moves **up the list like the Up arrow** by default; `settings.json` `channelUpMovesUpList` (Settings → Remote & Input → Channel Up) switches it to the higher channel number (user choice 2026-10-06). Defaults: Page Up/Down, Tab and the PC Menu key, controller triggers and Y, phone buttons. New default bindings reach existing `key-bindings.json` once, through `settings.json` `keyBindingsRevision`. **Settings → Remote Buttons** edits the bindings: a learn mode captures the next key, media key or controller button (never ⌘-combos, never phone commands), the last button of an arrow/Select/Back can't be removed, and only Home bindings can work in other apps. | User choice (2026-10-06): Menu and Channel commands. Learning is the only way to map an unknown remote (Q1) without hand-editing JSON. |
 | D28 | **Top shelf** (M7): the area above the tiles shows the focused tile's content: Live TV "On Now" cards (favorites, else recent channels), Plex "Continue Watching", else a banner of the tile's art; Up from the first row enters it; PIN-protected tiles show only a banner. **Plex** is read from the user's Plex Media Server: sign-in by **plex.tv/link PIN** in Settings → Plex, tokens in the Keychain (`plex-token`, `plex-server-token`), server found through plex.tv resources, **https (`plex.direct`) connections only**, local first. Selecting a Plex card opens Plex HTPC (no deep link yet, Q11). MMTVL declares `NSLocalNetworkUsageDescription`. | User choice (2026-10-06). The PIN link flow suits a remote (no typing). https avoids App Transport Security exceptions for LAN IPs. |
 | D29 | **Tile art and Liquid Glass** (M7 addendum): app tiles get **designed art drawn by MMTVL** (brand gradient + the app's own icon; colors from the icon for unknown apps), no logo files in the repo; custom pictures in `tile-art/` still win, and **Settings → a tile → Tile Art** chooses the style or a picture from Downloads/Pictures/Desktop (copied into `tile-art/`). The UI follows tvOS 26/27 **Liquid Glass** everywhere (SwiftUI `glassEffect`, glass rims on tiles, solid fallback with Reduce Transparency); the top shelf art fills the screen behind the tiles. | User choice (2026-10-06). tvOS icons have no public source (App Store APIs serve square iOS icons only). |
+| D30 | **YouTube casting by DIAL** (M7b): MMTVL answers SSDP (UDP 1900) and the DIAL device description (HTTP, TCP 8770) itself and hands `/apps/YouTube` requests to **leanback's own handlers** through a Cobalt-style `window.h5vcc.dial.DialServer` shim injected into the YouTube page (VacuumTube's approach). While the page isn't loaded, MMTVL answers `stopped` and a launch opens `youtube.com/tv?<pairingCode…>` (Netflix reference behavior). A cast **switches the TV to YouTube from any screen and ignores the YouTube tile's PIN** (user choices 2026-10-06). `settings.json` `youtubeCastEnabled` (default on, Settings → Casting); requests with an http(s) `Origin` are refused; bodies and pairing codes are never logged. | Phones cast without a TV code, as to a smart TV. Leanback stays the source of truth for YouTube's protocol; no Chromecast receiver (§2). |
+| D31 | **Phone trackpad and icon** (M7b): the phone remote gets a Trackpad mode whose moves, clicks and scrolls are posted as **tagged synthetic mouse events** (same Accessibility grant and marker as D24's keys), and a home-screen icon (the MMTVL "tv" logo, asset `Logo`, also the Mac app icon `AppIcon`) and web manifest served by the remote's HTTP server. Settings → Casting is a checklist for YouTube, AirPlay Receiver (loopback probe of port 7000) and Plex HTPC (running or not). | A pointer is needed in the browser and other apps; reuses D24's path. |
+| D32 | **Android screen mirroring = Reflector 4** (M7b), Google Cast only (its AirPlay off; macOS's AirPlay Receiver stays the iPhone path, user choice 2026-10-06). MMTVL keeps Reflector **running hidden** (`reflectorAutoStart`), detects a mirroring session from Reflector's **window list** (size, no Screen Recording needed), then takes over like a YouTube cast (leaves Live TV/YouTube, brings Reflector forward, AXFullScreen if needed) and **returns to the home screen when the session ends**. **Home during mirroring ends it** (AX close button, else ⌘W; user choice 2026-10-06); a YouTube cast ends it too. Reflector's preferences are a manual checklist (Settings → Casting → Android). | Android phones need mirroring without a native receiver of our own; the TV must never be left on an empty Reflector or the desktop. |
 
 ## 5. Architecture overview
 
@@ -88,7 +92,8 @@ MMTVL.app
 │   ├─ Guide/      Grid guide UI, channel list, favorites/groups
 │   └─ Multiview/  Tile layouts, audio focus
 ├─ Plex/           plex.tv link sign-in, server discovery, Continue Watching (M7, D28)
-├─ RemoteServer/   HTTP + WebSocket server, pairing, served web remote assets
+├─ RemoteServer/   HTTP + WebSocket server, pairing, served web remote assets, phone icon
+├─ Cast/           YouTube DIAL receiver (SSDP + HTTP), AirPlay probe, Reflector monitor (M7b, D30, D32)
 └─ Settings/       Remote-navigable settings screens
 ```
 
@@ -110,7 +115,7 @@ Status values: `Not planned` → `Planned` → `In progress` → `Done` (or `Blo
 | M6 | Multiview: up to 5 windows in six layouts (1 + 4, 1 + 3, 2 × 2, 1 + 2, Side by Side, Picture in Picture), sound follows the highlight, per-window rewind, window menu and picker guide, guide channel menu | M4, M5 | Done | [M6-multiview.md](M6-multiview.md) |
 | M6b | IPTV guide management: multiple EPG sources + manual channel ↔ EPG matching, favorites, hidden channels/groups (adds items to M6's guide channel menu). Catch-up dropped: the provider has none (Q3). | M6 | In progress | [M6b-guide-management.md](M6b-guide-management.md) |
 | M7 | Launcher polish & remote buttons: home rows scroll (more than two rows), parallax/specular tile effect, custom and designed tile art, top shelf (Live TV On Now, Plex Continue Watching with plex.tv/link sign-in), Menu/Channel Up/Down commands, learn-button bindings editor in Settings, Chromium web app tiles (launch safety net, per-tile start page) | M2b, M3–M6b | Done | [M7-launcher-polish.md](M7-launcher-polish.md) |
-| M7b | Phone & casting: phone remote home-screen icon, phone trackpad mode, YouTube DIAL discovery, casting setup checklist (AirPlay/Plex/YouTube), on-TV QA pass for M7 + M7b | M7 | Not planned | — ([research notes](M7b-notes.md)) |
+| M7b | Phone & casting: phone remote home-screen icon, phone trackpad mode, YouTube DIAL discovery, Android screen mirroring through Reflector (before/after workflow), casting setup checklist (AirPlay/Android/Plex/YouTube), on-TV QA pass for M7 + M7b | M7 | Planned | [M7b-phone-and-casting.md](M7b-phone-and-casting.md) ([research notes](M7b-notes.md)) |
 
 ## 7. Open questions
 
@@ -128,6 +133,9 @@ Status values: `Not planned` → `Planned` → `In progress` → `Done` (or `Blo
 | Q10 | ~~Does the provider really serve 5 streams at once to the mini, and does a channel change free its stream at once?~~ **Yes (user, 2026-10-06):** five windows in 1 + 4 played, and Change Channel on a full 1 + 4 worked 3 times in a row (M6 step 7). | — |
 | Q11 | Can Plex HTPC be opened on a specific item (its `plex` URL scheme, or Plex Companion `playMedia`)? Unverified; M7 only launches Plex from a Continue Watching card. | Nothing (a later improvement) |
 | Q12 | Does the Plex PIN link flow (plex.tv calls it "legacy") keep working, and does the user's router allow `plex.direct` names (DNS-rebinding protection)? Checked in M7 steps 11–12; fallbacks in the M7 plan. | M7 Plex shelf |
+| Q13 | Do the current iOS and Android YouTube apps list MMTVL as a DIAL device and pair through it (cold and warm path)? Leanback still supports `h5vcc.dial` (verified in the 2026-10-05 bundle) and VacuumTube ships it, but MMTVL is untested with real phones. Checked in M7b step 5. | M7b YouTube casting |
+| Q14 | Can the new Plex mobile app (2025.10+) cast to Plex HTPC? Plex's Companion article excludes those versions. Checked in M7b step 10; nothing to build either way. | Nothing |
+| Q15 | Reflector 4 on macOS 26/27 (last release 2024-12): does it come forward and go full screen over MMTVL, does closing its window or ⌘W end the phone's cast, does it share UDP 1900 with MMTVL's DIAL responder, and does it keep working beside macOS's AirPlay Receiver with its own AirPlay off? Checked in M7b step 7. | M7b Android mirroring |
 
 ## How planning works
 
