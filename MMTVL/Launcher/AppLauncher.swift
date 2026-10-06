@@ -77,6 +77,11 @@ final class AppLauncher {
         case .url, .internalDestination, .system: url = nil
         }
         guard let url else { return nil }
+        return icon(forApplicationAt: url)
+    }
+
+    /// Icon of an app bundle (Settings "Add Tile" rows), cached by URL.
+    func icon(forApplicationAt url: URL) -> NSImage {
         if let cached = iconCache[url] { return cached }
         let icon = NSWorkspace.shared.icon(forFile: url.path)
         iconCache[url] = icon

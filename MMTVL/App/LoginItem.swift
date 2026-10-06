@@ -1,6 +1,10 @@
 import ServiceManagement
 import os
 
+nonisolated enum LoginItemStatus: Sendable {
+    case enabled, requiresApproval, notRegistered, notFound
+}
+
 /// Applies `settings.json` → `launchAtLogin` (L10). Kiosk mode only.
 enum LoginItem {
     private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "LoginItem")
@@ -24,13 +28,31 @@ enum LoginItem {
         }
     }
 
-    private static func describe(_ status: SMAppService.Status) -> String {
+    static var status: LoginItemStatus {
+        map(SMAppService.mainApp.status)
+    }
+
+    /// System Settings → General → Login Items.
+    static func openSystemSettings() {
+        SMAppService.openSystemSettingsLoginItems()
+    }
+
+    private static func map(_ status: SMAppService.Status) -> LoginItemStatus {
         switch status {
+        case .notRegistered: .notRegistered
+        case .enabled: .enabled
+        case .requiresApproval: .requiresApproval
+        case .notFound: .notFound
+        @unknown default: .notFound
+        }
+    }
+
+    private static func describe(_ status: SMAppService.Status) -> String {
+        switch map(status) {
         case .notRegistered: "notRegistered"
         case .enabled: "enabled"
         case .requiresApproval: "requiresApproval"
         case .notFound: "notFound"
-        @unknown default: "unknown(\(status.rawValue))"
         }
     }
 }

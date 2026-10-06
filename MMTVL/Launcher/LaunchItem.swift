@@ -17,6 +17,31 @@ nonisolated struct LaunchItem: Codable, Identifiable, Hashable, Sendable {
     var kind: Kind
     var iconSymbol: String?   // SF Symbol for internal/system items
     var launchFullScreen: Bool?   // nil = the kind's default; Optional so older files decode
+    var isHidden: Bool?           // nil/false = shown; Optional so older files decode; stored as nil when shown
+
+    var isVisible: Bool { isHidden != true }
+
+    /// The only way into Settings, so it's always on the Home screen: movable, never hidden or removed.
+    var isSettingsTile: Bool { kind == .internalDestination(.settings) }
+
+    /// Kinds whose window `AppLauncher` can make full screen (D15).
+    var supportsFullScreen: Bool {
+        switch kind {
+        case .application, .defaultBrowser: true
+        case .url, .internalDestination, .system: false
+        }
+    }
+
+    /// Second line in the Settings tile list.
+    var kindDescription: String {
+        switch kind {
+        case .application: "App"
+        case .defaultBrowser: "Default browser"
+        case .internalDestination: "Built in"
+        case .system: "System"
+        case .url(let url, _): url.host() ?? url.absoluteString
+        }
+    }
 
     /// Whether `AppLauncher` makes the app's window full screen after launching (D15).
     var wantsFullScreen: Bool {
@@ -33,6 +58,7 @@ extension LaunchItem {
         LaunchItem(id: "iptv", title: "Live TV", kind: .internalDestination(.iptv), iconSymbol: "tv"),
         LaunchItem(id: "prime", title: "Prime Video", kind: .application(bundleID: "com.amazon.aiv.AIVApp"), launchFullScreen: true),
         LaunchItem(id: "browser", title: "Browser", kind: .defaultBrowser(fullScreen: true)),
+        LaunchItem(id: "settings", title: "Settings", kind: .internalDestination(.settings), iconSymbol: "gearshape.fill"),
         LaunchItem(id: "exit", title: "Exit to Desktop", kind: .system(.exitToDesktop), iconSymbol: "rectangle.portrait.and.arrow.right"),
     ]
 }

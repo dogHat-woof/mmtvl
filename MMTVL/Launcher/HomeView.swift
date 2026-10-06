@@ -3,6 +3,7 @@ import SwiftUI
 /// The home screen: clock and rows of tiles, laid out on the 1920×1080 canvas.
 /// Focus is rendered from `LauncherFocusModel` (D2), not SwiftUI focus.
 struct HomeView: View {
+    /// The visible tiles.
     let items: [LaunchItem]
     let focus: LauncherFocusModel
     let launcher: AppLauncher

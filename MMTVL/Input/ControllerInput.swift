@@ -38,9 +38,12 @@ final class ControllerInput {
         }
     }
 
+    /// Also detaches every element handler (they'd keep dispatching otherwise) and background monitoring (L15).
     func stop() {
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
+        GCController.controllers().forEach(unconfigure)
+        GCController.shouldMonitorBackgroundEvents = false
         stopRepeat()
         stickDirection = nil
     }
@@ -100,6 +103,26 @@ final class ControllerInput {
             bind(gamepad.buttonA, to: .a)
             bind(gamepad.buttonX, to: .x)
             bind(gamepad.buttonMenu, to: .menu)
+        }
+    }
+
+    /// Clears exactly the handlers `configure` sets.
+    private func unconfigure(_ controller: GCController) {
+        if let gamepad = controller.extendedGamepad {
+            let buttons: [GCControllerButtonInput?] = [
+                gamepad.dpad.up, gamepad.dpad.down, gamepad.dpad.left, gamepad.dpad.right,
+                gamepad.buttonA, gamepad.buttonB, gamepad.buttonX, gamepad.buttonY,
+                gamepad.leftShoulder, gamepad.rightShoulder, gamepad.buttonMenu,
+                gamepad.buttonOptions, gamepad.buttonHome,
+            ]
+            buttons.forEach { $0?.pressedChangedHandler = nil }
+            gamepad.leftThumbstick.valueChangedHandler = nil
+        } else if let gamepad = controller.microGamepad {
+            let buttons: [GCControllerButtonInput] = [
+                gamepad.dpad.up, gamepad.dpad.down, gamepad.dpad.left, gamepad.dpad.right,
+                gamepad.buttonA, gamepad.buttonX, gamepad.buttonMenu,
+            ]
+            buttons.forEach { $0.pressedChangedHandler = nil }
         }
     }
 
