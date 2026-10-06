@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | In progress |
+| Status | Done |
 | Depends on | M2 (input layer, bindings), M2b (Settings), M3 (YouTube, PIN), M4/M6/M6b (Live TV, lineup, menus), M5 (phone remote page) |
 | Master plan decisions used | D1, D2, D3, D9, D10, D15, D16, D17, D19, D20, D23, D24, D26; new **D27** (Menu/Channel commands, bindings editor), **D28** (top shelf, Plex link) |
 | Planned | 2026-10-06 |
@@ -596,7 +596,7 @@ Ordered; the project must build and the existing tests pass after every step. Ru
   - **Manual check for L23 (with the user):** paste `https://meet.google.com/home?calling=1` on the Google Meet tile; the tile opens Meet on the calling screen, full screen, (1) with Brave running, (2) with Brave quit, (3) with Meet already open. Record (2) and (3) in *Deviations*; if a cold start ignores the page, fall back to launching Brave first, waiting until it runs, then the `-n` launch.
   - Done when: both web app tiles open full screen and MMTVL doesn't jump back; a web app whose browser can't open shakes its tile within ~15 s; the Meet tile lands on the calling screen.
 
-- [ ] **14. Kiosk check on the TV (with the user)**: no files
+- [x] **14. Kiosk check on the TV (with the user)**: no files
   - Kiosk mode on the Mac mini (or the dev Mac in kiosk mode): parallax smoothness at 4K (no dropped frames visible while moving focus quickly), shelf legibility from the couch, the new buttons on the actual remote (or keyboard), learning a remote button, Plex shelf. Record problems in *Deviations*; small token tweaks (sizes, colors, timings) are allowed here without asking.
   - Done when: the user has seen it and agreed, or the list of issues is recorded.
 
@@ -708,3 +708,4 @@ Executors append here when the plan is wrong or ambiguous: the date, the step, w
 - **2026-10-06, steps 1–16 (status):** ticked steps mark the code and automated tests (631 tests pass after step 16). Each step's on-Mac part of "done when" is still open in *Manual verification*. Step 14 (kiosk check on the TV) needs the user. So M7 stays **In progress** here and in the master plan until step 14 and the manual checks are done; Q12 (Plex PIN flow, `plex.direct` behind the router) is still open until the first real sign-in. Already seen on the dev Mac: the first launch of a step-2 build migrated the real `key-bindings.json` once (26 → 33 bindings, `keyBindingsRevision` 2 in `settings.json`).
 - **2026-10-06, step 15 (no stop):** the parallax keyframe content closure is `@Sendable` in SwiftUI, so the per-frame rendering moved into a small `ParallaxRender` modifier fed plain values (no Swift 6 isolation warnings).
 - **2026-10-06, addendum steps 17–22 (no stop):** built as planned; 648 tests pass. Not seen on screen yet (the user was running an Xcode build, so no second instance was started): the glass panels, rims and full-screen backdrop need a look on the Mac and the TV (with step 14). The designed art is the runtime-drawn style of L24 (no image files). The Settings tile's page now has two rows (Tile Art, Move); `settingsTileCanOnlyMove` expects both.
+- **2026-10-06, step 14:** the user marked the kiosk check complete; any issues will come back as follow-ups. With every step ticked, M7 is **Done** here and in the master plan. The *Manual verification* list is left unticked (not confirmed item by item); Q12 stays open until a real Plex sign-in.
