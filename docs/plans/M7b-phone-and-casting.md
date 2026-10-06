@@ -554,7 +554,7 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
   - Tests: the new paths map to the right `generated` values and content types; `/favicon.ico` still nil; `make` with extra headers and nil content type; `reason(for:)`; the manifest decodes as JSON with two icons; `PhoneRemoteIcon.png(size: 180)` starts with the PNG signature and `NSBitmapImageRep(data:)` reports 180 × 180 pixels.
   - Done when: tests pass; with the app running, `curl -sI http://localhost:8765/apple-touch-icon.png` shows `200` and `image/png`, and opening `http://localhost:8765/icon-512.png` shows the icon.
 
-- [ ] **2. DIAL protocol (pure)**: `Cast/DIALProtocol.swift` (new), `MMTVLTests/DIALProtocolTests.swift` (new)
+- [x] **2. DIAL protocol (pure)**: `Cast/DIALProtocol.swift` (new), `MMTVLTests/DIALProtocolTests.swift` (new)
   - Everything in the `DIALProtocol.swift` sketch, following *Request flow* step 3 exactly. XML-escape `friendlyName` and the uuid in the device description (`&`, `<`, `>`, `"`, `'`). Device description:
     `<?xml version="1.0"?><root xmlns="urn:schemas-upnp-org:device-1-0"><specVersion><major>1</major><minor>0</minor></specVersion><URLBase>http://HOST</URLBase><device><deviceType>urn:dial-multiscreen-org:device:dial:1</deviceType><friendlyName>NAME</friendlyName><manufacturer>MMTVL</manufacturer><modelName>MMTVL</modelName><UDN>uuid:ID</UDN></device></root>`
   - App status: `<?xml version="1.0" encoding="UTF-8"?><service xmlns="urn:dial-multiscreen-org:schemas:dial" dialVer="2.1"><name>YouTube</name><options allowStop="false"/><state>stopped</state></service>`; with `running: true` the state is `running` followed by `<link rel="run" href="run"/>`.
