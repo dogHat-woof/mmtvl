@@ -186,6 +186,16 @@ struct SettingsHomeScreenTests {
         #expect(model.page == .homeScreen)
     }
 
+    @Test func settingsTileCanOnlyMove() {
+        let (model, recorder) = modelOnHomeScreen()
+        model.perform(.push(.tile(id: "settings")))
+        #expect(model.focusableRowIDs == ["tile.move"])
+        model.perform(.toggleTileVisible(id: "settings"))
+        model.perform(.removeTile(id: "settings"))
+        #expect(recorder.appliedItems.isEmpty)
+        #expect(model.items == LaunchItem.defaults)
+    }
+
     @Test func cancelRestorePops() {
         let (model, recorder) = modelOnHomeScreen()
         model.perform(.push(.confirmRestoreDefaults))
@@ -200,7 +210,7 @@ struct SettingsAddTileTests {
     private let new = InstalledApp(bundleID: "com.example.new", name: "New", url: URL(filePath: "/Applications/New.app"))
 
     private func modelOnAddTile(apps: [InstalledApp]) -> (SettingsModel, SettingsRecorder) {
-        let (model, recorder) = makeSettingsModel(items: LaunchItem.defaults.removingItem(id: "settings"))
+        let (model, recorder) = makeSettingsModel(items: LaunchItem.defaults.removingItem(id: "youtube"))
         recorder.installedApps = apps
         model.perform(.push(.homeScreen))
         model.perform(.push(.addTile))
@@ -214,7 +224,7 @@ struct SettingsAddTileTests {
         #expect(model.row(id: "apps.loading") == nil)
         #expect(model.row(id: "add.app.tv.plex.htpc") == nil)
         #expect(model.row(id: "add.app.com.example.new") != nil)
-        #expect(model.row(id: "add.default.settings") != nil)
+        #expect(model.row(id: "add.default.youtube") != nil)
     }
 
     @Test func addingAppInsertsBeforeExit() async {
@@ -232,8 +242,8 @@ struct SettingsAddTileTests {
     @Test func addingDefaultTileInsertsBeforeExit() async {
         let (model, _) = modelOnAddTile(apps: [])
         await model.loadInstalledApps()
-        model.activate(rowID: "add.default.settings")
-        #expect(model.items.map(\.id).suffix(2) == ["settings", "exit"])
+        model.activate(rowID: "add.default.youtube")
+        #expect(model.items.map(\.id).suffix(2) == ["youtube", "exit"])
     }
 
     @Test func noAppsLeftShowsInfoRow() async {

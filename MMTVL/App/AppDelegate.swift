@@ -30,7 +30,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let inputRouter = InputRouter(bindings: bindings)
         let kiosk = !AppEnvironment.windowedMode
 
-        let items = LaunchItemStore().load()
+        let store = LaunchItemStore()
+        let storedItems = store.load()
+        let items = storedItems.ensuringSettingsTile()
+        if items != storedItems {
+            do {
+                try store.save(items)
+            } catch {
+                Self.logger.error("Failed to save launch items: \(error.localizedDescription, privacy: .public)")
+            }
+        }
         let settingsModel = SettingsModel(settings: settings, items: items, environment: makeSettingsEnvironment(kiosk: kiosk))
         let router = AppRouter(items: items, launcher: launcher, settings: settingsModel)
         let windowController = KioskWindowController(

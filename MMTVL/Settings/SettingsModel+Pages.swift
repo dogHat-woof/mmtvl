@@ -127,6 +127,11 @@ extension SettingsModel {
 
     private func tileSections(id: String) -> [SettingsSection] {
         guard let item = item(id: id) else { return [] }
+        if item.isSettingsTile {
+            return [SettingsSection(id: "options", rows: [
+                SettingsRow(id: "tile.move", title: "Move", action: .startMove(id: id)),
+            ], footer: "Settings is always on the Home screen.")]
+        }
         var rows = [
             SettingsRow(id: "tile.visible", title: "Show on Home Screen", value: Self.onOff(item.isVisible),
                         action: .toggleTileVisible(id: id)),

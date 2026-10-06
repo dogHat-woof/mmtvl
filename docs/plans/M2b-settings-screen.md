@@ -11,7 +11,7 @@
 
 From the couch, with only the remote:
 
-- Pressing **Up** from the top row of tiles focuses a **gear** next to the clock. Select opens **Settings**. A regular **Settings tile** exists too and can be hidden or removed (the gear always stays, so you can't lock yourself out).
+- The **Settings tile** opens Settings. It is always on the home screen: it can be moved but not hidden or removed, so you can't lock yourself out. *(Changed after use, 2026-10-05: the plan originally had a gear next to the clock, reached with Up, plus an optional tile. See Deviations.)*
 - Settings looks like tvOS Settings: a page title, a large image on the left, and a list of rows on the right. Up/Down moves, Select changes or opens a row, Back goes up a level and then home.
 - **Remote & Input:** Global Home & Media Keys, Game Controllers, and Hide Pointer During Remote Use toggle **live**, with no relaunch.
 - **Permissions:** shows whether Accessibility is allowed. Select opens the system prompt and the Privacy pane. When access is granted, MMTVL comes back to the front and the status updates.
@@ -484,11 +484,11 @@ func applicationDidBecomeActive(_ notification: Notification) { router?.settings
 - **L2:** Settings can add a tile for **any installed app** (user, 2026-10-05). Apps come from a scan of `/Applications`, `/System/Applications` and `~/Applications`, one level deep. New tiles are inserted before the first system tile (Exit to Desktop). URL tiles and renaming need text entry (M5).
 - **L3:** All four `settings.json` keys apply live. The D19 "Relaunch needed" badge (`SettingsRow.needsRelaunch`) exists for M3/M4 rows but no M2b row sets it. The Relaunch MMTVL row is always present, which is also handy after hand-editing `key-bindings.json`.
 - **L4:** Pages are data. Sections, rows and `SettingsAction` enums are built from the model state, and `perform(_:)` interprets them. This keeps the model unit-testable and lets later milestones add pages and rows without new UI plumbing.
-- **L5:** The gear is focused by pressing Up on the top tile row, and Down returns to the same tile. It's always visible, and it's auto-focused when there are no visible tiles. This guarantees Settings can be reached even with every tile hidden or removed.
-- **L6:** Any tile can be hidden or removed, including Settings and Exit to Desktop. Removed default tiles can be re-added from Add Tile → MMTVL. Restore Default Tiles asks for confirmation, with Cancel focused.
+- **L5:** ~~The gear is focused by pressing Up on the top tile row, and Down returns to the same tile.~~ *Changed after use (user, 2026-10-05):* there's no gear. The Settings tile is the only entry point, so it can't be hidden or removed, and `ensuringSettingsTile()` adds or unhides it at launch.
+- **L6:** Any tile except Settings can be hidden or removed, including Exit to Desktop. Removed default tiles can be re-added from Add Tile → MMTVL. Restore Default Tiles asks for confirmation, with Cancel focused.
 - **L7:** Every change is saved at once. A hand edit made while MMTVL runs gets overwritten by the next Settings change, so edit the JSON with MMTVL quit.
 - **L8:** In `-windowed` mode, kiosk-only rows (global input, launch at login) still toggle and save, but aren't applied, and their detail line says so.
-- **L9:** The Settings tile is a new default (before Exit). Existing installs see it under Add Tile → MMTVL, and their file is never auto-merged.
+- **L9:** The Settings tile is a new default (before Exit). ~~Existing installs see it under Add Tile → MMTVL.~~ *Changed after use:* it's inserted at launch when missing (the one auto-merge), because it's the only way into Settings.
 - **L10:** The Accessibility and login item status are re-read when Settings opens, after each toggle, and in `applicationDidBecomeActive`. No polling.
 - **L11:** Relaunch goes through a `/bin/sh` helper. It waits for our PID to exit (at most 10 s), then runs `open -n` with the same arguments. This avoids two instances with two event taps fighting over presentation options.
 - **L12:** Global Home while Settings is showing goes to the home screen (M2's `handleGlobal`, unchanged).
@@ -758,4 +758,9 @@ All entries 2026-10-05, from `/build-plan`. None changes a master-plan decision.
 - **Step 7 (visual fixes found in steps 8 and 10):**
   - `.scrollIndicators(.never)` instead of `.hidden`: with "Show scroll bars: Always" (or a mouse connected), `.hidden` still showed the bar.
   - The list gets `.clipped()` and the page title gets 24 pt bottom padding, so scrolled rows no longer draw over the title.
+- **Post-implementation change (user, 2026-10-05, after using the build): no gear; Settings is tile-only.**
+  - Removed: `GearButtonView`, `HomeFocusModel` and its tests, the gear Theme tokens, the empty-home hint, and the router's gear hover/activate. The home screen is back on `LauncherFocusModel`. The step 2 and step 3 gear work is superseded.
+  - Lock-out guard: `LaunchItem.isSettingsTile`, and `[LaunchItem].ensuringSettingsTile()` (applied and saved at launch) adds the default Settings tile before Exit when missing and unhides it when hidden. The Settings tile page offers only Move. The model ignores hide/remove for it.
+  - Master plan D19 and the M2b row were updated to match. 98 tests pass.
+  - Checked windowed: the dev Mac's `launch-items.json` (no Settings tile) gained one before Exit at launch, the gear is gone, the tile opens Settings, and its tile page shows only Move.
 

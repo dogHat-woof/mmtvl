@@ -7,22 +7,26 @@ struct AppRouterTests {
         return AppRouter(items: items, launcher: AppLauncher(), settings: settings)
     }
 
-    @Test func upThenSelectOpensSettings() {
-        let router = makeRouter()
-        _ = router.handle(.up)
-        #expect(router.focus.isGearFocused)
+    /// The Settings tile is the first tile of the second row in the defaults.
+    private func openSettingsFromTile(_ router: AppRouter) {
+        _ = router.handle(.down)
+        #expect(router.visibleItems[router.focus.index!].isSettingsTile)
         _ = router.handle(.select)
+    }
+
+    @Test func settingsTileOpensSettings() {
+        let router = makeRouter()
+        openSettingsFromTile(router)
         #expect(router.screen == .settings)
     }
 
-    @Test func backOnSettingsRootGoesHomeWithGearFocused() {
+    @Test func backOnSettingsRootGoesHomeKeepingFocus() {
         let router = makeRouter()
-        _ = router.handle(.up)
-        _ = router.handle(.select)
+        openSettingsFromTile(router)
         let handled = router.handle(.back)
         #expect(handled)
         #expect(router.screen == .home)
-        #expect(router.focus.isGearFocused)
+        #expect(router.visibleItems[router.focus.index!].isSettingsTile)
     }
 
     @Test func homeInSettingsGoesHome() {
@@ -38,9 +42,9 @@ struct AppRouterTests {
         let router = makeRouter()
         _ = router.handle(.right)
         _ = router.handle(.right)
-        let focusedID = router.visibleItems[router.focus.tileIndex!].id
+        let focusedID = router.visibleItems[router.focus.index!].id
         router.setItems(router.items.settingHidden(true, id: router.items[0].id))
-        #expect(router.visibleItems[router.focus.tileIndex!].id == focusedID)
+        #expect(router.visibleItems[router.focus.index!].id == focusedID)
     }
 
     @Test func hidingFocusedItemClampsIndex() {
@@ -49,14 +53,6 @@ struct AppRouterTests {
         _ = router.handle(.right)
         _ = router.handle(.right)
         router.setItems(items.settingHidden(true, id: items[2].id))
-        #expect(router.focus.tileIndex == 1)
-    }
-
-    @Test func hidingEverythingFocusesGear() {
-        let router = makeRouter()
-        let allHidden = router.items.reduce(router.items) { $0.settingHidden(true, id: $1.id) }
-        router.setItems(allHidden)
-        #expect(router.visibleItems.isEmpty)
-        #expect(router.focus.isGearFocused)
+        #expect(router.focus.index == 1)
     }
 }

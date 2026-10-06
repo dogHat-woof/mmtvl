@@ -1,35 +1,22 @@
 import SwiftUI
 
-/// The home screen: gear, clock and rows of tiles, laid out on the 1920×1080 canvas.
-/// Focus is rendered from `HomeFocusModel` (D2), not SwiftUI focus.
+/// The home screen: clock and rows of tiles, laid out on the 1920×1080 canvas.
+/// Focus is rendered from `LauncherFocusModel` (D2), not SwiftUI focus.
 struct HomeView: View {
     /// The visible tiles.
     let items: [LaunchItem]
-    let focus: HomeFocusModel
+    let focus: LauncherFocusModel
     let launcher: AppLauncher
     let shakeTriggers: [LaunchItem.ID: Int]
     let onHover: (Int) -> Void
     let onActivate: (Int) -> Void
-    let onHoverGear: () -> Void
-    let onActivateGear: () -> Void
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            HStack(spacing: Theme.headerSpacing) {
-                GearButtonView(isFocused: focus.isGearFocused, onHover: onHoverGear, onActivate: onActivateGear)
-                clock
-            }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.top, 60)
-            .padding(.horizontal, Theme.sideMargin)
-
-            if items.isEmpty {
-                Text("No tiles. Select the gear to open Settings.")
-                    .font(Theme.clockFont)
-                    .foregroundStyle(Theme.secondaryText)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, Theme.canvasSize.height * Theme.rowsTopFraction)
-            }
+            clock
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.top, 60)
+                .padding(.horizontal, Theme.sideMargin)
 
             VStack(alignment: .leading, spacing: Theme.rowSpacing) {
                 ForEach(Array(rowRanges.enumerated()), id: \.offset) { _, range in
@@ -58,7 +45,7 @@ struct HomeView: View {
     /// Item index ranges per row, matching the focus model's chunking.
     private var rowRanges: [Range<Int>] {
         var start = 0
-        return focus.tiles.rows.map { count in
+        return focus.rows.map { count in
             defer { start += count }
             return start..<(start + count)
         }
@@ -70,7 +57,7 @@ struct HomeView: View {
             item: item,
             title: launcher.title(for: item),
             icon: launcher.icon(for: item),
-            isFocused: focus.tileIndex == index,
+            isFocused: focus.index == index,
             isInstalled: launcher.isInstalled(item),
             shakeTrigger: shakeTriggers[item.id, default: 0]
         )

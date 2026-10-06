@@ -45,6 +45,21 @@ nonisolated extension Array where Element == LaunchItem {
         return LaunchItem.defaults.filter { !ids.contains($0.id) }
     }
 
+    /// Adds the default Settings tile if there is none (older files, hand edits) and shows any hidden one,
+    /// so Settings is always reachable.
+    func ensuringSettingsTile() -> [LaunchItem] {
+        guard contains(where: \.isSettingsTile) else {
+            guard let settings = LaunchItem.defaults.first(where: \.isSettingsTile) else { return self }
+            return insertingTile(settings)
+        }
+        return map { item in
+            guard item.isSettingsTile, !item.isVisible else { return item }
+            var item = item
+            item.isHidden = nil
+            return item
+        }
+    }
+
     /// Bundle IDs of `.application` items.
     var applicationBundleIDs: Set<String> {
         Set(compactMap { if case .application(let bundleID) = $0.kind { bundleID } else { nil } })

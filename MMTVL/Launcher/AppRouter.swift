@@ -21,7 +21,7 @@ final class AppRouter {
     /// The tiles shown on the home screen; `focus` and `activate(_:)` index into these.
     private(set) var visibleItems: [LaunchItem]
     /// Kept while another screen is shown, so Back restores the previous focus position.
-    private(set) var focus: HomeFocusModel
+    private(set) var focus: LauncherFocusModel
     private(set) var shakeTriggers: [LaunchItem.ID: Int] = [:]
 
     @ObservationIgnored let launcher: AppLauncher
@@ -37,24 +37,21 @@ final class AppRouter {
         self.settings = settings
         let visibleItems = items.visible
         self.visibleItems = visibleItems
-        focus = HomeFocusModel(tileCount: visibleItems.count, perRow: Theme.tilesPerRow)
+        focus = LauncherFocusModel(itemCount: visibleItems.count, perRow: Theme.tilesPerRow)
     }
 
     /// Replaces the tiles (Settings edits), keeping focus on the same tile where possible.
     func setItems(_ newItems: [LaunchItem]) {
-        let oldIndex = focus.tileIndex
+        let oldIndex = focus.index
         let focusedID = oldIndex.map { visibleItems[$0].id }
-        let gearWasFocused = focus.isGearFocused
 
         items = newItems
         visibleItems = newItems.visible
-        var newFocus = HomeFocusModel(tileCount: visibleItems.count, perRow: Theme.tilesPerRow)
-        if gearWasFocused {
-            newFocus.focusGear()
-        } else if let focusedID, let index = visibleItems.firstIndex(where: { $0.id == focusedID }) {
-            newFocus.focusTile(index: index)
+        var newFocus = LauncherFocusModel(itemCount: visibleItems.count, perRow: Theme.tilesPerRow)
+        if let focusedID, let index = visibleItems.firstIndex(where: { $0.id == focusedID }) {
+            newFocus.focus(index: index)
         } else if let oldIndex, !visibleItems.isEmpty {
-            newFocus.focusTile(index: min(oldIndex, visibleItems.count - 1))
+            newFocus.focus(index: min(oldIndex, visibleItems.count - 1))
         }
         focus = newFocus
     }
@@ -76,16 +73,9 @@ final class AppRouter {
                 withAnimation(Theme.focusAnimation) { _ = focus.move(command) }
                 return true
             case .select:
-                if focus.isGearFocused {
-                    openSettings()
-                } else if let index = focus.tileIndex {
-                    activate(index)
-                }
+                if let index = focus.index { activate(index) }
                 return true
-            case .back:
-                withAnimation(Theme.focusAnimation) { _ = focus.leaveGear() }
-                return true
-            case .home:
+            case .back, .home:
                 return true
             case .playPause, .fastForward, .rewind:
                 return false
@@ -147,16 +137,7 @@ final class AppRouter {
 
     func hover(_ index: Int) {
         guard screen == .home, pointerMovedSinceLastCommand else { return }
-        withAnimation(Theme.focusAnimation) { _ = focus.focusTile(index: index) }
-    }
-
-    func hoverGear() {
-        guard screen == .home, pointerMovedSinceLastCommand else { return }
-        withAnimation(Theme.focusAnimation) { _ = focus.focusGear() }
-    }
-
-    func activateGear() {
-        openSettings()
+        withAnimation(Theme.focusAnimation) { _ = focus.focus(index: index) }
     }
 
     func hoverSettingsRow(_ id: String) {
@@ -167,7 +148,7 @@ final class AppRouter {
     /// `index` is into `visibleItems`.
     func activate(_ index: Int) {
         guard visibleItems.indices.contains(index) else { return }
-        focus.focusTile(index: index)
+        focus.focus(index: index)
         let item = visibleItems[index]
 
         switch item.kind {
@@ -220,9 +201,7 @@ struct LauncherRootView: View {
                 launcher: router.launcher,
                 shakeTriggers: router.shakeTriggers,
                 onHover: router.hover,
-                onActivate: router.activate,
-                onHoverGear: router.hoverGear,
-                onActivateGear: router.activateGear
+                onActivate: router.activate
             )
         case .placeholder(let item):
             PlaceholderView(item: item)

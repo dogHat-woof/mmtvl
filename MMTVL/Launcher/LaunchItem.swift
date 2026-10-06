@@ -21,6 +21,9 @@ nonisolated struct LaunchItem: Codable, Identifiable, Hashable, Sendable {
 
     var isVisible: Bool { isHidden != true }
 
+    /// The only way into Settings, so it's always on the Home screen: movable, never hidden or removed.
+    var isSettingsTile: Bool { kind == .internalDestination(.settings) }
+
     /// Kinds whose window `AppLauncher` can make full screen (D15).
     var supportsFullScreen: Bool {
         switch kind {

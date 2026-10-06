@@ -128,7 +128,7 @@ final class SettingsModel {
         case .exitToDesktop:
             environment.exitToDesktop()
         case .toggleTileVisible(let id):
-            guard let item = item(id: id) else { return }
+            guard let item = item(id: id), !item.isSettingsTile else { return }
             updateItems(items.settingHidden(item.isVisible, id: id))
         case .toggleTileFullScreen(let id):
             guard let item = item(id: id) else { return }
@@ -138,7 +138,7 @@ final class SettingsModel {
             movingTileID = id
             setFocus(Self.tileRowID(id))
         case .removeTile(let id):
-            guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+            guard let index = items.firstIndex(where: { $0.id == id }), !items[index].isSettingsTile else { return }
             let neighbor = items.indices.contains(index + 1) ? items[index + 1] : (index > 0 ? items[index - 1] : nil)
             updateItems(items.removingItem(id: id))
             pop()

@@ -53,10 +53,6 @@ enum Theme {
 
     // MARK: Settings
 
-    static let gearButtonSize: CGFloat = 72
-    static let gearSymbolSize: CGFloat = 36
-    static let headerSpacing: CGFloat = 32
-
     // Literal sizes on purpose: the semantic macOS fonts are too small on the 1920-point TV canvas.
     static let settingsTitleFont = Font.system(size: 48, weight: .semibold)
     static let settingsSectionFont = Font.system(size: 24, weight: .semibold)

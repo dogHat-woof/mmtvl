@@ -82,4 +82,15 @@ struct LaunchItemEditingTests {
         let settingsIndex = try! #require(ids.firstIndex(of: "settings"))
         #expect(ids[settingsIndex + 1] == "exit")
     }
+
+    @Test func ensuringSettingsTileAddsMissingOne() {
+        let result = items.ensuringSettingsTile()
+        #expect(result.map(\.id) == ["a", "b", "c", "settings", "exit"])
+        #expect(result.ensuringSettingsTile() == result)
+    }
+
+    @Test func ensuringSettingsTileShowsHiddenOne() {
+        let hidden = LaunchItem.defaults.settingHidden(true, id: "settings")
+        #expect(hidden.ensuringSettingsTile() == LaunchItem.defaults)
+    }
 }
