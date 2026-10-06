@@ -29,7 +29,7 @@ This file is the **single source of truth** for vision, decisions, architecture,
 | Target hardware | Mac mini M4, HDMI → AV receiver → TV |
 | Deployment target | macOS 26.0 (dev machine: macOS 27 / Xcode 27). Revisit if the mini runs an older OS. |
 | Language / UI | Swift 6 (MainActor default isolation), SwiftUI hosted in AppKit windows |
-| Distribution | Local build, ad-hoc or personal-team signed, **no App Sandbox, no hardened runtime** (for now) |
+| Distribution | Local build, signed **Apple Development, team H846CY8RB4** (from M2), **no App Sandbox, no hardened runtime** (for now) |
 | IPTV provider | the IPTV provider: M3U URL with embedded credentials (very likely also Xtream Codes). **5 concurrent streams** observed. |
 | EPG | User-supplied XMLTV sources (multiple) |
 | Remote | Not purchased. Candidates: Siri Remote + Remote Buddy 2, WeChip G20S Pro, Flirc + IR remote. The app must work with any remote that emits key events. |
@@ -43,7 +43,7 @@ Record every architecture-level decision here. Sub plans may make local decision
 | D1 | Launcher window is an **AppKit-owned borderless window covering the screen**, with `NSApp.presentationOptions` hiding the Dock and menu bar. **Not** native fullscreen Spaces. | Avoids Space-switch animations when jumping to/from Plex and other fullscreen apps. Presentation options auto-revert when another app is frontmost. |
 | D2 | **Custom focus engine** (a focus model plus key-command routing), not SwiftUI's built-in focus traversal. | Directional (arrow-key) focus movement is a tvOS-only SwiftUI behavior. On macOS we must drive focus ourselves. |
 | D3 | All input is normalized into a `RemoteCommand` enum by a central `InputRouter`. Sources: local key events (M1), global event tap, remappable bindings, game controllers (M2), phone remote (M5). | One place for remapping. Every remote type works the same way. |
-| D4 | Global Home button uses a **CGEventTap**, which requires Accessibility permission. | Needed to steal a key/button back from Plex, browsers, etc. Acceptable for a personal unsandboxed app. Signing must be stable (personal team) so the TCC grant survives rebuilds. |
+| D4 | Global Home button uses a **CGEventTap**, which requires Accessibility permission. | Needed to steal a key/button back from Plex, browsers, etc. Acceptable for a personal unsandboxed app. Signing must be stable so the TCC grant survives rebuilds: Apple Development cert, team **H846CY8RB4** (the user's own team; verified to build without a provisioning profile). |
 | D5 | YouTube = `youtube.com/tv` in a **WKWebView inside the launcher**, with a TV user agent. Profile PIN protection relies on YouTube's own **Parent code**. Fallback: launcher-level profiles with isolated `WKWebsiteDataStore`s and a launcher PIN. | Best remote UX. Keeps the user inside the launcher. Parent code matches the desired child-profile behavior. |
 | D6 | IPTV is **built in**. Player engine = **libmpv via MPVKit** (Swift package). | IPTV streams are often raw MPEG-TS that AVPlayer handles poorly. mpv plays nearly everything and supports a back-buffer for rewind. |
 | D7 | IPTV **rewind buffer** uses mpv's demuxer back-cache (`demuxer-max-back-bytes`, optionally `cache-on-disk`), targeting **≥ 5 minutes** per live stream. | Meets "cache a few minutes to rewind" without a DVR. |
@@ -55,6 +55,9 @@ Record every architecture-level decision here. Sub plans may make local decision
 | D13 | Prime Video and the generic browser are launched as **external apps** (Prime Video Mac app or Safari/Chrome). | DRM (Widevine/FairPlay) does not work reliably in our WKWebView. |
 | D14 | Multiview: up to **4 tiles** (2-up, 2×2), each its own mpv instance. Audio follows the focused tile. | Fits within the 5-connection limit with one spare for the guide preview. |
 | D15 | Launched apps open **full screen**. M1: Chromium browsers get `--start-fullscreen` (only works on a cold launch). M2: a general path that sets `AXFullScreen` on the app's main window through the Accessibility API, covering Safari, Prime Video and apps that are already running. The browser tile opens the **system default browser** (Brave). | TV use needs no window chrome. Accessibility is already required for D4, so the general path adds no new permission. |
+| D16 | Input bindings are **data**: `key-bindings.json` maps key / media-key / controller-button triggers to `RemoteCommand`s, each with an `isGlobal` flag. App settings live in `settings.json`. Both are in the D10 directory, read at launch, and hand-edited until the M7 Settings UI. | A new remote needs no code change. Unbound key codes are logged (only while MMTVL is frontmost) to help mapping. |
+| D17 | **One active CGEventTap** handles global input: it always consumes `isGlobal` bindings (Home) and consumes media keys **only while the launcher is frontmost**; it never logs keys. Game controllers use GameController with `shouldMonitorBackgroundEvents`; in the background only global bindings act. All global input is off in `-windowed` mode. | Keeps other apps (Plex, browsers) fully usable while Home always works. Avoids keylogging. Protects the dev Mac's Home key. |
+| D18 | **Home from an external app leaves it running** (tvOS semantics); **system wake** always returns to the launcher home screen. | User choice (2026-10-05). Instant return to Plex and the like; predictable state from the couch. |
 
 ## 5. Architecture overview
 
@@ -85,7 +88,7 @@ Status values: `Not planned` → `Planned` → `In progress` → `Done` (or `Blo
 |---|---|---|---|---|
 | M0 | Project bootstrap: Xcode project, test target, planning system, CLAUDE.md | — | Done | — |
 | M1 | Launcher shell & kiosk: borderless fullscreen window, home screen tiles, custom focus, launching external apps, Exit to Desktop | M0 | Done | [M1-launcher-shell.md](M1-launcher-shell.md) |
-| M2 | Input layer: remappable bindings, global Home (event tap + Accessibility onboarding), game controllers, cursor auto-hide, launch at login, sleep/wake behavior, signing with personal team, full screen for launched apps via Accessibility (D15) | M1 | Not planned | — |
+| M2 | Input layer: remappable bindings, global Home (event tap + Accessibility onboarding), game controllers, cursor auto-hide, launch at login, sleep/wake behavior, signing with personal team, full screen for launched apps via Accessibility (D15) | M1 | Planned | [M2-input-layer.md](M2-input-layer.md) |
 | M3 | YouTube: WKWebView `youtube.com/tv`, TV user agent, key mapping, **verify Parent code**, profile fallback if needed, verify Link-with-TV-code casting | M2 | Not planned | — |
 | M4 | IPTV core: Keychain-stored M3U/Xtream source, channel import, single EPG source, grid guide, mpv player, **rewind buffer** | M2 | Not planned | — |
 | M5 | Phone remote: LAN web server, pairing, D-pad/media/volume/text entry | M2 | Not planned | — |
@@ -96,7 +99,7 @@ Status values: `Not planned` → `Planned` → `In progress` → `Done` (or `Blo
 
 | # | Question | Blocks |
 |---|---|---|
-| Q1 | Which remote will be purchased? (affects default key bindings and Remote Buddy integration) | M2 defaults (not M2 itself) |
+| Q1 | Which remote will be purchased? Its Home button must emit a key macOS can see (or be mapped to one by Remote Buddy/Flirc). M2 makes bindings remappable and logs unbound key codes, so this only affects `key-bindings.json`. | Nothing (bindings are data) |
 | Q2 | Does `youtube.com/tv` in a WKWebView expose Parent code and child profiles? | M3 design branch |
 | Q3 | Does the provider expose the Xtream API (`player_api.php`) and HLS output, and does it offer catch-up? | M4 source design, M6 catch-up |
 | Q4 | Prime Video: Mac App Store app or browser? (test which is more remote-friendly) | M1 default launch item only |
