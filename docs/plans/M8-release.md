@@ -4,18 +4,18 @@
 |---|---|
 | Status | Planned |
 | Depends on | M7b (code complete; its hardware checks can run in parallel) |
-| Master plan decisions used | D4, D9, D10, D13, D15, D19, D22, D24, D28; new **D33** (Developer ID + notarized releases, own Homebrew tap, no App Store), **D34** (open source: MIT, notices, scrubbed public history) |
+| Master plan decisions used | D4, D9, D10, D13, D15, D19, D22, D24, D28; new **D33** (Developer ID + notarized releases on GitHub, no Homebrew, no App Store), **D34** (open source: MIT, notices, scrubbed public history) |
 | Planned | 2026-10-06 |
 
 ## Goal
 
-Anyone can install MMTVL with `brew install --cask dwolcot1/tap/mmtvl` (or download a zip from GitHub Releases). It opens without Gatekeeper warnings because it is signed with the user's **Developer ID** and **notarized**. The source is public at `github.com/dwolcot1/mmtvl` under the **MIT** license. The history is rewritten so it doesn't name the user's IPTV provider or show the user's personal email. The app carries the license notices for every bundled library, and Settings has a **Licenses** page you can read from the couch (a QR code per component). A release is one script run (`scripts/release.sh`) plus a GitHub release and a one-line cask bump. On the Mac mini, upgrading from the development-signed 1.0 to the first notarized release (**1.0.1**) needs a one-time Accessibility re-grant, which the README and the release notes explain.
+Anyone can download MMTVL from the repo's GitHub Releases page (a zip). It opens after only macOS's standard "downloaded from the Internet" confirmation, because it is signed with the user's **Developer ID** and **notarized**. The source is public at `github.com/dwolcot1/mmtvl` under the **MIT** license. The history is rewritten so it doesn't name the user's IPTV provider or show the user's personal email. The app carries the license notices for every bundled library, and Settings has a **Licenses** page you can read from the couch (a QR code per component). A release is one script run (`scripts/release.sh`) plus a GitHub release. On the Mac mini, upgrading from the development-signed 1.0 to the first notarized release (**1.0.1**) needs a one-time Accessibility re-grant, which the README and the release notes explain.
 
 ## Out of scope
 
 - **Mac App Store.** The App Sandbox would remove the core of MMTVL: the event tap and Accessibility (global Home, D4/D17), synthetic key and mouse events to other apps (D24, D31), AX full screen of other apps (D15), managing Reflector (D32). The YouTube TV approach (D5/D21) would likely fail App Review. Master plan §2 already lists App Store distribution and sandboxing as non-goals.
-- Submitting to the official `homebrew/cask` repository (it has notability rules; the user's own tap avoids them). Possible later.
-- Automatic updates inside the app (Sparkle). `brew upgrade` covers Homebrew users; others download the new zip. Possible later.
+- **Homebrew** (a tap or the official `homebrew/cask`): not wanted (user choice 2026-10-06); the app lives on GitHub only. Notarization keeps the door open: Homebrew requires it anyway.
+- Automatic updates inside the app (Sparkle). Users download the new zip from Releases. Possible later.
 - CI release builds (GitHub Actions with signing secrets). Releases are built on the user's Mac with `scripts/release.sh`.
 - DMG packaging. The release asset is a zip (L6).
 - Changing app behavior or defaults for new users (first-run wizard, casting off by default). Possible later.
@@ -58,11 +58,9 @@ Anyone can install MMTVL with `brew install --cask dwolcot1/tap/mmtvl` (or downl
 - `xcrun notarytool store-credentials <profile>` saves credentials to the Keychain (interactive prompts for anything not given). `xcrun notarytool submit <zip> --keychain-profile <profile> --wait`; `notarytool log <id> --keychain-profile <profile>` explains a rejection. Then `xcrun stapler staple MMTVL.app` and `xcrun stapler validate MMTVL.app`. `spctl -a -vvv -t exec MMTVL.app` should say `source=Notarized Developer ID`.
 - Credentials are an Apple ID **app-specific password** (appleid.apple.com → Sign-In and Security) or an App Store Connect API key. They never go in the repo.
 
-### Homebrew
+### Gatekeeper and downloads
 
-- Homebrew 5.0.0 (2025-11-12) removed `--no-quarantine`; casks that fail Gatekeeper are deprecated in `homebrew/cask` and disabled from **2026-09-01**. So signing and notarizing is required in practice. ([ifun.de on Homebrew 5](https://www.ifun.de/homebrew-5-gatekeeper-vorgaben-und-abkehr-von-intel-268961/), [feedbagel summary](https://feedbagel.com/post/homebrew-to-remove-no-quarantine-flag-support-for-macos-security-compliance))
-- Taps: name the GitHub repo `homebrew-<name>`, put casks in `Casks/`; users run `brew install --cask dwolcot1/tap/mmtvl` (or `brew tap dwolcot1/tap` first). Cask names must be unique ([How to Create and Maintain a Tap](https://docs.brew.sh/How-to-Create-and-Maintain-a-Tap)).
-- Cask stanza order: `version`, `sha256`, `url`, `name`, `desc`, `homepage`, `livecheck`, `depends_on`, `app`, `zap`. `trash:` is preferred over `delete:` in `zap`. macOS 26 is `:tahoe` ([Cask Cookbook](https://docs.brew.sh/Cask-Cookbook)). `brew audit` and `brew style` check casks.
+- Files downloaded with a browser get the quarantine attribute; Gatekeeper then checks the app on first launch. A notarized app with a stapled ticket opens after the standard "downloaded from the Internet" confirmation, even offline. A development-signed or un-notarized app is blocked (Privacy & Security → Open Anyway, or `xattr -dr com.apple.quarantine`), which is what the user hit with the 1.0 zip.
 
 ### Secrets scan and history rewrite
 
@@ -84,11 +82,10 @@ Anyone can install MMTVL with `brew install --cask dwolcot1/tap/mmtvl` (or downl
 | `README.md` (new, repo root) | What MMTVL is, install, first run, permissions, upgrading, unofficial YouTube TV and IPTV notes, trademarks, building from source, licenses. |
 | `MMTVL/Settings/SettingsTypes.swift` | `SettingsPage.licenses`, `.license(id: String)`. |
 | `MMTVL/Settings/SettingsModel+Pages.swift` | Root row *Licenses*; the two pages. |
-| `scripts/release.sh` (new) | Archive, export with Developer ID, verify, notarize, staple, zip, checksum, print the cask lines. |
+| `scripts/release.sh` (new) | Archive, export with Developer ID, verify, notarize, staple, zip, checksum. |
 | `scripts/ExportOptions.plist` (new) | `method = developer-id`, team, automatic signing. |
 | `scripts/gitleaks.toml` (new) | Default rules + rules for IPTV-style URLs, Plex tokens and the user's real hosts (supplied at run time, never committed). |
 | `CLAUDE.md`, `docs/plans/MASTER_PLAN.md` | Signing, release process, licenses, the public repo. |
-| Tap repo `dwolcot1/homebrew-tap` (new, separate repo) | `Casks/mmtvl.rb`, `README.md`. |
 
 `scripts/` is outside the synchronized `MMTVL/` folder, so nothing there is bundled into the app.
 
@@ -175,7 +172,7 @@ Components (ids and frameworks; versions and licenses verified in step 3):
    - every framework in `Contents/Frameworks` has `Authority=Developer ID Application`.
 7. `ditto -c -k --keepParent <app> build/release/notarize.zip`; `xcrun notarytool submit build/release/notarize.zip --keychain-profile "${NOTARY_PROFILE:-mmtvl-notary}" --wait --output-format json > build/release/notary.json`; stop unless `status` is `Accepted` (parse with `plutil -extract status raw` after converting, or `python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["status"])'`); on failure print the `id` and the `notarytool log` command.
 8. `xcrun stapler staple <app>`; `xcrun stapler validate <app>`; `spctl -a -vvv -t exec <app>` must mention `Notarized Developer ID`.
-9. `ditto -c -k --keepParent <app> build/release/MMTVL-<version>.zip`; print `shasum -a 256` of it, and print the cask's `version`/`sha256` lines to paste.
+9. `ditto -c -k --keepParent <app> build/release/MMTVL-<version>.zip`; print `shasum -a 256` of it (for the release notes).
 
 The script never tags, pushes or creates releases: those are outward steps done by hand (step 11) after the user confirms.
 
@@ -194,43 +191,6 @@ The script never tags, pushes or creates releases: those are outward steps done 
 </plist>
 ```
 
-### The cask (`dwolcot1/homebrew-tap`, `Casks/mmtvl.rb`)
-
-```ruby
-cask "mmtvl" do
-  version "1.0.1"
-  sha256 "<from release.sh>"
-
-  url "https://github.com/dwolcot1/mmtvl/releases/download/v#{version}/MMTVL-#{version}.zip"
-  name "MMTVL"
-  desc "Full-screen TV launcher driven by a remote, keyboard or phone"
-  homepage "https://github.com/dwolcot1/mmtvl"
-
-  livecheck do
-    url :url
-    strategy :github_latest
-  end
-
-  depends_on macos: ">= :tahoe"
-
-  app "MMTVL.app"
-
-  uninstall quit: "dev.mmtvl.launcher"
-
-  zap trash: [
-    "~/Library/Application Support/MMTVL",
-    "~/Library/Caches/dev.mmtvl.launcher",
-    "~/Library/Caches/MMTVL",
-    "~/Library/HTTPStorages/dev.mmtvl.launcher",
-    "~/Library/HTTPStorages/dev.mmtvl.launcher.binarycookies",
-    "~/Library/Preferences/dev.mmtvl.launcher.plist",
-    "~/Library/WebKit/dev.mmtvl.launcher",
-  ]
-end
-```
-
-`brew audit`/`brew style` have the last word on syntax and the `desc` wording (if `depends_on macos: ">= :tahoe"` is flagged, use `depends_on macos: :tahoe`). Keychain items (service `dev.mmtvl.launcher`) can't be removed by `zap`; the README says how.
-
 ### Local decisions
 
 - **L1 — Team.** Keep `DEVELOPMENT_TEAM = H846CY8RB4` if step 1 shows it is the paid team (it already owns the Apple Development certificate). If the paid membership has another team ID, switch all four configurations, `ExportOptions.plist` and the docs to it. That is a new signing identity for Debug too, so the dev Mac re-grants Accessibility once.
@@ -238,14 +198,14 @@ end
 - **L3 — Hardened runtime for both configurations,** so Debug behaves like a release and entitlement problems show up during development. Only exception: `RUNTIME_EXCEPTION_ALLOW_JIT = YES` (LuaJIT). No `disable-library-validation` (frameworks are re-signed by the team) and no `allow-unsigned-executable-memory` unless step 2 or Intel users show a need (Q16).
 - **L4 — Build settings, not an entitlements file** (Xcode generates the entitlements from them).
 - **L5 — Release from the dev Mac by script,** no CI (signing secrets stay in the user's Keychain).
-- **L6 — Zip, not DMG.** `ditto -c -k --keepParent` of the stapled app. Homebrew handles zips; a stapled app inside a zip passes Gatekeeper offline.
+- **L6 — Zip, not DMG.** `ditto -c -k --keepParent` of the stapled app. GitHub Releases serves it as is; a stapled app inside a zip passes Gatekeeper offline.
 - **L7 — First public release is 1.0.1 (build 2).** Same features as the development-signed 1.0, but a new signature; the tag `v1.0` stays as the milestone tag. Every release bumps `CURRENT_PROJECT_VERSION` by 1.
 - **L8 — License: MIT** for MMTVL's code (user choice 2026-10-06), `Copyright (c) 2026 Derek Wolcott`.
 - **L9 — Notices file** inside the app at `MMTVL/Licenses/THIRD_PARTY_NOTICES.md` (bundled automatically), linked from the README. It starts with MMTVL's MIT license, then one section per component (name, version, license, copyright, source URL), then the full texts of each distinct license once (GPL-3.0, LGPL-3.0, LGPL-2.1, Apache-2.0, MPL-1.1, BSD-2-Clause, ISC, zlib, FTL, MIT variants), then the LGPL section (L10).
 - **L10 — LGPL compliance text:** where the exact source is (MPVKit tag `1.0.0` and each build repo's release, plus the upstream project at that version), a written offer to send the source on request for three years (contact: the GitHub issues of `dwolcot1/mmtvl`), and how to replace a framework: copy the rebuilt `.framework` into `MMTVL.app/Contents/Frameworks`, then `codesign --force --deep -s - MMTVL.app` (ad hoc), then re-grant Accessibility.
 - **L11 — Licenses page with QR codes** (*Design*): long license text isn't readable on a TV; the QR code hands it to a phone.
 - **L12 — History rewrite (user choice 2026-10-06):** keep every commit, but replace the provider name, its URL pattern host and its CDN host with neutral text (`git filter-repo --replace-text` and `--replace-message`), and rewrite `user@example.com` to `57643254+dwolcot1@users.noreply.github.com` (`--mailmap`). Future commits use the noreply address (`git config user.email` in this repo).
-- **L13 — Publish to a new repository.** Rename the current private repo to `dwolcot1/mmtvl-private` (kept private as the archive, with its PRs), create a new **private** `dwolcot1/mmtvl`, push the rewritten history there, and make it **public** only at the end (step 13). *Why:* GitHub keeps old PR commits reachable (*Research*).
+- **L13 — Publish to a new repository.** Rename the current private repo to `dwolcot1/mmtvl-private` (kept private as the archive, with its PRs), create a new **private** `dwolcot1/mmtvl`, push the rewritten history there, and make it **public** only at the end (step 12). *Why:* GitHub keeps old PR commits reachable (*Research*).
 - **L14 — Gitleaks with extra rules,** plus the user's real hosts supplied through an uncommitted local file, so the scan looks for the exact things that must not leak without writing them into the repo.
 - **L15 — Defaults unchanged.** YouTube casting stays on and Reflector auto-start stays on (it only acts when Reflector is installed). The README says which ports MMTVL opens (8765/8766 phone remote, 8770 DIAL, UDP 1900) and how to switch each off.
 - **L16 — Upgrade notes.** Release notes and the README say: after upgrading from a development-signed build (only the user's mini), remove MMTVL from Privacy & Security → Accessibility with "−" and add it again (or `tccutil reset Accessibility dev.mmtvl.launcher` and grant again), allow Local Network again if asked, and answer "Always Allow" to Keychain prompts, or remove the old items and enter the settings again.
@@ -285,7 +245,7 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
   - README sections, in this order:
     1. One-paragraph description and a feature list (home screen, YouTube TV, Live TV with guide and Multiview, phone remote with trackpad, casting, Plex top shelf).
     2. Requirements: macOS 26 (Tahoe) or later; a Mac connected to a TV; Accessibility permission (global Home, controlling other apps); Local Network permission (Plex, casting).
-    3. Install: `brew install --cask dwolcot1/tap/mmtvl`, or download the zip from Releases and move `MMTVL.app` to Applications.
+    3. Install: download `MMTVL-<version>.zip` from the latest GitHub Release, unzip it, move `MMTVL.app` to Applications and open it. To update, quit MMTVL and replace the app the same way (settings stay).
     4. First run: kiosk mode, Exit to Desktop, ⌘Q, `-windowed`, where settings live (`~/Library/Application Support/MMTVL`), the Keychain items (service `dev.mmtvl.launcher`) and how to delete them.
     5. Network: ports 8765/8766 (phone remote), 8770 and UDP 1900 (YouTube casting), and the Settings switches for each (L15).
     6. Upgrading: L16's notes.
@@ -361,23 +321,16 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
   - Tag and draft release (confirm first): `git tag -a v1.0.1 -m "MMTVL 1.0.1"`, `git push origin v1.0.1`, `gh release create v1.0.1 build/release/MMTVL-1.0.1.zip --draft --title "MMTVL 1.0.1" --notes-file <notes>`. Notes: first signed and notarized release; install lines; L16's upgrade notes; checksum.
   - Done when: the draft release has the zip, and a download of the asset (`gh release download v1.0.1 -D $TMPDIR/dl`) has the printed SHA-256.
 
-- [ ] **12. Homebrew tap (with the user)**: new repo `dwolcot1/homebrew-tap`
-  - Confirm, then `gh repo create dwolcot1/homebrew-tap --public --description "Homebrew casks for MMTVL"` and clone it to `~/Developer/homebrew-tap`.
-  - Add `Casks/mmtvl.rb` per *Design* (the 1.0.1 SHA-256) and a short `README.md` (`brew install --cask dwolcot1/tap/mmtvl`, `brew upgrade --cask mmtvl`, `brew uninstall --zap --cask mmtvl`, a link to the app repo).
-  - Before pushing: `brew tap dwolcot1/tap ~/Developer/homebrew-tap` (a local tap), `brew style dwolcot1/tap`, `brew audit --cask --strict dwolcot1/tap/mmtvl` (online checks run in step 13 once the release is public). Fix what they report.
-  - Commit and push (confirm first).
-  - Done when: `brew style` and offline `brew audit` pass and the tap repo is pushed.
-
-- [ ] **13. Go public (with the user)**: no files
+- [ ] **12. Go public (with the user)**: no files
   - Last checks before the switch: step 8's scans are clean on `origin/master` of the new repo; README and LICENSE are present; the draft release is ready.
   - Confirm, then `gh repo edit dwolcot1/mmtvl --visibility public --accept-visibility-change-consequences`, then `gh release edit v1.0.1 --draft=false`.
-  - Verify on the dev Mac without touching its Debug setup (L2): `brew untap dwolcot1/tap` (the local-path tap), `brew tap dwolcot1/tap` (from GitHub), `brew audit --cask --online --strict dwolcot1/tap/mmtvl`, then `brew fetch --cask dwolcot1/tap/mmtvl` (download + checksum). Don't install it on the dev Mac (it would replace the Debug identity's grants).
-  - On the Mac mini (with the user): `brew install --cask dwolcot1/tap/mmtvl` over the step 7 install (use `--force` if Homebrew says the app already exists, since that copy wasn't installed by brew); it opens without Gatekeeper warnings and keeps its grants (same Developer ID identity as step 7).
-  - Done when: the repo and release are public, the online audit passes, and the mini runs the Homebrew-installed 1.0.1.
+  - Verify the public download without touching the dev Mac's Debug setup (L2): in a private browser window (signed out of GitHub), open `https://github.com/dwolcot1/mmtvl/releases/latest`, download the zip, and check `shasum -a 256` matches step 11's. Don't run it on the dev Mac.
+  - On the Mac mini (with the user): download the zip from the release page in a browser (so it's quarantined like any user's download), quit MMTVL, replace `/Applications/MMTVL.app`, open it. It opens after only the standard "downloaded from the Internet" confirmation and keeps its grants (same Developer ID identity as step 7).
+  - Done when: the repo and release are public, the anonymous download's checksum matches, and the mini runs the downloaded 1.0.1.
 
-- [ ] **14. Docs and status**: `CLAUDE.md`, `docs/plans/MASTER_PLAN.md`, this file
-  - CLAUDE.md: the repo is public at `dwolcot1/mmtvl` (archive `mmtvl-private`); the release checklist in five lines (bump version and build → commit → `scripts/release.sh` → tag + `gh release create` → bump the cask's `version` and `sha256` in `dwolcot1/homebrew-tap`); commit email is the noreply address.
-  - Master plan: §3 *Distribution* row → "Developer ID + notarized zip on GitHub Releases, Homebrew tap `dwolcot1/tap`; Debug builds Apple Development (D33)"; M8 → `Done`; resolve Q16 if step 2 or a user report answered it, Q17 with step 7's findings, Q5 (the public name is MMTVL).
+- [ ] **13. Docs and status**: `CLAUDE.md`, `docs/plans/MASTER_PLAN.md`, this file
+  - CLAUDE.md: the repo is public at `dwolcot1/mmtvl` (archive `mmtvl-private`); the release checklist in four lines (bump version and build → commit → `scripts/release.sh` → tag + `gh release create` with the zip and checksum); commit email is the noreply address.
+  - Master plan: §3 *Distribution* row → "Developer ID + notarized zip on GitHub Releases; Debug builds Apple Development (D33)"; M8 → `Done`; resolve Q16 if step 2 or a user report answered it, Q17 with step 7's findings, Q5 (the public name is MMTVL).
   - Done when: the docs match what was done.
 
 ## Tests
@@ -396,7 +349,7 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
 - [ ] Mini upgrade 1.0 → Developer ID: Gatekeeper, Accessibility, Local Network, Keychain prompts and Launch at Login recorded (step 7), README matches.
 - [ ] Secrets scans clean; the public history has no provider name, CDN host, personal email or private terms.
 - [ ] `github.com/dwolcot1/mmtvl` is public with README and LICENSE; `mmtvl-private` is private and keeps the old PRs.
-- [ ] `brew install --cask dwolcot1/tap/mmtvl` on the mini installs 1.0.1 and it opens without warnings; `brew uninstall --zap --cask mmtvl` (only if the user wants to test it on a spare account) removes the app data listed in the cask.
+- [ ] The 1.0.1 zip downloaded from the public release page opens on the mini after only the standard "downloaded from the Internet" confirmation.
 
 ## Risks & fallbacks
 
@@ -412,8 +365,6 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
 | A real secret is found in history | Step 8 | Stop; rotate it at the provider; add it to the replacements; rescan. |
 | The rewrite breaks tests (a replacement changed code meaning) | Step 9 tests fail | Narrow the replacement (more specific regex) and redo step 9 from a fresh clone. |
 | An old commit leaks via forks or caches of the private repo | — | The private repo was never public; L13 keeps its PRs private. |
-| `brew audit` rejects the cask wording or `depends_on` | Step 12 | Follow the audit's message (it names the fix). |
-| The Homebrew audit wants `--new` notability rules | Step 12 | Not needed for a personal tap; drop `--new`. |
 | A user on Intel reports Lua or playback problems | GitHub issue | Q16: add `allow-unsigned-executable-memory` in a point release. |
 
 ## Deviations & questions
