@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Planned |
+| Status | In progress |
 | Depends on | M7 (and M3 YouTube, M5 phone remote) |
 | Master plan decisions used | D1, D3, D4, D5, D9, D10, D11, D12, D15, D17, D18, D19, D20, D21, D24, D28; new **D30** (YouTube DIAL receiver), **D31** (phone trackpad and home-screen icon), **D32** (Android screen mirroring through Reflector) |
 | Planned | 2026-10-06 |
@@ -545,7 +545,7 @@ Every way in which a phone puts something on the TV, and what MMTVL does around 
 
 Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodebuild … build`) and run the step's tests.
 
-- [ ] **1. Phone remote icon and manifest**: `RemoteServer/HTTPRequest.swift`, `RemoteServer/RemoteWebAssets.swift`, `RemoteServer/PhoneRemoteIcon.swift` (new), `RemoteServer/RemoteServer.swift`, `RemoteServer/Web/remote.html`, `MMTVLTests/HTTPRequestTests.swift`, `MMTVLTests/PhoneRemoteIconTests.swift` (new)
+- [x] **1. Phone remote icon and manifest**: `RemoteServer/HTTPRequest.swift`, `RemoteServer/RemoteWebAssets.swift`, `RemoteServer/PhoneRemoteIcon.swift` (new), `RemoteServer/RemoteServer.swift`, `RemoteServer/Web/remote.html`, `MMTVLTests/HTTPRequestTests.swift`, `MMTVLTests/PhoneRemoteIconTests.swift` (new)
   - `HTTPHeader`, `HTTPResponse.make(contentType: String?, headers:)`, `HTTPResponse.reason(for:)` as sketched. Header order: status line, Content-Type (if any), Content-Length, the extra headers, Connection, Cache-Control, X-Content-Type-Options.
   - `RemoteWebAsset.generated`, the new paths and `RemoteWebManifest.json` (L10). Keep `data(for:bundle:)` for bundle files only (returns nil for generated ones).
   - `PhoneRemoteIcon.png(size:)`: `Image("Logo").resizable().interpolation(.high).frame(width: size, height: size)` rendered with `ImageRenderer` (`scale = 1`), `cgImage` → `NSBitmapImageRep(cgImage:).representation(using: .png, properties: [:])`. Cache in a `[Int: Data]` static dictionary. The `Logo` image set already exists in `Assets.xcassets` (don't change it).
@@ -554,7 +554,7 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
   - Tests: the new paths map to the right `generated` values and content types; `/favicon.ico` still nil; `make` with extra headers and nil content type; `reason(for:)`; the manifest decodes as JSON with two icons; `PhoneRemoteIcon.png(size: 180)` starts with the PNG signature and `NSBitmapImageRep(data:)` reports 180 × 180 pixels.
   - Done when: tests pass; with the app running, `curl -sI http://localhost:8765/apple-touch-icon.png` shows `200` and `image/png`, and opening `http://localhost:8765/icon-512.png` shows the icon.
 
-- [ ] **2. DIAL protocol (pure)**: `Cast/DIALProtocol.swift` (new), `MMTVLTests/DIALProtocolTests.swift` (new)
+- [x] **2. DIAL protocol (pure)**: `Cast/DIALProtocol.swift` (new), `MMTVLTests/DIALProtocolTests.swift` (new)
   - Everything in the `DIALProtocol.swift` sketch, following *Request flow* step 3 exactly. XML-escape `friendlyName` and the uuid in the device description (`&`, `<`, `>`, `"`, `'`). Device description:
     `<?xml version="1.0"?><root xmlns="urn:schemas-upnp-org:device-1-0"><specVersion><major>1</major><minor>0</minor></specVersion><URLBase>http://HOST</URLBase><device><deviceType>urn:dial-multiscreen-org:device:dial:1</deviceType><friendlyName>NAME</friendlyName><manufacturer>MMTVL</manufacturer><modelName>MMTVL</modelName><UDN>uuid:ID</UDN></device></root>`
   - App status: `<?xml version="1.0" encoding="UTF-8"?><service xmlns="urn:dial-multiscreen-org:schemas:dial" dialVer="2.1"><name>YouTube</name><options allowStop="false"/><state>stopped</state></service>`; with `running: true` the state is `running` followed by `<link rel="run" href="run"/>`.
@@ -565,7 +565,7 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
   - Tests: M-SEARCH accepted (CRLF and LF, mixed-case header names, quoted and unquoted MAN); NOTIFY, wrong ST, `ssdp:all`, empty and binary data rejected; reply contains each line and ends with CRLF CRLF; parse cases (incomplete head, incomplete body, body exactly 4096 and 4097, 431, invalid header line, query stripped, `//apps//YouTube` normalized); every routing row of *Request flow* step 3 including 403 with `Origin: https://evil.example`, allowed with `Origin: package:com.google.ios.youtube`, 405, 404 for `/apps/Netflix`; native GET running/stopped; POST with `pairingCode=abc-123&theme=cl&foo=bar` → launch query `pairingCode=abc-123&theme=cl`; POST empty → `launch(query: nil)`; POST `a b` → 400; `reply(for:)` with handled false → 400 and status 0 → 200.
   - Done when: tests pass.
 
-- [ ] **3. DIAL server, SSDP and the cold path**: `Cast/DIALServer.swift`, `Cast/SSDPResponder.swift`, `Cast/CastReceiver.swift` (all new), `App/AppSettings.swift`, `App/AppDelegate.swift`, `YouTube/YouTubeController.swift`, `YouTube/YouTubeConfig.swift`, `Launcher/AppRouter.swift`, `MMTVL.xcodeproj/project.pbxproj` (build setting only), `MMTVLTests/FakeYouTube.swift`, `MMTVLTests/AppRouterTests.swift`, `MMTVLTests/AppSettingsTests.swift`, `MMTVLTests/YouTubeConfigTests.swift`, `MMTVLTests/DIALServerTests.swift` (new)
+- [x] **3. DIAL server, SSDP and the cold path**: `Cast/DIALServer.swift`, `Cast/SSDPResponder.swift`, `Cast/CastReceiver.swift` (all new), `App/AppSettings.swift`, `App/AppDelegate.swift`, `YouTube/YouTubeController.swift`, `YouTube/YouTubeConfig.swift`, `Launcher/AppRouter.swift`, `MMTVL.xcodeproj/project.pbxproj` (build setting only), `MMTVLTests/FakeYouTube.swift`, `MMTVLTests/AppRouterTests.swift`, `MMTVLTests/AppSettingsTests.swift`, `MMTVLTests/YouTubeConfigTests.swift`, `MMTVLTests/DIALServerTests.swift` (new)
   - `AppSettings`: `youtubeCastEnabled = true`, `castDeviceID: String?` (both `decodeIfPresent`). In `applicationDidFinishLaunching`, if `castDeviceID` is nil, set `UUID().uuidString.lowercased()` and save `settings.json` once.
   - `YouTubeConfig.launchURL(query:)`: `startURL` with `percentEncodedQuery = query` (empty → `startURL`).
   - `YouTubeController`: split `open()` into `makeWebViewIfNeeded()` + `load()`; `launch(query:)` = `makeWebViewIfNeeded()`, then load `launchURL(query:)` (set `phase = .loading`). Add `launch(query:)` to `YouTubeHosting`; `FakeYouTube` records `launches: [String]`.
@@ -585,7 +585,7 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
     ```
     and `curl -s -X POST -d 'v=dQw4w9WgXcQ' http://localhost:8770/apps/YouTube` switches MMTVL to YouTube.
 
-- [ ] **4. YouTube bridge (warm path)**: `YouTube/YouTubeDIAL.swift` (new), `YouTube/YouTubeController.swift`, `App/AppDelegate.swift`, `MMTVLTests/YouTubeDIALTests.swift` (new)
+- [x] **4. YouTube bridge (warm path)**: `YouTube/YouTubeDIAL.swift` (new), `YouTube/YouTubeController.swift`, `App/AppDelegate.swift`, `MMTVLTests/YouTubeDIALTests.swift` (new)
   - `YouTubeController.init(userAgent:castEnabled: Bool)`; when `castEnabled` at web view creation, add `YouTubeDIAL.shimScript` as a `WKUserScript` (`.atDocumentStart`, `forMainFrameOnly: true`; the default page content world) and `userContentController.add(delegate, name: YouTubeDIAL.messageHandlerName)`. AppDelegate passes `settings.youtubeCastEnabled` (read at creation, L5).
   - **Fix the delegate:** `userContentController(_:didReceive:)` calls `pageDidExit()` only for `YouTubeKeyMap.messageHandlerName`; for `YouTubeDIAL.messageHandlerName` with body `["type": "ready", "app": "YouTube"]` it calls `controller?.dialDidBecomeReady()`.
   - `private(set) var isDIALReady = false` (`@ObservationIgnored`), set true by `dialDidBecomeReady()` (log "Leanback registered its DIAL handlers"), false in `load()`, `didFail`, `contentProcessDidTerminate`, and a new `webView(_:didStartProvisionalNavigation:)` delegate method.
@@ -605,7 +605,7 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
   - If the phone never lists MMTVL: check the M-SEARCH arrives (log), Local Network permission, the firewall (System Settings → Network → Firewall: allow MMTVL), and whether port 1900 bound (`lsof -nP -iUDP:1900`). If it lists but pairing fails only on the cold path: switch L2 to "load YouTube off screen at launch when casting is on" (record the change and ask the user first). Stop and ask if both paths fail.
   - Done when: the user confirms 1–4 on at least one phone, or the failure is recorded with logs and the user has decided what to do.
 
-- [ ] **6. Settings → Casting**: `Cast/AirPlayReceiverProbe.swift` (new), `Settings/SettingsTypes.swift`, `Settings/SettingsModel.swift`, `Settings/SettingsModel+Pages.swift`, `Settings/SettingsEnvironment.swift`, `App/AppDelegate.swift`, `MMTVLTests/SettingsTestSupport.swift`, `MMTVLTests/SettingsCastingTests.swift` (new), `MMTVLTests/AirPlayReceiverProbeTests.swift` (new)
+- [x] **6. Settings → Casting**: `Cast/AirPlayReceiverProbe.swift` (new), `Settings/SettingsTypes.swift`, `Settings/SettingsModel.swift`, `Settings/SettingsModel+Pages.swift`, `Settings/SettingsEnvironment.swift`, `App/AppDelegate.swift`, `MMTVLTests/SettingsTestSupport.swift`, `MMTVLTests/SettingsCastingTests.swift` (new), `MMTVLTests/AirPlayReceiverProbeTests.swift` (new)
   - Types per *Key types*. `SettingKey.youtubeCastEnabled` (`\.youtubeCastEnabled`). `SettingsPage.casting` (title "Casting", image `.symbol("airplay.video")`, hint like `.phoneRemote`). `SettingsAction.openAirPlaySettings`.
   - Root page: a section `casting` titled "Casting" right after the YouTube section, with one row `casting` "Casting", `showsDisclosure`, action `.push(.casting)`.
   - Casting page sections:
@@ -675,7 +675,7 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
     - Escape during mirroring → full screen comes back within ~3 s (or Escape does nothing).
     - Settings → Casting → Android shows Ready / Mirroring live.
 
-- [ ] **9. Trackpad: Mac side**: `Input/PhonePointer.swift` (new), `Input/SyntheticInput.swift`, `RemoteServer/RemoteMessage.swift`, `RemoteServer/PhoneRemote.swift`, `App/AppDelegate.swift`, `MMTVLTests/PointerMathTests.swift` (new), `MMTVLTests/RemoteMessageTests.swift`, `MMTVLTests/PhoneRemoteTests.swift`
+- [x] **9. Trackpad: Mac side**: `Input/PhonePointer.swift` (new), `Input/SyntheticInput.swift`, `RemoteServer/RemoteMessage.swift`, `RemoteServer/PhoneRemote.swift`, `App/AppDelegate.swift`, `MMTVLTests/PointerMathTests.swift` (new), `MMTVLTests/RemoteMessageTests.swift`, `MMTVLTests/PhoneRemoteTests.swift`
   - `RemoteWireMessage` gains `dx: Double?`, `dy: Double?`, `button: String?`. `ClientMessage.pointer(PointerAction)` decoded from types `pointer` (`.move`), `scroll` (`.scroll`) — both need finite `dx` and `dy` with `abs ≤ PointerMath.maxDelta` — and `click` (`PointerButton(rawValue:)`).
   - `PhoneRemoteEnvironment.pointer: (PointerAction) -> Void`. `receive`: authenticated only; `environment.canPostEvents()` false → the Accessibility toast at most every 5 s per session (store `lastAccessToast: Date?` in `Session`, use `environment.now()`), else `environment.pointer(action)`.
   - `SyntheticInput`: `pointerLocation`, `movePointer(to:delta:)`, `click(_:at:clickCount:)`, `scroll(wheel1:wheel2:)`, `activeDisplayBounds()` per *Research*, all through `makeSource()`/`post(_:)` so they carry the marker.
@@ -690,7 +690,7 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
   - JS (per L11): `setMode('dpad'|'trackpad')` toggles `.dpad`/`#trackpad` `hidden`, the button label and `aria-label`, and stores `mmtvl.mode` (try/catch like the token). Pointer events on `#trackpad` with `setPointerCapture`; a `Map` of active pointers; one active pointer adds to a move accumulator, two or more add `delta / count` to a scroll accumulator; `requestAnimationFrame` flushes non-zero accumulators as one `pointer` and one `scroll` message (rounded to 0.1). Tap detection on the last pointer up: total time < 250 ms and total movement < 10 px → `click` with `right` if two or more pointers were down during the gesture, else `left`; `navigator.vibrate(5)` if available. Reset on `pointercancel`.
   - Done when: on an iPhone (and Android if available) the toggle switches views and is remembered after a reload; moving, tapping, double-tapping (selects a word in a browser), two-finger tap (context menu) and two-finger scroll work in Brave; scrolling moves content the same way as the finger (if reversed, set `PointerMath.scrollSign = -1` and note it under *Deviations*); without Accessibility the toast appears but doesn't repeat continuously.
 
-- [ ] **11. Docs**: `CLAUDE.md`, `docs/plans/MASTER_PLAN.md`, this file
+- [x] **11. Docs**: `CLAUDE.md`, `docs/plans/MASTER_PLAN.md`, this file
   - `CLAUDE.md`: a log-stream line for `category == "Cast"`; `settings.json` keys `youtubeCastEnabled` and `castDeviceID`; a *Casting* bullet in Conventions (ports TCP 8770 and UDP 1900, `Cast/` folder, the shim and L7's never-log rule, the cold/warm paths, Settings → Casting, how to test with the M-SEARCH script and `curl`); phone remote: icon paths and trackpad messages; synthetic input: mouse events also carry the marker; the Local Network text now mentions casting; `settings.json` `reflectorAutoStart`; a *Reflector* bullet (bundle id, L23's preference checklist, that MMTVL starts it hidden, detects sessions by window size, and that Home ends mirroring; how to watch it: `category == "Reflector"`).
   - Master plan: tick nothing new in §4 (D30/D31 are added at planning time); fix anything the build changed; set M7b to `In progress` (it becomes `Done` after step 13).
   - Done when: docs match the code.
@@ -753,3 +753,9 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
 ## Deviations & questions
 
 Executors append here when the plan is wrong or ambiguous: the date, the step, what happened, and what they need. Do not silently diverge.
+
+- **2026-10-06, steps 5 and 7 (order):** both need the user (real phones; Reflector 4 + an Android phone; Reflector isn't installed on the dev Mac). The build went on with steps 6, 8, 9… and leaves 5, 7 and 12 for the user. Step 8 was written **before** the step 7 spike, with the plan's constants (`ReflectorMonitor.bundleID = "com.squirrels.Reflector-4"`, 25 % size rule, 2 missed polls). Step 7 must confirm them; change `ReflectorMonitor.bundleID` / `MirroringDetector` if the spike says otherwise. Step 8's checkbox stays open until its on-Mac checks pass.
+- **2026-10-06, step 8 (small, L21):** the ⌘W fallback is posted **to Reflector's pid** (`SyntheticInput.postKey(_:flags:toPid:)`, `CGEvent.postToPid`) instead of the HID tap. Home brings MMTVL forward right after `endMirroring()`, so a ⌘W posted 150 ms later to the frontmost app would reach MMTVL's kiosk window. Reflector is still activated first, as planned. Step 7 item 4 should check that ⌘W sent this way disconnects the phone (the AX close button is tried first anyway).
+- **2026-10-06, step 4:** the warm path works on the dev Mac: after a cold cast opened YouTube, the log showed "Leanback registered its DIAL handlers" about 1 s after load, and `GET /apps/YouTube` returned leanback's XML with `<additionalData>`. Not checked by the executor: the Safari console check and the same request after going Home (left for the user, with step 5).
+- **2026-10-06, step 6 (test):** `SettingsPlexTests.rootRow` expected the Plex row right after `youtube.clear`; the new Casting section sits between them, so the test now expects Plex right after `casting`.
+- **2026-10-06, step 10:** the phone page's trackpad is built (`node --check` passes; a headless render at phone width shows the toggle and the trackpad in place of the D-pad). Its checkbox stays open: the done-when checks need a phone (iPhone/Android, Brave, the scroll direction and the Accessibility toast).

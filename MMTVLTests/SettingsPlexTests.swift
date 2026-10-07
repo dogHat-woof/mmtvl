@@ -11,7 +11,8 @@ struct SettingsPlexTests {
         model.refreshStatus()
         #expect(model.row(id: "plex")?.value == "Signed In")
         let ids = model.focusableRowIDs
-        #expect(ids.firstIndex(of: "plex") == ids.firstIndex(of: "youtube.clear")! + 1)
+        // M7b: Casting sits between YouTube and Plex.
+        #expect(ids.firstIndex(of: "plex") == ids.firstIndex(of: "casting")! + 1)
     }
 
     @Test func signedOutPageOffersSignIn() {

@@ -30,4 +30,10 @@ struct YouTubeConfigTests {
         #expect(YouTubeConfig.allowsNavigation(to: URL(string: "https://evil.com")!, isMainFrame: false))
         #expect(YouTubeConfig.allowsNavigation(to: URL(string: "http://ads.example")!, isMainFrame: false))
     }
+
+    @Test func launchURL() {
+        #expect(YouTubeConfig.launchURL(query: "") == YouTubeConfig.startURL)
+        #expect(YouTubeConfig.launchURL(query: "pairingCode=abc-123&theme=cl").absoluteString
+                == "https://www.youtube.com/tv?pairingCode=abc-123&theme=cl")
+    }
 }

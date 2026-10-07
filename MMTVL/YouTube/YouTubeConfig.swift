@@ -10,6 +10,15 @@ nonisolated enum YouTubeConfig {
     /// Top-level pages may only come from these domains or their subdomains (L5). Sign-in needs google.com.
     static let allowedDomains = ["youtube.com", "google.com", "gstatic.com"]
 
+    /// M7b L2: the start URL with a cold cast's launch query (already sanitized); empty → `startURL`.
+    static func launchURL(query: String) -> URL {
+        guard !query.isEmpty, var components = URLComponents(url: startURL, resolvingAgainstBaseURL: false) else {
+            return startURL
+        }
+        components.percentEncodedQuery = query
+        return components.url ?? startURL
+    }
+
     /// `settings.json` `youtubeUserAgent` if it isn't blank (L6), else the default.
     static func userAgent(override: String?) -> String {
         let trimmed = override?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

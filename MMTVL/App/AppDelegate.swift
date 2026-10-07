@@ -27,6 +27,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var phoneRemote: PhoneRemote?
     private var volume: VolumeController?
     private var appActivationObserver: NSObjectProtocol?
+    private var castReceiver: CastReceiver?
+    /// M7b D31: the phone trackpad.
+    private let phonePointer = PhonePointer()
+    /// M7b D32: Android screen mirroring through Reflector.
+    private var reflector: ReflectorMonitor?
+    /// M7b L15: the last AirPlay probe; refreshed when Settings → Casting opens.
+    private var airPlayState: AirPlayReceiverState = .unknown
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !AppEnvironment.isRunningTests else { return }
@@ -35,6 +42,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settingsFile = JSONConfigFile(url: directory.appending(path: AppSettings.fileName), defaultValue: AppSettings())
         self.settingsFile = settingsFile
         settings = settingsFile.load()
+        if settings.castDeviceID == nil {
+            // M7b L3: the DIAL device uuid, made once.
+            settings.castDeviceID = UUID().uuidString.lowercased()
+            do {
+                try settingsFile.save(settings)
+            } catch {
+                Self.logger.error("Failed to save settings: \(error.localizedDescription, privacy: .public)")
+            }
+        }
         let bindingsFile = JSONConfigFile(url: directory.appending(path: KeyBindings.fileName),
                                           defaultValue: KeyBindings.defaultBindings)
         self.bindingsFile = bindingsFile
@@ -61,7 +77,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.plex = plex
         let settingsModel = SettingsModel(settings: settings, items: items, environment: makeSettingsEnvironment(kiosk: kiosk),
                                           bindings: bindings)
-        let youtube = YouTubeController(userAgent: YouTubeConfig.userAgent(override: settings.youtubeUserAgent))
+        let youtube = YouTubeController(userAgent: YouTubeConfig.userAgent(override: settings.youtubeUserAgent),
+                                        castEnabled: settings.youtubeCastEnabled)
         self.youtube = youtube
         let liveTV = LiveTVModel(player: MPVPlayerController(), makePlayer: { MPVPlayerController() }, library: iptvLibrary)
         liveTV.channelUpMovesUpList = settings.channelUpMovesUpList
@@ -90,7 +107,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             router?.settings.refreshStatus()
             router?.shelfContentChanged()
         }
-        inputRouter.handler = router.handle
+        // M7b L21: Home on MMTVL also ends a mirroring session.
+        inputRouter.handler = { [weak self, weak router] command in
+            if command == .home { self?.endMirroringIfNeeded() }
+            return router?.handle(command) ?? false
+        }
         inputRouter.onScrollWheel = { [weak router] deltaY, precise in router?.scrollWheel(deltaY: deltaY, precise: precise) }
         inputRouter.onGlobalCommand = { [weak self] command in self?.handleGlobal(command) }
         // Reads the current setting, which Settings can change live.
@@ -111,8 +132,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             observeWake()
         }
         setUpPhoneRemote(inputRouter: inputRouter, router: router)
+        setUpCasting()
 
         windowController.show()
+        setUpReflector()
 
         // M4 L4/L5: channels are fetched at every launch; the guide only when stale.
         if iptvLibrary.hasPlaylist {
@@ -170,7 +193,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             volume: { [weak volume] action in volume?.perform(action) ?? .unavailable("Volume can't be changed here") },
             now: { Date() },
             makeCode: { PairingCode.random() },
-            makeToken: { PhoneToken.make() }
+            makeToken: { PhoneToken.make() },
+            pointer: { [weak self] in self?.phonePointer.perform($0) }
         ))
         server.onMessage = { [weak phoneRemote] id, data in phoneRemote?.receive(data, from: id) }
         server.onSessionClosed = { [weak phoneRemote] id in phoneRemote?.sessionClosed(id) }
@@ -180,6 +204,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.phoneRemote = phoneRemote
         if settings.phoneRemoteEnabled { startPhoneRemote() }
         observeAppActivation()
+    }
+
+    /// M7b D30: the YouTube DIAL receiver, in kiosk and -windowed mode alike.
+    private func setUpCasting() {
+        let bridge = CastBridge(
+            isAppReady: { [weak self] in self?.youtube?.isDIALReady ?? false },
+            forward: { [weak self] request in await self?.youtube?.handleDIAL(request) },
+            launch: { [weak self] query in self?.castToTV(query: query) },
+            didConnect: { [weak self] in self?.castToTV(query: nil) }
+        )
+        let receiver = CastReceiver(deviceID: settings.castDeviceID ?? UUID().uuidString.lowercased(),
+                                    friendlyName: "MMTVL", bridge: bridge)
+        receiver.onStateChange = { [weak self] in self?.router?.settings.refreshStatus() }
+        castReceiver = receiver
+        if settings.youtubeCastEnabled { receiver.start() }
+    }
+
+    /// M7b L4: a cast takes over the TV from any screen or app, without the PIN.
+    private func castToTV(query: String?) {
+        endMirroringIfNeeded()
+        launcher.homePressed()
+        router?.castYouTube(query: query)
+        windowController?.show()
+    }
+
+    /// M7b D32, L18–L22: keep Reflector running hidden and follow its mirroring sessions.
+    private func setUpReflector() {
+        let reflector = ReflectorMonitor(autoStart: settings.reflectorAutoStart)
+        reflector.onSessionBegan = { [weak self] in
+            // L20: leave Live TV/YouTube like Home (no PIN), then bring the mirrored screen forward.
+            guard let self else { return }
+            launcher.homePressed()
+            router?.goHome()
+            NSRunningApplication.runningApplications(withBundleIdentifier: ReflectorMonitor.bundleID).first?.activate()
+        }
+        reflector.onSessionEnded = { [weak self] in
+            // L22: back to the home screen unless the user switched to another app on purpose.
+            let front = NSWorkspace.shared.frontmostApplication
+            guard front == nil || front?.bundleIdentifier == ReflectorMonitor.bundleID
+                    || front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+            else { return }
+            self?.router?.goHome()
+            self?.windowController?.show()
+        }
+        reflector.onStatusChange = { [weak self] in self?.router?.settings.refreshStatus() }
+        self.reflector = reflector
+        reflector.start()
+    }
+
+    /// L21: Home or a YouTube cast during mirroring ends it first.
+    private func endMirroringIfNeeded() {
+        guard let reflector, reflector.isMirroring else { return }
+        reflector.endMirroring()
     }
 
     private func startPhoneRemote() {
@@ -231,6 +308,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         status.canControlOtherApps = SyntheticInput.canPost
         return status
+    }
+
+    /// What Settings → Casting shows (M7b L14, L16).
+    private func castingSettingsStatus() -> CastingSettingsStatus {
+        var status = CastingSettingsStatus()
+        if settings.youtubeCastEnabled {
+            status.youtube = switch castReceiver?.state ?? .off {
+            case .off: .off
+            case .starting: .starting
+            case .ready: .ready
+            case .failed(let message): .failed(message)
+            }
+        }
+        status.airPlay = airPlayState
+        if let reflector, reflector.isInstalled {
+            status.reflector = reflector.isMirroring ? .mirroring : reflector.isRunning ? .ready : .notRunning
+        }
+        let plexHTPC = "tv.plex.htpc"
+        if !NSRunningApplication.runningApplications(withBundleIdentifier: plexHTPC).isEmpty {
+            status.plexHTPC = .running
+        } else if NSWorkspace.shared.urlForApplication(withBundleIdentifier: plexHTPC) != nil {
+            status.plexHTPC = .notRunning
+        }
+        return status
+    }
+
+    private func refreshCasting() {
+        Task {
+            airPlayState = await AirPlayReceiverProbe.check()
+            router?.settings.refreshStatus()
+        }
     }
 
     /// What Settings → Plex shows (L15). Never tokens.
@@ -345,6 +453,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleGlobal(_ command: RemoteCommand) {
         // Only Home is global by default; ignore others for now.
         guard command == .home else { return }
+        // M7b L21: Home during mirroring ends it.
+        endMirroringIfNeeded()
         // D18: the other app keeps running. An app still starting won't take the screen back when it's up.
         launcher.homePressed()
         router?.goHome()
@@ -372,6 +482,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if settings.phoneRemoteEnabled, case .failed = remoteServer?.state {
                 startPhoneRemote()
             }
+            castReceiver?.restart()
+            reflector?.systemDidWake()
         }
     }
 
@@ -411,6 +523,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 stopPhoneRemote()
             }
         }
+        if new.youtubeCastEnabled != old.youtubeCastEnabled {
+            if new.youtubeCastEnabled {
+                castReceiver?.start()
+            } else {
+                castReceiver?.stop()
+            }
+        }
+        reflector?.autoStart = new.reflectorAutoStart
         if kiosk && new.launchAtLogin != old.launchAtLogin {
             LoginItem.apply(enabled: new.launchAtLogin)
         }
@@ -564,7 +684,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return "Couldn't copy that picture"
                 }
             },
-            removeTilePicture: { [weak self] in self?.router?.tileArt.removePicture(for: $0) }
+            removeTilePicture: { [weak self] in self?.router?.tileArt.removePicture(for: $0) },
+            castingStatus: { [weak self] in self?.castingSettingsStatus() ?? CastingSettingsStatus() },
+            refreshCasting: { [weak self] in self?.refreshCasting() },
+            openAirPlaySettings: {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.AirDrop-Handoff-Settings.extension") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
         )
     }
 

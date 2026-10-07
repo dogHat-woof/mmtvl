@@ -9,6 +9,8 @@ protocol YouTubeHosting: AnyObject {
     func send(_ command: RemoteCommand)
     /// Pauses all media (Home, wake). No-op before the first open.
     func pause()
+    /// Opens YouTube on `https://www.youtube.com/tv?<query>` (a cold cast, M7b L2), creating the web view if needed.
+    func launch(query: String)
     /// Leanback exited (window.close / webViewDidClose). May be called several times in a row.
     var onExit: (() -> Void)? { get set }
 }
@@ -31,13 +33,30 @@ final class YouTubeController: YouTubeHosting {
     /// MMTVL's own volume (M5 L9); re-applied after every load.
     @ObservationIgnored private var volumeLevel = 100
     @ObservationIgnored private var volumeMuted = false
+    /// M7b L5: inject the DIAL shim when the web view is created.
+    @ObservationIgnored private let castEnabled: Bool
+    /// M7b L8: leanback constructed its DialServer since the last load.
+    @ObservationIgnored private(set) var isDIALReady = false
 
-    init(userAgent: String) {
+    init(userAgent: String, castEnabled: Bool = false) {
         self.userAgent = userAgent
+        self.castEnabled = castEnabled
         delegate.controller = self
     }
 
     func open() {
+        guard webView == nil else { return }
+        makeWebViewIfNeeded()
+        load()
+    }
+
+    func launch(query: String) {
+        makeWebViewIfNeeded()
+        Self.logger.info("Opening YouTube for a cast")
+        load(YouTubeConfig.launchURL(query: query))
+    }
+
+    private func makeWebViewIfNeeded() {
         guard webView == nil else { return }
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
@@ -50,6 +69,14 @@ final class YouTubeController: YouTubeHosting {
             ))
         }
         configuration.userContentController.add(delegate, name: YouTubeKeyMap.messageHandlerName)
+        if castEnabled {
+            configuration.userContentController.addUserScript(WKUserScript(
+                source: YouTubeDIAL.shimScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            ))
+            configuration.userContentController.add(delegate, name: YouTubeDIAL.messageHandlerName)
+        }
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.customUserAgent = userAgent
@@ -63,7 +90,6 @@ final class YouTubeController: YouTubeHosting {
         #endif
         self.webView = webView
         Self.logger.info("Opening YouTube with user agent \(self.userAgent, privacy: .public)")
-        load()
     }
 
     func send(_ command: RemoteCommand) {
@@ -116,9 +142,56 @@ final class YouTubeController: YouTubeHosting {
         reload()
     }
 
-    private func load() {
+    private func load(_ url: URL = YouTubeConfig.startURL) {
         phase = .loading
-        webView?.load(URLRequest(url: YouTubeConfig.startURL))
+        isDIALReady = false
+        webView?.load(URLRequest(url: url))
+    }
+
+    // MARK: DIAL (M7b L1, L8)
+
+    private static let dialTimeout: TimeInterval = 3
+
+    /// Hands a DIAL request to leanback's own handlers. nil when leanback isn't ready, has no handler,
+    /// fails or doesn't answer within 3 s (the server then answers natively). Never logs the body.
+    func handleDIAL(_ request: DIALAppRequest) async -> DIALAppResponse? {
+        guard isDIALReady, let webView else { return nil }
+        let arguments: [String: Any] = [
+            "app": request.app, "method": request.method, "path": request.path,
+            "body": request.body, "host": request.host,
+        ]
+        return await withCheckedContinuation { continuation in
+            let once = ResumeOnce()
+            webView.callAsyncJavaScript(YouTubeDIAL.handleScript, arguments: arguments, in: nil, in: .page) { result in
+                MainActor.assumeIsolated {
+                    guard once.claim() else { return }
+                    switch result {
+                    case .success(let value):
+                        continuation.resume(returning: YouTubeDIAL.response(fromJavaScript: value))
+                    case .failure(let error):
+                        Self.logger.error("DIAL request failed in the page: \(error.localizedDescription, privacy: .public)")
+                        continuation.resume(returning: nil)
+                    }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.dialTimeout) {
+                MainActor.assumeIsolated {
+                    guard once.claim() else { return }
+                    Self.logger.error("DIAL request timed out in the page")
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
+    }
+
+    fileprivate func dialDidBecomeReady() {
+        guard !isDIALReady else { return }
+        isDIALReady = true
+        Self.logger.info("Leanback registered its DIAL handlers")
+    }
+
+    fileprivate func navigationDidStart() {
+        isDIALReady = false
     }
 
     // MARK: Delegate callbacks
@@ -132,11 +205,13 @@ final class YouTubeController: YouTubeHosting {
     fileprivate func didFail(_ error: Error) {
         if (error as NSError).code == NSURLErrorCancelled { return }
         Self.logger.error("YouTube failed to load: \(error.localizedDescription, privacy: .public)")
+        isDIALReady = false
         phase = .failed(error.localizedDescription)
     }
 
     fileprivate func contentProcessDidTerminate() {
         Self.logger.error("YouTube web content process terminated; reloading")
+        isDIALReady = false
         reload()
     }
 
@@ -159,6 +234,10 @@ private final class YouTubeWebDelegate: NSObject, WKNavigationDelegate, WKUIDele
             return .cancel
         }
         return .allow
+    }
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        controller?.navigationDidStart()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -192,6 +271,27 @@ private final class YouTubeWebDelegate: NSObject, WKNavigationDelegate, WKUIDele
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        controller?.pageDidExit()
+        switch message.name {
+        case YouTubeKeyMap.messageHandlerName:
+            controller?.pageDidExit()
+        case YouTubeDIAL.messageHandlerName:
+            let body = message.body as? [String: Any]
+            if body?["type"] as? String == "ready", body?["app"] as? String == DIALRouting.appName {
+                controller?.dialDidBecomeReady()
+            }
+        default:
+            break
+        }
+    }
+}
+
+/// Resumes a continuation exactly once (a page answer races the timeout).
+private final class ResumeOnce {
+    private var claimed = false
+
+    func claim() -> Bool {
+        guard !claimed else { return false }
+        claimed = true
+        return true
     }
 }

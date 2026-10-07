@@ -7,6 +7,10 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#000000">
 <title>MMTVL Remote</title>
+<meta name="apple-mobile-web-app-title" content="MMTVL">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="manifest" href="remote.webmanifest">
 <link rel="stylesheet" href="remote.css">
 <script src="remote.js" defer></script>
 </head>
@@ -29,6 +33,7 @@
 <main id="remote" class="view" hidden>
   <header class="top-bar">
     <span class="dot"></span><span id="front-app">MMTVL</span>
+    <button type="button" id="mode-toggle" class="mode-toggle" aria-label="Switch to trackpad">Trackpad</button>
   </header>
 
   <div class="dpad">
@@ -38,6 +43,7 @@
     <button type="button" class="dir right" data-command="right" data-repeat aria-label="Right">▶</button>
     <button type="button" class="dir down" data-command="down" data-repeat aria-label="Down">▼</button>
   </div>
+  <div id="trackpad" class="trackpad" hidden aria-label="Trackpad"><span class="trackpad-hint">Tap to click · two fingers to scroll · two-finger tap to right-click</span></div>
 
   <div class="row">
     <button type="button" class="pill" data-command="back" aria-label="Back">↩&#xFE0E;</button>

@@ -48,6 +48,10 @@ final class SettingsRecorder {
     var pictureSets: [String] = []
     var pictureSetResult: String?
     var pictureRemovals: [String] = []
+    /// M7b Settings → Casting.
+    var casting = CastingSettingsStatus()
+    var castingRefreshes = 0
+    var airPlaySettingsOpened = 0
 
     init(trusted: Bool, loginStatus: LoginItemStatus) {
         self.trusted = trusted
@@ -130,7 +134,10 @@ func makeSettingsModel(
         removeTilePicture: { id in
             recorder.pictureRemovals.append(id)
             recorder.tileArtNames[id] = nil
-        }
+        },
+        castingStatus: { recorder.casting },
+        refreshCasting: { recorder.castingRefreshes += 1 },
+        openAirPlaySettings: { recorder.airPlaySettingsOpened += 1 }
     )
     return (SettingsModel(settings: settings, items: items, environment: environment, bindings: bindings), recorder)
 }

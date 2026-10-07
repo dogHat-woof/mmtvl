@@ -11,6 +11,8 @@ nonisolated enum SettingsPage: Hashable, Sendable {
     case plex, plexLink, plexServers, confirmPlexSignOut
     /// M7 L25: Settings → a tile → Tile Art.
     case tileArt(id: String)
+    /// M7b L14: Settings → Casting.
+    case casting
 }
 
 /// Which Live TV address a paste row fills (M4 L2).
@@ -109,11 +111,28 @@ nonisolated struct PlexSettingsStatus: Equatable, Sendable {
     var needsServerChoice = false
 }
 
+/// What Settings → Casting shows (M7b L14). Built by the app from `CastReceiver`, the AirPlay probe and
+/// the installed/running apps.
+nonisolated struct CastingSettingsStatus: Equatable, Sendable {
+    enum YouTube: Equatable, Sendable { case off, starting, ready, failed(String) }
+    enum PlexHTPC: Equatable, Sendable { case notInstalled, notRunning, running }
+    enum Reflector: Equatable, Sendable { case notInstalled, notRunning, ready, mirroring }
+
+    var youtube: YouTube = .off
+    var airPlay: AirPlayReceiverState = .unknown
+    var reflector: Reflector = .notInstalled
+    var plexHTPC: PlexHTPC = .notInstalled
+}
+
 /// The `settings.json` toggles.
 nonisolated enum SettingKey: String, CaseIterable, Sendable {
     case globalInputEnabled, controllersEnabled, cursorAutoHide, launchAtLogin, phoneRemoteEnabled
     /// M7 L22: its row shows "Up the List" / "Higher Number" instead of On/Off.
     case channelUpMovesUpList
+    /// M7b L5.
+    case youtubeCastEnabled
+    /// M7b L18.
+    case reflectorAutoStart
 
     var keyPath: WritableKeyPath<AppSettings, Bool> {
         switch self {
@@ -123,6 +142,8 @@ nonisolated enum SettingKey: String, CaseIterable, Sendable {
         case .launchAtLogin: \.launchAtLogin
         case .phoneRemoteEnabled: \.phoneRemoteEnabled
         case .channelUpMovesUpList: \.channelUpMovesUpList
+        case .youtubeCastEnabled: \.youtubeCastEnabled
+        case .reflectorAutoStart: \.reflectorAutoStart
         }
     }
 }
@@ -171,6 +192,8 @@ nonisolated enum SettingsAction: Hashable, Sendable {
     case setTileArtStyle(id: String, TileArtStyle)
     case useTileArtPicture(id: String, URL)
     case removeTileArtPicture(id: String)
+    /// M7b L14: System Settings → General → AirDrop & Handoff.
+    case openAirPlaySettings
 }
 
 nonisolated enum RowImage: Hashable, Sendable {

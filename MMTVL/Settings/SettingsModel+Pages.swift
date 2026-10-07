@@ -29,6 +29,7 @@ extension SettingsModel {
         case .tileArt(let id): tileArtSections(id: id)
         case .plexServers: plexServersSections
         case .confirmPlexSignOut: confirmPlexSignOutSections
+        case .casting: castingSections
         }
     }
 
@@ -59,6 +60,7 @@ extension SettingsModel {
         case .tileArt: "Tile Art"
         case .plexServers: "Plex Server"
         case .confirmPlexSignOut: "Sign Out of Plex?"
+        case .casting: "Casting"
         }
     }
 
@@ -85,13 +87,14 @@ extension SettingsModel {
         case .plexLink: plex.linkURL.map(RowImage.qrCode) ?? .symbol("play.square.stack")
         case .confirmPlexSignOut: .symbol("rectangle.portrait.and.arrow.right")
         case .tileArt(let id): .tileArt(itemID: id, tileArtPreviewChoice)
+        case .casting: .symbol("airplay.video")
         }
     }
 
     var hint: String {
         switch page {
         case .root, .tile, .liveTV, .phoneRemote, .guideSource, .iptvGroups, .iptvHiddenChannels,
-             .remoteButtons, .remoteCommand, .remoteBinding, .plex, .plexServers, .tileArt:
+             .remoteButtons, .remoteCommand, .remoteBinding, .plex, .plexServers, .tileArt, .casting:
             "Select: choose · Back: return"
         case .plexLink: "Back: cancel"
         case .learnButton: "Waiting for a button…"
@@ -169,6 +172,9 @@ extension SettingsModel {
                 SettingsRow(id: "youtube.clear", title: "Sign Out & Clear YouTube Data", showsDisclosure: true,
                             action: .push(.confirmClearYouTube)),
             ], footer: "To keep kids in their own profile, set a Parent code in YouTube → Settings → Parent code."),
+            SettingsSection(id: "casting", title: "Casting", rows: [
+                SettingsRow(id: "casting", title: "Casting", showsDisclosure: true, action: .push(.casting)),
+            ]),
             SettingsSection(id: "plex", title: "Plex", rows: [
                 SettingsRow(id: "plex", title: "Plex", value: plex.isSignedIn ? "Signed In" : "Not Signed In",
                             showsDisclosure: true, action: .push(.plex)),
@@ -701,5 +707,58 @@ extension SettingsModel {
             SettingsRow(id: "confirm.cancel", title: "Cancel", action: .pop),
             SettingsRow(id: "confirm.signOutOfPlex", title: "Sign Out", action: .signOutOfPlex),
         ], footer: "Removes this Mac from your Plex account's sign-in here. Plex HTPC stays signed in.")]
+    }
+
+    // MARK: - Casting (M7b L14)
+
+    private var castingSections: [SettingsSection] {
+        let youtubeDetail: String? = switch casting.youtube {
+        case .ready: "Phones on this network list \"MMTVL\""
+        case .starting: "Starting…"
+        case .failed(let message): message
+        case .off: nil
+        }
+        let airPlayValue = switch casting.airPlay {
+        case .on: "On"
+        case .off: "Off"
+        case .unknown: "Unknown"
+        }
+        let reflectorValue = switch casting.reflector {
+        case .notInstalled: "Not Installed"
+        case .notRunning: "Not Running"
+        case .ready: "Ready"
+        case .mirroring: "Mirroring"
+        }
+        var androidRows = [
+            SettingsRow(id: "cast.android.reflector", title: "Reflector", value: reflectorValue,
+                        detail: casting.reflector == .notInstalled ? "Install Reflector 4 from airsquirrels.com" : nil),
+        ]
+        if casting.reflector != .notInstalled {
+            androidRows.append(SettingsRow(id: "cast.android.autostart", title: "Start Reflector with MMTVL",
+                                           value: Self.onOff(settings.reflectorAutoStart),
+                                           action: .toggle(.reflectorAutoStart)))
+        }
+        let plexValue = switch casting.plexHTPC {
+        case .running: "Running"
+        case .notRunning: "Not Running"
+        case .notInstalled: "Not Installed"
+        }
+        return [
+            SettingsSection(id: "cast.youtube", title: "YouTube", rows: [
+                SettingsRow(id: "cast.youtube.enabled", title: "Cast from the YouTube App",
+                            value: Self.onOff(settings.youtubeCastEnabled),
+                            detail: settings.youtubeCastEnabled ? youtubeDetail : nil,
+                            action: .toggle(.youtubeCastEnabled)),
+            ], footer: "In the YouTube app on a phone, tap Cast and choose MMTVL. A cast switches the TV to YouTube. YouTube → Settings → Link with TV Code also works."),
+            SettingsSection(id: "cast.airplay", title: "AirPlay", rows: [
+                SettingsRow(id: "cast.airplay.receiver", title: "AirPlay Receiver", value: airPlayValue,
+                            detail: "Opens AirDrop & Handoff in System Settings", action: .openAirPlaySettings),
+            ], footer: "Turn on AirPlay Receiver and set Allow AirPlay for to \"Anyone on the Same Network\", or \"Current User\" if every phone uses your Apple Account. iPhones then list this Mac under Screen Mirroring and in AirPlay menus."),
+            SettingsSection(id: "cast.android", title: "Android", rows: androidRows,
+                            footer: "On an Android phone: Quick Settings → Cast → MMTVL Screen Mirroring. For YouTube, use Cast in the YouTube app and pick MMTVL instead. Home on the remote ends mirroring. In Reflector's Preferences: turn AirPlay off and Google Cast on, Always on Top off, Display Fullscreen on, Show Client Name off, no connection prompt, and name it MMTVL Screen Mirroring."),
+            SettingsSection(id: "cast.plex", title: "Plex", rows: [
+                SettingsRow(id: "cast.plex.htpc", title: "Plex HTPC", value: plexValue),
+            ], footer: "Phones cast to Plex HTPC while it runs, signed in to your Plex account: in the Plex app, tap Cast and choose Plex HTPC. Home leaves it running; after a restart, open it once."),
+        ]
     }
 }

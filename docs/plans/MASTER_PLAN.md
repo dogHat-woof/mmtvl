@@ -115,7 +115,7 @@ Status values: `Not planned` → `Planned` → `In progress` → `Done` (or `Blo
 | M6 | Multiview: up to 5 windows in six layouts (1 + 4, 1 + 3, 2 × 2, 1 + 2, Side by Side, Picture in Picture), sound follows the highlight, per-window rewind, window menu and picker guide, guide channel menu | M4, M5 | Done | [M6-multiview.md](M6-multiview.md) |
 | M6b | IPTV guide management: multiple EPG sources + manual channel ↔ EPG matching, favorites, hidden channels/groups (adds items to M6's guide channel menu). Catch-up dropped: the provider has none (Q3). | M6 | In progress | [M6b-guide-management.md](M6b-guide-management.md) |
 | M7 | Launcher polish & remote buttons: home rows scroll (more than two rows), parallax/specular tile effect, custom and designed tile art, top shelf (Live TV On Now, Plex Continue Watching with plex.tv/link sign-in), Menu/Channel Up/Down commands, learn-button bindings editor in Settings, Chromium web app tiles (launch safety net, per-tile start page) | M2b, M3–M6b | Done | [M7-launcher-polish.md](M7-launcher-polish.md) |
-| M7b | Phone & casting: phone remote home-screen icon, phone trackpad mode, YouTube DIAL discovery, Android screen mirroring through Reflector (before/after workflow), casting setup checklist (AirPlay/Android/Plex/YouTube), on-TV QA pass for M7 + M7b | M7 | Planned | [M7b-phone-and-casting.md](M7b-phone-and-casting.md) ([research notes](M7b-notes.md)) |
+| M7b | Phone & casting: phone remote home-screen icon, phone trackpad mode, YouTube DIAL discovery, Android screen mirroring through Reflector (before/after workflow), casting setup checklist (AirPlay/Android/Plex/YouTube), on-TV QA pass for M7 + M7b | M7 | In progress | [M7b-phone-and-casting.md](M7b-phone-and-casting.md) ([research notes](M7b-notes.md)) |
 
 ## 7. Open questions
 
@@ -134,7 +134,7 @@ Status values: `Not planned` → `Planned` → `In progress` → `Done` (or `Blo
 | Q11 | Can Plex HTPC be opened on a specific item (its `plex` URL scheme, or Plex Companion `playMedia`)? Unverified; M7 only launches Plex from a Continue Watching card. | Nothing (a later improvement) |
 | Q12 | Does the Plex PIN link flow (plex.tv calls it "legacy") keep working, and does the user's router allow `plex.direct` names (DNS-rebinding protection)? Checked in M7 steps 11–12; fallbacks in the M7 plan. | M7 Plex shelf |
 | Q13 | Do the current iOS and Android YouTube apps list MMTVL as a DIAL device and pair through it (cold and warm path)? Leanback still supports `h5vcc.dial` (verified in the 2026-10-05 bundle) and VacuumTube ships it, but MMTVL is untested with real phones. Checked in M7b step 5. | M7b YouTube casting |
-| Q14 | Can the new Plex mobile app (2025.10+) cast to Plex HTPC? Plex's Companion article excludes those versions. Checked in M7b step 10; nothing to build either way. | Nothing |
+| Q14 | Can the new Plex mobile app (2025.10+) cast to Plex HTPC? Plex's Companion article excludes those versions. Checked in M7b step 12; nothing to build either way. | Nothing |
 | Q15 | Reflector 4 on macOS 26/27 (last release 2024-12): does it come forward and go full screen over MMTVL, does closing its window or ⌘W end the phone's cast, does it share UDP 1900 with MMTVL's DIAL responder, and does it keep working beside macOS's AirPlay Receiver with its own AirPlay off? Checked in M7b step 7. | M7b Android mirroring |
 
 ## How planning works

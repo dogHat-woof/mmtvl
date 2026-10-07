@@ -67,4 +67,9 @@ struct SettingsEnvironment {
     /// Copies a picture into `tile-art/` for the tile. Returns an error message, or nil.
     var setTilePicture: (String, URL) -> String?
     var removeTilePicture: (String) -> Void
+    /// M7b L14: Settings → Casting.
+    var castingStatus: () -> CastingSettingsStatus
+    /// Runs the AirPlay probe; when done, the app calls `refreshStatus()`.
+    var refreshCasting: () -> Void
+    var openAirPlaySettings: () -> Void
 }

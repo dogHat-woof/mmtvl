@@ -61,6 +61,35 @@ final class WindowFullScreener {
         return Self.mainWindow(of: app) != nil
     }
 
+    /// M7b L21: presses the close button of every window of the app at least `minimumSize` big.
+    /// Returns how many it pressed (0 without Accessibility).
+    func closeWindows(pid: pid_t, minimumSize: CGSize) -> Int {
+        guard AccessibilityPermission.isTrusted else { return 0 }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 1.0)
+        let windows: [AXUIElement] = Self.copyAttribute(app, kAXWindowsAttribute) ?? []
+        var pressed = 0
+        for window in windows {
+            guard let size = Self.size(of: window),
+                  size.width >= minimumSize.width, size.height >= minimumSize.height,
+                  let button: AXUIElement = Self.copyAttribute(window, kAXCloseButtonAttribute)
+            else { continue }
+            if AXUIElementPerformAction(button, kAXPressAction as CFString) == .success { pressed += 1 }
+        }
+        return pressed
+    }
+
+    private static func size(of window: AXUIElement) -> CGSize? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXValueGetTypeID()
+        else { return nil }
+        var size = CGSize.zero
+        // The type ID was checked above.
+        guard AXValueGetValue(value as! AXValue, .cgSize, &size) else { return nil }
+        return size
+    }
+
     /// Focused window, else main window, else the first standard window.
     private static func mainWindow(of app: AXUIElement) -> AXUIElement? {
         for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {

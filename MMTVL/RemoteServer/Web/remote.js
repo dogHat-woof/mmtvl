@@ -1,6 +1,7 @@
 'use strict';
 // MMTVL phone remote (M5). Talks to the Mac over ws://<host>:<port + 1>/ (D24).
 const TOKEN_KEY = 'mmtvl.token';
+const MODE_KEY = 'mmtvl.mode';
 const $ = (id) => document.getElementById(id);
 let ws = null;
 let retryDelay = 1000;
@@ -9,6 +10,8 @@ let toastTimer = null;
 
 function storedToken() { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } }
 function storeToken(t) { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {} }
+function storedMode() { try { return localStorage.getItem(MODE_KEY); } catch { return null; } }
+function storeMode(m) { try { localStorage.setItem(MODE_KEY, m); } catch {} }
 function socketURL() { return `ws://${location.hostname}:${Number(location.port || 80) + 1}/`; }
 function send(obj) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
 function hashCode() { const m = location.hash.match(/pair=(\d{4})/); return m ? m[1] : null; }
@@ -106,6 +109,67 @@ function bindKeyboard() {
   });
 }
 
+// M7b L11: D-pad or trackpad, remembered on the phone.
+function setMode(mode) {
+  const trackpad = mode === 'trackpad';
+  document.querySelector('.dpad').hidden = trackpad;
+  $('trackpad').hidden = !trackpad;
+  $('mode-toggle').textContent = trackpad ? 'D-pad' : 'Trackpad';
+  $('mode-toggle').setAttribute('aria-label', trackpad ? 'Switch to D-pad' : 'Switch to trackpad');
+  storeMode(trackpad ? 'trackpad' : 'dpad');
+}
+
+// One finger moves, a quick tap clicks, two fingers scroll (content follows them), a two-finger tap right-clicks.
+// Movement is summed and sent once per animation frame, in CSS pixels rounded to 0.1 (the rest carries over).
+function bindTrackpad() {
+  const pad = $('trackpad');
+  const pointers = new Map();
+  let move = { x: 0, y: 0 }, scroll = { x: 0, y: 0 }, frame = 0, gesture = null;
+  const round = (v) => Math.round(v * 10) / 10;
+  function flush() {
+    frame = 0;
+    for (const [type, acc] of [['pointer', move], ['scroll', scroll]]) {
+      const dx = round(acc.x), dy = round(acc.y);
+      if (!dx && !dy) continue;
+      send({ type, dx, dy });
+      acc.x -= dx; acc.y -= dy;
+    }
+  }
+  const reset = () => {
+    pointers.clear(); gesture = null;
+    move = { x: 0, y: 0 }; scroll = { x: 0, y: 0 };
+  };
+  pad.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    pad.setPointerCapture(e.pointerId);
+    if (pointers.size === 0) gesture = { start: performance.now(), moved: 0, maxPointers: 0 };
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    gesture.maxPointers = Math.max(gesture.maxPointers, pointers.size);
+  });
+  pad.addEventListener('pointermove', (e) => {
+    const p = pointers.get(e.pointerId);
+    if (!p || !gesture) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX; p.y = e.clientY;
+    if (!dx && !dy) return;
+    gesture.moved += Math.hypot(dx, dy);
+    if (pointers.size === 1) { move.x += dx; move.y += dy; }
+    else { scroll.x += dx / pointers.size; scroll.y += dy / pointers.size; }
+    if (!frame) frame = requestAnimationFrame(flush);
+  });
+  pad.addEventListener('pointerup', (e) => {
+    if (!pointers.delete(e.pointerId) || pointers.size > 0 || !gesture) return;
+    const g = gesture; gesture = null;
+    if (performance.now() - g.start < 250 && g.moved < 10) {
+      send({ type: 'click', button: g.maxPointers >= 2 ? 'right' : 'left' });
+      if (navigator.vibrate) navigator.vibrate(5);
+    }
+  });
+  pad.addEventListener('pointercancel', reset);
+  $('mode-toggle').addEventListener('click', () => setMode($('trackpad').hidden ? 'trackpad' : 'dpad'));
+  setMode(storedMode() === 'trackpad' ? 'trackpad' : 'dpad');
+}
+
 function bindPairing() {
   $('pair-form').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -117,4 +181,4 @@ function bindPairing() {
 // Long presses (held arrows) shouldn't open the browser's context menu.
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') connect(); });
-bindButtons(); bindKeyboard(); bindPairing(); connect();
+bindButtons(); bindKeyboard(); bindTrackpad(); bindPairing(); connect();

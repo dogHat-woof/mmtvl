@@ -17,6 +17,7 @@ final class PhoneRemoteRecorder {
     var codes = ["1234", "5678", "9012", "3456"]
     var tokenCount = 0
     var statusChanges = 0
+    var pointerActions: [PointerAction] = []
 
     var environment: PhoneRemoteEnvironment {
         PhoneRemoteEnvironment(
@@ -37,7 +38,8 @@ final class PhoneRemoteRecorder {
             makeToken: {
                 self.tokenCount += 1
                 return "tok\(self.tokenCount)"
-            }
+            },
+            pointer: { self.pointerActions.append($0) }
         )
     }
 }
@@ -270,4 +272,32 @@ struct PhoneRemoteTests {
         #expect(remote.pairing == nil)
         #expect(remote.lastPairedName == nil)
     }
+
+    // MARK: Trackpad (M7b L13)
+
+    @Test func pointerActionsNeedAuthentication() {
+        send(#"{"type":"pointer","dx":3,"dy":4}"#)
+        #expect(recorder.pointerActions.isEmpty)
+        paired()
+        send(#"{"type":"pointer","dx":3,"dy":4}"#)
+        send(#"{"type":"click","button":"right"}"#)
+        send(#"{"type":"scroll","dx":0,"dy":-12.5}"#)
+        #expect(recorder.pointerActions == [.move(dx: 3, dy: 4), .click(.right), .scroll(dx: 0, dy: -12.5)])
+        #expect(transport.sent.isEmpty)
+    }
+
+    @Test func pointerWithoutAccessibilityToastsEveryFiveSeconds() {
+        paired()
+        recorder.canPost = false
+        send(#"{"type":"pointer","dx":1,"dy":1}"#)
+        send(#"{"type":"pointer","dx":1,"dy":1}"#)
+        recorder.now += 4
+        send(#"{"type":"scroll","dx":1,"dy":1}"#)
+        #expect(transport.sent.count == 1)
+        recorder.now += 1
+        send(#"{"type":"click","button":"left"}"#)
+        #expect(transport.sent.count == 2)
+        #expect(recorder.pointerActions.isEmpty)
+    }
+
 }

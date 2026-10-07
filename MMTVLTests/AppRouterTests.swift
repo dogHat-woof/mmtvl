@@ -452,6 +452,77 @@ struct AppRouterTests {
         #expect(router.focus.position.row == 0)
     }
 
+
+    // MARK: Casting (M7b L4)
+
+    @Test func castFromHomeOpensYouTube() {
+        let youtube = FakeYouTube()
+        let router = makeRouter(youtube: youtube)
+        router.castYouTube(query: nil)
+        #expect(router.screen == .youtube)
+        #expect(youtube.opens == 1)
+        #expect(youtube.launches.isEmpty)
+    }
+
+    @Test func castWithQueryLaunchesIt() {
+        let youtube = FakeYouTube()
+        let router = makeRouter(youtube: youtube)
+        router.castYouTube(query: "pairingCode=x")
+        #expect(router.screen == .youtube)
+        #expect(youtube.launches == ["pairingCode=x"])
+        #expect(youtube.opens == 0)
+    }
+
+    @Test func castLeavesLiveTV() {
+        let liveTV = FakeLiveTV()
+        let router = makeRouter(liveTV: liveTV)
+        router.openLiveTV()
+        router.castYouTube(query: nil)
+        #expect(liveTV.leaves == 1)
+        #expect(router.screen == .youtube)
+    }
+
+    @Test func castFromSettingsEndsPhonePairing() {
+        let items = LaunchItem.defaults
+        let (settings, recorder) = makeSettingsModel(items: items)
+        let router = AppRouter(items: items, launcher: AppLauncher(), settings: settings, youtube: FakeYouTube(),
+                               liveTV: FakeLiveTV(), pinStore: .inMemory(), tileArt: makeTestTileArt())
+        openSettingsFromTile(router)
+        router.settings.perform(.push(.phoneRemote))
+        router.settings.perform(.push(.pairPhone))
+        router.castYouTube(query: nil)
+        #expect(router.screen == .youtube)
+        #expect(recorder.pairingCalls == [true, false])
+    }
+
+    @Test func castClosesThePINScreen() {
+        let router = makeRouter(pin: "1357")
+        router.requestPIN(.exitToDesktop)
+        #expect(router.pinEntry != nil)
+        router.castYouTube(query: nil)
+        #expect(router.screen == .youtube)
+        #expect(router.pinEntry == nil)
+    }
+
+    @Test func castWhileOnYouTubeDoesNotPause() {
+        let youtube = FakeYouTube()
+        let router = makeRouter(youtube: youtube)
+        router.openYouTube()
+        router.castYouTube(query: "pairingCode=y")
+        #expect(youtube.pauses == 0)
+        #expect(youtube.launches == ["pairingCode=y"])
+        #expect(router.screen == .youtube)
+    }
+
+    @Test func castIgnoresTheYouTubeTilePIN() {
+        let youtube = FakeYouTube()
+        let items = LaunchItem.defaults.settingRequiresPIN(true, id: "youtube")
+        let router = makeRouter(items: items, youtube: youtube, pin: "1357")
+        router.castYouTube(query: nil)
+        #expect(router.screen == .youtube)
+        #expect(router.pinEntry == nil)
+        #expect(youtube.opens == 1)
+    }
 }
 
 struct AppRouterLiveTVTests {
@@ -530,5 +601,4 @@ struct AppRouterLiveTVTests {
         _ = router.handle(.back)
         #expect(router.screen == .home)
     }
-
 }
