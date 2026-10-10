@@ -43,7 +43,7 @@ struct TileArtTests {
         #expect(store.customFileName(for: "plex") == nil)   // not before a reload
         store.reloadIfChanged()
         #expect(store.customFileName(for: "plex") == "plex.png")
-        guard case .picture(let image) = store.art(for: plex, icon: nil) else {
+        guard case .picture(let image, _) = store.art(for: plex, icon: nil) else {
             Issue.record("No picture art")
             return
         }
@@ -52,7 +52,7 @@ struct TileArtTests {
         try FileManager.default.removeItem(at: folder.appending(path: "plex.png"))
         store.reloadIfChanged()
         #expect(store.customFileName(for: "plex") == nil)
-        #expect(store.art(for: plex, icon: nil) != .picture(image))
+        if case .picture = store.art(for: plex, icon: nil) { Issue.record("Still a picture") }
     }
 
     @Test func largePicturesAreDownsampled() throws {
@@ -61,7 +61,7 @@ struct TileArtTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try writePNG(to: folder.appending(path: "youtube.png"), width: 3000, height: 1800)
         let store = TileArtStore(directory: folder)
-        guard case .picture(let image) = store.art(for: LaunchItem.defaults[1], icon: nil) else {
+        guard case .picture(let image, _) = store.art(for: LaunchItem.defaults[1], icon: nil) else {
             Issue.record("No picture art")
             return
         }
@@ -81,11 +81,24 @@ struct TileArtTests {
             == .gradient(top: Theme.neutralArtTop, bottom: Theme.neutralArtBottom, symbol: "rectangle.portrait.and.arrow.right"))
     }
 
-    /// A 16-point icon filled with one color.
+    /// A 64-point icon: `color` in the middle, transparent around it (an icon that doesn't fill its shape).
     private func icon(_ color: NSColor) -> NSImage {
-        NSImage(size: CGSize(width: 16, height: 16), flipped: false) { rect in
+        NSImage(size: CGSize(width: 64, height: 64), flipped: false) { rect in
             color.setFill()
+            rect.insetBy(dx: rect.width * 0.3, dy: rect.height * 0.3).fill()
+            return true
+        }
+    }
+
+    /// A 64-point icon on a plain background, `background` at the top and `bottomColor` at the bottom, with a glyph.
+    private func plainIcon(_ background: NSColor, bottom bottomColor: NSColor? = nil) -> NSImage {
+        NSImage(size: CGSize(width: 64, height: 64), flipped: false) { rect in
+            (bottomColor ?? background).setFill()
             rect.fill()
+            background.setFill()
+            NSRect(x: 0, y: rect.midY, width: rect.width, height: rect.height / 2).fill()
+            NSColor.white.setFill()
+            rect.insetBy(dx: rect.width * 0.35, dy: rect.height * 0.35).fill()
             return true
         }
     }
@@ -130,6 +143,84 @@ struct TileArtTests {
             Issue.record("No designed art")
             return
         }
+    }
+
+    // MARK: Glyph art and logo pictures (M7c L33)
+
+    @Test func plainIconsGetGlyphArtOnTheirBackground() {
+        let store = makeTestTileArt()
+        let app = LaunchItem(id: "app.x", title: "X", kind: .application(bundleID: "com.example.x"))
+        let appIcon = plainIcon(NSColor(srgbRed: 0.2, green: 0.8, blue: 0.3, alpha: 1),
+                                bottom: NSColor(srgbRed: 0.05, green: 0.3, blue: 0.1, alpha: 1))
+        guard case .glyph(let top, let bottom, let artIcon) = store.art(for: app, icon: appIcon, bundleID: "com.example.x")
+        else {
+            Issue.record("No glyph art")
+            return
+        }
+        #expect(artIcon.size == CGSize(width: Theme.glyphArtIconPixels, height: Theme.glyphArtIconPixels))
+        #expect(top != bottom)
+        // Known apps too: their own background beats the catalog's colors.
+        guard case .glyph = store.art(for: LaunchItem.defaults[0], icon: plainIcon(.black), bundleID: "tv.plex.htpc") else {
+            Issue.record("No glyph art for Plex")
+            return
+        }
+        // The App Icon style is unchanged.
+        let iconStyle = [app].settingArtStyle(.icon, id: "app.x")[0]
+        #expect(store.art(for: iconStyle, icon: appIcon, bundleID: "com.example.x") == .icon(appIcon))
+    }
+
+    /// 8-bit RGBA, top row first, filled by `color(x, y)`.
+    private func buffer(width: Int, height: Int, _ color: (Int, Int) -> (UInt8, UInt8, UInt8, UInt8)) -> [UInt8] {
+        var rgba: [UInt8] = []
+        for y in 0..<height {
+            for x in 0..<width {
+                let (red, green, blue, alpha) = color(x, y)
+                rgba += [red, green, blue, alpha]
+            }
+        }
+        return rgba
+    }
+
+    @Test func iconBackgroundNeedsPlainOpaqueBands() throws {
+        let side = 64
+        let graded = buffer(width: side, height: side) { _, y in (0, UInt8(255 - y * 3), 0, 255) }
+        let style = try #require(IconBackground.style(fromRGBA: graded, width: side, height: side))
+        #expect(style.top.green > style.bottom.green)
+        // A glyph crossing the top band.
+        let crossed = buffer(width: side, height: side) { x, _ in x < 32 ? (255, 255, 255, 255) : (0, 0, 0, 255) }
+        #expect(IconBackground.style(fromRGBA: crossed, width: side, height: side) == nil)
+        // An icon that doesn't fill its shape.
+        let small = buffer(width: side, height: side) { x, y in
+            (16..<48).contains(x) && (16..<48).contains(y) ? (255, 0, 0, 255) : (0, 0, 0, 0)
+        }
+        #expect(IconBackground.style(fromRGBA: small, width: side, height: side) == nil)
+    }
+
+    @Test func pictureEdgesTellLogosFromPhotos() {
+        let side = 64
+        let inside = { (x: Int, y: Int) in (16..<48).contains(x) && (16..<48).contains(y) }
+        let lightLogo = buffer(width: side, height: side) { x, y in inside(x, y) ? (240, 240, 240, 255) : (0, 0, 0, 0) }
+        #expect(PictureEdges.classify(rgba: lightLogo, width: side, height: side) == .transparent(lightContent: true))
+        let darkLogo = buffer(width: side, height: side) { x, y in inside(x, y) ? (20, 20, 20, 255) : (0, 0, 0, 0) }
+        #expect(PictureEdges.classify(rgba: darkLogo, width: side, height: side) == .transparent(lightContent: false))
+        let onWhite = buffer(width: side, height: side) { x, y in inside(x, y) ? (255, 0, 0, 255) : (255, 255, 255, 255) }
+        #expect(PictureEdges.classify(rgba: onWhite, width: side, height: side) == .solid(ArtColor(red: 1, green: 1, blue: 1)))
+        let photo = buffer(width: side, height: side) { x, y in (UInt8(x * 4), UInt8(y * 4), 128, 255) }
+        #expect(PictureEdges.classify(rgba: photo, width: side, height: side) == .busy)
+    }
+
+    @Test func logoPicturesGetASolidBackdrop() {
+        let lightLogo = NSImage(size: CGSize(width: 90, height: 20), flipped: false) { rect in
+            NSColor.white.setFill()
+            rect.insetBy(dx: 10, dy: 5).fill()
+            return true
+        }
+        #expect(TileArtStore.pictureArt(lightLogo) == .picture(lightLogo, backdrop: .solid(Theme.tileLogoDarkBackdrop)))
+        let photo = NSImage(size: CGSize(width: 50, height: 30), flipped: false) { rect in
+            NSGradient(starting: .red, ending: .blue)?.draw(in: rect, angle: 30)
+            return true
+        }
+        #expect(TileArtStore.pictureArt(photo) == .picture(photo, backdrop: .blurred))
     }
 
     @Test func artStyleIsStoredOnlyWhenNotTheDefault() throws {
@@ -179,6 +270,48 @@ struct TileArtTests {
         store.removePicture(for: "plex")
         #expect(store.customFileName(for: "plex") == nil)
         #expect(store.customFileName(for: "youtube") == "youtube.png")
+    }
+
+    /// M7c L33: the real folder is under "Application Support"; removing listed nothing in a path with a space.
+    @Test func removeWorksInAFolderWithASpace() throws {
+        let parent = temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let folder = parent.appending(path: "Application Support/tile-art", directoryHint: .isDirectory)
+        let store = TileArtStore(directory: folder)
+        try writePNG(to: folder.appending(path: "facetime.png"))
+        store.reloadIfChanged()
+        #expect(store.customFileName(for: "facetime") == "facetime.png")
+
+        store.removePicture(for: "facetime")
+        #expect(store.customFileName(for: "facetime") == nil)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false)).isEmpty)
+    }
+
+    /// M7c L33: a replacement with the same name and modification date is still read.
+    @Test func replacingAPictureShowsTheNewOne() throws {
+        let folder = temporaryFolder()
+        let source = temporaryFolder()
+        defer {
+            try? FileManager.default.removeItem(at: folder)
+            try? FileManager.default.removeItem(at: source)
+        }
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        let store = TileArtStore(directory: folder)
+        let date = Date(timeIntervalSince1970: 1_790_000_000)
+        let first = source.appending(path: "a.png"), second = source.appending(path: "b.png")
+        try writePNG(to: first, width: 50, height: 30)
+        try writePNG(to: second, width: 40, height: 40)
+        for url in [first, second] {
+            try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: url.path(percentEncoded: false))
+        }
+
+        try store.setPicture(from: first, for: "plex")
+        try store.setPicture(from: second, for: "plex")
+        guard case .picture(let image, _) = store.art(for: LaunchItem.defaults[0], icon: nil) else {
+            Issue.record("No picture art")
+            return
+        }
+        #expect(image.size == CGSize(width: 40, height: 40))
     }
 
     @Test func previewsAreSmall() throws {

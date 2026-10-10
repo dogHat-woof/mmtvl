@@ -99,4 +99,40 @@ struct AppSettingsTests {
         let off = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"reflectorAutoStart": false}"#.utf8))
         #expect(!off.reflectorAutoStart)
     }
+
+    @Test func homeLivePreviewDefaultsToTrue() throws {
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(settings.homeLivePreview)
+        let off = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"homeLivePreview": false}"#.utf8))
+        #expect(!off.homeLivePreview)
+    }
+
+    /// M7c L28.
+    @Test func showVersionOnHomeDefaultsToTrue() throws {
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(settings.showVersionOnHome)
+        let off = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"showVersionOnHome": false}"#.utf8))
+        #expect(!off.showVersionOnHome)
+    }
+
+    /// M7c L32.
+    @Test func homeStartTileDefaultsToPlex() throws {
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(settings.homeStartTile == "plex")
+        let other = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"homeStartTile": "iptv"}"#.utf8))
+        #expect(other.homeStartTile == "iptv")
+    }
+
+    @Test func appVersionReadsInfoPlistKeys() {
+        let version = AppVersion(info: ["CFBundleShortVersionString": "1.1.0", "CFBundleVersion": "2"])
+        #expect(version.label == "Version 1.1.0 Build 2")
+        #expect(AppVersion(info: [:]).label == "Version ? Build ?")
+    }
+
+    @Test func kioskLockDefaultsToTrue() throws {
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(settings.kioskLock)
+        let off = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"kioskLock": false}"#.utf8))
+        #expect(!off.kioskLock)
+    }
 }

@@ -8,8 +8,24 @@ enum LiveTVOutcome: Equatable { case handled, leave, openSettings }
 protocol LiveTVHosting: AnyObject {
     /// nil = the last channel or Multiview (M4/M6); a channel id plays that channel full screen (M7 L13).
     func open(channelID: Channel.ID?)
-    func leave()
+    /// M7c L25: `keepingPreview` keeps a single playing channel running as the home preview (muted, no reconnect).
+    func leave(keepingPreview: Bool)
     func handle(_ command: RemoteCommand) -> LiveTVOutcome
+
+    // M7c L15 (D37): the home screen's muted preview.
+    /// nil = no preview.
+    var previewChannelID: Channel.ID? { get }
+    var isPreviewPlaying: Bool { get }
+    /// The last preview failed; the router doesn't start another until focus comes back (L16).
+    var previewFailed: Bool { get }
+    /// Multiview's highlighted window if Multiview was left active, else the last channel.
+    var defaultPreviewChannelID: Channel.ID? { get }
+    func startPreview(channelID: Channel.ID)
+    func stopPreview()
+}
+
+extension LiveTVHosting {
+    func leave() { leave(keepingPreview: false) }
 }
 
 /// The Live TV screen: modes, channel zapping, overlays and command handling (M4 L9, L11, L13),
@@ -55,6 +71,9 @@ final class LiveTVModel: LiveTVHosting {
     private(set) var tilePlayers: [Channel.ID: any LivePlayer] = [:]
     /// Windows that failed after their playlist refresh (M6 L14).
     private(set) var failedWindows: Set<Channel.ID> = []
+    /// M7c L15: the channel the home screen previews on `player` (muted, no sleep assertion); nil = none.
+    private(set) var previewChannelID: Channel.ID?
+    private(set) var previewFailed = false
     let library: IPTVLibrary
     /// M7 L22 (`settings.json` `channelUpMovesUpList`): Channel Up zaps up the list like the Up arrow;
     /// false = the higher channel number. Channel Down is the opposite. List paging ignores it.
@@ -73,6 +92,19 @@ final class LiveTVModel: LiveTVHosting {
     @ObservationIgnored private var bannerGeneration = 0
     @ObservationIgnored private var barGeneration = 0
     @ObservationIgnored private let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "IPTV")
+    /// M7c L24: `ChannelLogoCache.prefetch`, set by the app (tests fetch nothing).
+    @ObservationIgnored var prefetchLogos: ([URL]) -> Void = { _ in }
+    static let logoPrefetchRows = 30
+    /// M7c L29: `StreamResolver.prefetch`, set by the app (tests resolve nothing).
+    @ObservationIgnored var prefetchStreams: ([URL]) -> Void = { _ in }
+    /// M7c L31: resolves a channel and has the relay fetch its playlists and start segments; set by the app.
+    @ObservationIgnored var warmStream: (URL) -> Void = { _ in }
+    /// M7c L31: how long the guide's highlight must rest on a channel before it's warmed (scrolling past isn't).
+    @ObservationIgnored var guideWarmDelay: Duration = .milliseconds(400)
+    /// A channel warmed this recently isn't warmed again (Left/Right in its row).
+    static let guideRewarmInterval: TimeInterval = 5
+    @ObservationIgnored private var guideWarmTask: Task<Void, Never>?
+    @ObservationIgnored private var lastWarm: (id: Channel.ID, at: Date)?
 
     init(player: any LivePlayer, makePlayer: @escaping () -> any LivePlayer, library: IPTVLibrary,
          now: @escaping () -> Date = Date.init, overlayDuration: Duration = .seconds(5)) {
@@ -91,9 +123,18 @@ final class LiveTVModel: LiveTVHosting {
         pendingTask?.cancel()
         playbackError = nil
         guard library.hasPlaylist else {
+            stopPreview()
             mode = .setupNeeded
             return
         }
+        // M7c L15: a channel the preview already plays is adopted, before any loading screen.
+        if adoptPreview(channelID: channelID) {
+            logger.notice("Live TV opened on the home preview's stream (no reconnect)")
+            let library = library
+            Task { await library.refreshGuideIfStale() }
+            return
+        }
+        stopPreview()
         // Shown while the playlist is checked (instant when it is fresh).
         mode = .loading
         let library = library
@@ -136,12 +177,101 @@ final class LiveTVModel: LiveTVHosting {
         }
     }
 
+    // MARK: - Home preview (M7c L15, L16)
+
+    var isPreviewPlaying: Bool {
+        previewChannelID != nil && player.state.phase == .playing
+    }
+
+    var defaultPreviewChannelID: Channel.ID? {
+        if let snapshot = library.state.multiview, snapshot.isActive,
+           let id = MultiviewModel(snapshot: snapshot, validIDs: Set(library.channels.map(\.id))).focusedChannelID {
+            return id
+        }
+        return library.state.lastChannelID
+    }
+
+    /// Muted, without a sleep assertion. The same channel again is a no-op.
+    func startPreview(channelID: Channel.ID) {
+        guard library.hasPlaylist, let channel = channel(channelID), previewChannelID != channelID else { return }
+        previewFailed = false
+        previewChannelID = channelID
+        player.setAudible(false)
+        player.setHoldsSleepAssertion(false)
+        player.setBufferProfile(.full)
+        player.play(channel.streamURL)
+    }
+
+    func stopPreview() {
+        previewFailed = false
+        endPreview()
+    }
+
+    /// Stops the stream and gives the player its sound and sleep assertion back.
+    private func endPreview() {
+        guard previewChannelID != nil else { return }
+        player.stop()
+        restorePreviewPlayer()
+    }
+
+    private func restorePreviewPlayer() {
+        player.setAudible(true)
+        player.setHoldsSleepAssertion(true)
+        previewChannelID = nil
+    }
+
+    /// The target `open` would play: one channel, or Multiview. Adopts the preview's player when it already plays it.
+    private func adoptPreview(channelID: Channel.ID?) -> Bool {
+        guard let previewID = previewChannelID, player.state.phase == .loading || player.state.phase == .playing,
+              !library.channels.isEmpty
+        else { return false }
+        let snapshot = library.state.multiview
+        if let channelID {
+            guard channelID == previewID, let channel = channel(channelID) else { return false }
+            if var snapshot, snapshot.isActive {
+                snapshot.isActive = false
+                library.rememberMultiview(snapshot)
+            }
+            adopt(channel)
+            return true
+        }
+        if let snapshot, snapshot.isActive {
+            let multiview = MultiviewModel(snapshot: snapshot, validIDs: Set(library.channels.map(\.id)))
+            if !multiview.isEmpty {
+                guard multiview.slot(of: previewID) != nil else { return false }
+                restorePreviewPlayer()
+                // `applyAudio` mutes every window but the one with sound.
+                startMultiview(multiview, reusing: previewID)
+                return true
+            }
+        }
+        guard library.state.lastChannelID == previewID, let channel = channel(previewID) else { return false }
+        adopt(channel)
+        return true
+    }
+
+    /// Full screen on the preview's stream: no new `play`, no reconnect.
+    private func adopt(_ channel: Channel) {
+        restorePreviewPlayer()
+        prefetchNeighbors(of: channel)
+        currentChannel = channel
+        refreshedAfterFailure = false
+        library.rememberChannel(channel.id)
+        guide = nil
+        mode = .player
+        showBanner()
+    }
+
     /// Keeps `currentChannel` so the guide can focus it later, and the Multiview snapshot (M6 L13).
-    func leave() {
+    /// M7c L25: `keepingPreview` keeps a single channel that's loading or playing running as the home preview.
+    func leave(keepingPreview: Bool) {
         pendingTask?.cancel()
         pendingTask = nil
+        let phase = player.state.phase
+        let kept = keepingPreview && multiview == nil && playbackError == nil && (phase == .loading || phase == .playing)
+            ? currentChannel : nil
         if multiview != nil { saveSnapshot(true) }
-        for player in players { release(player) }
+        for player in players where kept == nil || player !== self.player { release(player) }
         player.setBufferProfile(.full)
         tilePlayers = [:]
         failedWindows = []
@@ -155,6 +285,13 @@ final class LiveTVModel: LiveTVHosting {
         playbackError = nil
         bannerGeneration += 1
         barGeneration += 1
+        if let kept {
+            player.setAudible(false)
+            player.setHoldsSleepAssertion(false)
+            previewFailed = false
+            previewChannelID = kept.id
+            logger.notice("Left Live TV; the channel keeps playing as the home preview")
+        }
     }
 
     func handle(_ command: RemoteCommand) -> LiveTVOutcome {
@@ -276,14 +413,22 @@ final class LiveTVModel: LiveTVHosting {
             player.togglePause()
             showTimeshiftBar()
         case .select:
+            // M7c L11: Select shows the info banner and timeshift bar; a second Select hides them.
             if playbackError != nil, let channel = currentChannel {
                 play(channel)
+            } else if banner != nil || showsTimeshiftBar {
+                hideOverlays()
+            } else {
+                showBanner()
+                showTimeshiftBar()
+            }
+        case .back:
+            // M7c L11: Back hides the overlays, else opens the guide (Back in the guide leaves Live TV).
+            if banner != nil || showsTimeshiftBar {
+                hideOverlays()
             } else {
                 openGuide()
             }
-        case .back:
-            guard banner != nil || showsTimeshiftBar else { return .leave }
-            hideOverlays()
         case .home:
             return .leave
         case .menu:
@@ -310,6 +455,7 @@ final class LiveTVModel: LiveTVHosting {
         playbackError = nil
         refreshedAfterFailure = false
         player.play(channel.streamURL)
+        prefetchNeighbors(of: channel)
         library.rememberChannel(channel.id)
         mode = .player
         guide = nil
@@ -328,6 +474,7 @@ final class LiveTVModel: LiveTVHosting {
         guard var guide else { return .leave }
         let action = guide.handle(command, now: now())
         self.guide = guide
+        scheduleGuideWarm()
         switch action {
         case .none:
             break
@@ -353,11 +500,27 @@ final class LiveTVModel: LiveTVHosting {
                 closePicker()
                 break
             }
-            guard isPlaying else { return .leave }
-            mode = .player
-            self.guide = nil
+            // M7c L11: Back in the watch guide leaves Live TV.
+            return .leave
         }
         return .handled
+    }
+
+    /// M7c L31: once the highlight rests on a channel for `guideWarmDelay`, its stream is warmed, so Select starts
+    /// it at once. Not the channel already playing, nor one already in a Multiview window.
+    private func scheduleGuideWarm() {
+        guideWarmTask?.cancel()
+        guard mode == .guide, let channel = guide?.focusedChannel,
+              !(channel.id == currentChannel?.id && isPlaying), tilePlayers[channel.id] == nil
+        else { return }
+        if let lastWarm, lastWarm.id == channel.id, now().timeIntervalSince(lastWarm.at) < Self.guideRewarmInterval { return }
+        let delay = guideWarmDelay
+        guideWarmTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self, self.mode == .guide, self.guide?.focusedChannel?.id == channel.id else { return }
+            self.lastWarm = (channel.id, self.now())
+            self.warmStream(channel.streamURL)
+        }
     }
 
     /// The watch guide's Select: full screen on that channel, without reloading the one already playing.
@@ -779,6 +942,9 @@ final class LiveTVModel: LiveTVHosting {
         guard let guide else { return }
         let group = guide.selectedGroup
         let channels = guide.channels
+        // M7c L24: the logos around the focused row first.
+        let around = max(guide.row - Self.logoPrefetchRows, 0)..<min(guide.row + Self.logoPrefetchRows, channels.count)
+        prefetchLogos(channels[around].compactMap(\.logoURL))
         let date = now()
         let library = library
         pendingTask = Task {
@@ -801,6 +967,14 @@ final class LiveTVModel: LiveTVHosting {
         }
         guard list.count > 1 else { return }
         play(list[(index + step + list.count) % list.count])
+    }
+
+    /// M7c L29: the channels one zap away, resolved ahead of time.
+    private func prefetchNeighbors(of channel: Channel) {
+        let list = zapList(around: channel)
+        guard list.count > 1, let index = list.firstIndex(where: { $0.id == channel.id }) else { return }
+        let neighbors = [list[(index + 1) % list.count], list[(index - 1 + list.count) % list.count]]
+        prefetchStreams(Array(Set(neighbors.map(\.streamURL))).sorted { $0.absoluteString < $1.absoluteString })
     }
 
     /// The list zapping steps through from `current` (see `zap`).
@@ -864,6 +1038,12 @@ final class LiveTVModel: LiveTVHosting {
     /// M4 L13: after the player's own retries, refresh the playlist once (tokens may have rotated), then give up.
     /// M6 L14: the same per Multiview window.
     private func playerFailed(_ failed: any LivePlayer) {
+        // M7c L16: a failed preview shows the art and isn't retried until focus comes back.
+        if previewChannelID != nil, failed === player {
+            endPreview()
+            previewFailed = true
+            return
+        }
         if multiview != nil {
             guard let id = tilePlayers.first(where: { $0.value === failed })?.key else { return }   // a released player
             windowFailed(id, player: failed)

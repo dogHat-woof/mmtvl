@@ -370,3 +370,4 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
 ## Deviations & questions
 
 Executors append here when the plan is wrong or ambiguous: the date, the step, what happened, and what they need. Do not silently diverge.
+- **2026-10-09, from M7c step 27 (question for when M8 starts):** M7c set `MARKETING_VERSION = 1.1.0`, and every test build for the mini bumps `CURRENT_PROJECT_VERSION` (`scripts/test-build.sh`), so by M8 the build number will be well past 2. L7 (1.0.1, build 2) and step 11 need new numbers: probably the version at that time (1.1.x) and the next build number. `scripts/release.sh` should keep incrementing the same counter, never reset it.

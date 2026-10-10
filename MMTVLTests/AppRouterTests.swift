@@ -28,9 +28,9 @@ struct AppRouterTests {
         _ = router.handle(.select)
     }
 
-    /// The Settings tile is the first tile of the second row in the defaults.
+    /// The Settings tile is the last tile of the first row in the defaults (six per row, M7c L19).
     private func openSettingsFromTile(_ router: AppRouter) {
-        _ = router.handle(.down)
+        for _ in 0..<5 { _ = router.handle(.right) }
         #expect(router.visibleItems[router.focus.index!].isSettingsTile)
         _ = router.handle(.select)
     }
@@ -62,6 +62,51 @@ struct AppRouterTests {
         _ = router.handle(.home)
         #expect(router.screen == .home)
         #expect(recorder.learningHandler == nil)
+    }
+
+    /// M7c L32.
+    @Test func launchFocusesTheStartTileOutOfTheShelf() {
+        let router = makeRouter()
+        _ = router.handle(.right)
+        router.focusStartTile(id: "iptv")
+        #expect(router.focusedItem?.id == "iptv")
+        #expect(router.focus.position.row == 0)
+        #expect(router.shelfIndex == nil)
+        router.focusStartTile(id: "missing")
+        #expect(router.focusedItem?.id == "plex")
+    }
+
+    /// M7c L32: Home lands on the start tile, from the home screen and from another screen; Back keeps the place.
+    @Test func homeGoesToTheStartTile() {
+        let router = makeRouter()
+        router.startTileID = "iptv"
+        _ = router.handle(.down)
+        #expect(router.focus.position.row == 1)
+        _ = router.handle(.home)
+        #expect(router.focusedItem?.id == "iptv")
+        #expect(router.focus.position.row == 0)
+
+        _ = router.handle(.left)
+        let settingsIndex = router.visibleItems.firstIndex { $0.isSettingsTile }!
+        router.hover(settingsIndex)
+        router.activate(settingsIndex)
+        #expect(router.screen == .settings)
+        _ = router.handle(.home)
+        #expect(router.screen == .home)
+        #expect(router.focusedItem?.id == "iptv")
+
+        router.goHomeToStartTile()
+        #expect(router.focusedItem?.id == "iptv")
+    }
+
+    /// M7c L32: the pointer resting over the home screen at launch (no move yet) doesn't take the focus.
+    @Test func aRestingPointerDoesntMoveTheStartFocus() {
+        let router = makeRouter()
+        router.focusStartTile(id: "plex")
+        router.hover(7)
+        router.hoverShelfCard(0)
+        #expect(router.focusedItem?.id == "plex")
+        #expect(router.shelfIndex == nil)
     }
 
     @Test func settingsTileOpensSettings() {
@@ -134,12 +179,14 @@ struct AppRouterTests {
         #expect(router.screen == .home)
         #expect(youtube.pauses == 1)
         #expect(youtube.sent.isEmpty)
-        #expect(router.visibleItems[router.focus.index!].kind == .internalDestination(.youtube))
+        // M7c L32: Home lands on the start tile.
+        #expect(router.focusedItem?.id == "plex")
     }
 
     @Test func reopeningYouTubeAsksControllerEachTime() {
         let youtube = FakeYouTube()
         let router = makeRouter(youtube: youtube)
+        router.startTileID = "youtube"
         openYouTubeFromTile(router)
         _ = router.handle(.home)
         _ = router.handle(.select)
@@ -189,8 +236,7 @@ struct AppRouterTests {
         let router = makeRouter(pin: "1357")
         var exits = 0
         router.onExitToDesktop = { exits += 1 }
-        _ = router.handle(.down)
-        _ = router.handle(.right)
+        _ = router.handle(.down)            // row 1 holds only Exit to Desktop
         #expect(router.visibleItems[router.focus.index!].isExitToDesktop)
         _ = router.handle(.select)
         #expect(router.screen == .pin(.exitToDesktop))
@@ -198,6 +244,41 @@ struct AppRouterTests {
         enterPIN("1357", router)
         #expect(exits == 1)
         #expect(router.screen == .home)
+    }
+
+    /// M7c L9.
+    @Test func quitWithoutPINQuitsAtOnce() {
+        let router = makeRouter()
+        var quits = 0
+        router.onQuit = { quits += 1 }
+        router.requestQuit()
+        #expect(quits == 1)
+        #expect(router.screen == .home)
+    }
+
+    @Test func quitAsksForPINFirst() {
+        let router = makeRouter(pin: "1357")
+        var quits = 0
+        router.onQuit = { quits += 1 }
+        router.requestQuit()
+        #expect(router.screen == .pin(.quit))
+        #expect(router.pinEntry?.title == "Enter PIN to quit MMTVL")
+        enterPIN("2468", router)
+        #expect(quits == 0)
+        #expect(router.screen == .pin(.quit))
+        enterPIN("1357", router)
+        #expect(quits == 1)
+    }
+
+    @Test func cancellingTheQuitPINReturnsToSettings() {
+        let router = makeRouter(pin: "1357")
+        var quits = 0
+        router.onQuit = { quits += 1 }
+        router.openSettings()
+        router.requestQuit()
+        #expect(router.handle(.back))
+        #expect(router.screen == .settings)
+        #expect(quits == 0)
     }
 
     @Test func flaggedTileAsksForPINThenOpens() {
@@ -279,7 +360,7 @@ struct AppRouterTests {
         let router = makeRouter()
         router.openSettings()
         router.goHome()
-        _ = router.handle(.down)   // Settings tile
+        _ = router.handle(.down)   // Exit to Desktop (row 1)
         _ = router.handle(.select)
         #expect(router.focusMotion.direction == .select)
         #expect(router.focusMotion.generation == 2)
@@ -310,6 +391,338 @@ struct AppRouterTests {
         _ = other.handle(.right)          // YouTube: banner
         _ = other.handle(.up)
         #expect(other.shelfIndex == nil)
+    }
+
+    // MARK: Live TV preview (M7c L15, L16)
+
+    /// Live TV (the third tile) has two channel pages (M7c L21): NFL Network (the default preview), then NBA TV.
+    private func previewRouter(items: [LaunchItem] = LaunchItem.defaults, pin: String? = nil) -> (AppRouter, FakeLiveTV) {
+        let liveTV = FakeLiveTV()
+        liveTV.defaultPreviewChannelID = "id:nflnetwork.us"
+        let shelf = FakeTopShelf()
+        shelf.contents["iptv"] = .carousel(title: "On Now", [
+            card("live.nfl", .playChannel("id:nflnetwork.us")), card("live.nba", .playChannel("id:nbatv.us")),
+        ], autoAdvances: false)
+        let router = makeRouter(items: items, liveTV: liveTV, pin: pin, topShelf: shelf)
+        router.previewDelay = .zero
+        router.previewIdleTimeout = .seconds(3600)
+        return (router, liveTV)
+    }
+
+    private func focusLiveTV(_ router: AppRouter) {
+        _ = router.handle(.right)
+        _ = router.handle(.right)
+        #expect(router.focusedItem?.id == "iptv")
+    }
+
+    @Test func focusingLiveTVStartsThePreview() {
+        let (router, liveTV) = previewRouter()
+        #expect(liveTV.previewStarts.isEmpty)
+        focusLiveTV(router)
+        #expect(liveTV.previewStarts == ["id:nflnetwork.us"])
+    }
+
+    /// M7c L21: Left/Right in the hero change channel; Down keeps the page and its channel.
+    @Test func livePagesSwitchTheChannel() {
+        let (router, liveTV) = previewRouter()
+        focusLiveTV(router)
+        _ = router.handle(.up)
+        #expect(liveTV.previewChannelID == "id:nflnetwork.us")
+        _ = router.handle(.right)
+        #expect(liveTV.previewChannelID == "id:nbatv.us")
+        _ = router.handle(.down)
+        #expect(router.shelfIndex == nil)
+        #expect(router.carouselPage == 1)
+        #expect(liveTV.previewChannelID == "id:nbatv.us")
+        _ = router.handle(.left)
+        _ = router.handle(.right)
+        #expect(router.carouselPage == 0)
+        #expect(liveTV.previewChannelID == "id:nflnetwork.us")
+    }
+
+    @Test func livePagesDontAutoAdvance() {
+        let (router, _) = previewRouter()
+        focusLiveTV(router)
+        router.advanceCarousel()
+        #expect(router.carouselPage == 0)
+    }
+
+    /// M7c L21: Select on the tile opens the page's channel when it isn't the first page.
+    @Test func selectOnTheTileOpensTheKeptPage() {
+        let (router, liveTV) = previewRouter()
+        focusLiveTV(router)
+        _ = router.handle(.select)
+        #expect(liveTV.openedChannelIDs == [nil])
+        router.goHome()
+        _ = router.handle(.up)
+        _ = router.handle(.right)
+        _ = router.handle(.down)
+        _ = router.handle(.select)
+        #expect(liveTV.openedChannelIDs == [nil, "id:nbatv.us"])
+    }
+
+    /// M7c L25: moving off the tile keeps the stream (hidden), so coming back is instant.
+    @Test func movingOffTheTileKeepsThePreviewHidden() {
+        let (router, liveTV) = previewRouter()
+        focusLiveTV(router)
+        #expect(router.showsLivePreviewVideo)
+        _ = router.handle(.right)
+        #expect(liveTV.previewChannelID == "id:nflnetwork.us")
+        #expect(liveTV.previewStops == 0)
+        #expect(!router.showsLivePreviewVideo)
+        _ = router.handle(.left)
+        #expect(liveTV.previewStarts == ["id:nflnetwork.us"])
+        #expect(router.showsLivePreviewVideo)
+    }
+
+    /// M7c L25: the home screen preloads the default channel with any tile focused.
+    @Test func theHomeScreenPreloadsWithAnotherTileFocused() {
+        let (router, liveTV) = previewRouter()
+        _ = router.handle(.right)
+        #expect(router.focusedItem?.id != "iptv")
+        #expect(liveTV.previewStarts == ["id:nflnetwork.us"])
+        #expect(!router.showsLivePreviewVideo)
+        _ = router.handle(.right)
+        #expect(liveTV.previewStarts == ["id:nflnetwork.us"])
+        #expect(router.showsLivePreviewVideo)
+    }
+
+    /// M7c L25: Back from Live TV keeps the channel running as the preview (no stop, no new start).
+    @Test func leavingLiveTVKeepsTheChannelPlaying() {
+        let (router, liveTV) = previewRouter()
+        focusLiveTV(router)
+        _ = router.handle(.select)
+        #expect(router.screen == .liveTV)
+        liveTV.previewChannelID = nil   // adopted by Live TV
+        liveTV.playingChannelID = "id:nflnetwork.us"
+        liveTV.outcome = .leave
+        _ = router.handle(.back)
+        #expect(router.screen == .home)
+        #expect(liveTV.leavesKeepingPreview == [true])
+        #expect(liveTV.previewChannelID == "id:nflnetwork.us")
+        #expect(liveTV.calls == ["start id:nflnetwork.us", "open", "leave"])
+    }
+
+    @Test func withThePreviewOffLeavingLiveTVStopsIt() {
+        let (router, liveTV) = previewRouter()
+        router.livePreviewEnabled = false
+        focusLiveTV(router)
+        _ = router.handle(.select)
+        liveTV.outcome = .leave
+        _ = router.handle(.back)
+        #expect(liveTV.leavesKeepingPreview == [false])
+        #expect(liveTV.previewStarts.isEmpty)
+    }
+
+    /// M7c L26.
+    @Test func theScreenSaverStopsThePreview() {
+        let (router, liveTV) = previewRouter()
+        focusLiveTV(router)
+        router.screenSaverDidStart()
+        #expect(liveTV.previewChannelID == nil)
+        router.screenSaverDidStop()
+        #expect(liveTV.previewChannelID == "id:nflnetwork.us")
+    }
+
+    @Test func aPINLockedLiveTVTileHasNoPreview() {
+        var items = LaunchItem.defaults
+        items[2].requiresPIN = true
+        let (router, liveTV) = previewRouter(items: items, pin: "1234")
+        focusLiveTV(router)
+        #expect(liveTV.previewStarts.isEmpty)
+    }
+
+    @Test func theSettingInactivityAndIdleStopThePreview() {
+        let (router, liveTV) = previewRouter()
+        focusLiveTV(router)
+        router.livePreviewEnabled = false
+        #expect(liveTV.previewChannelID == nil)
+        router.livePreviewEnabled = true
+        #expect(liveTV.previewChannelID == "id:nflnetwork.us")
+
+        router.isAppActive = false
+        #expect(liveTV.previewChannelID == nil)
+        router.isAppActive = true
+        #expect(liveTV.previewChannelID == "id:nflnetwork.us")
+
+        router.screensDidSleep()
+        #expect(liveTV.previewChannelID == nil)
+        router.noteActivity()
+        #expect(liveTV.previewChannelID == "id:nflnetwork.us")
+        #expect(liveTV.previewStarts.count == 4)
+    }
+
+    @Test func aFailedPreviewWaitsForFocusToComeBack() {
+        let (router, liveTV) = previewRouter()
+        focusLiveTV(router)
+        liveTV.previewChannelID = nil
+        liveTV.previewFailed = true
+        _ = router.handle(.up)
+        _ = router.handle(.down)
+        #expect(liveTV.previewStarts.count == 1)
+        _ = router.handle(.left)
+        _ = router.handle(.right)
+        #expect(liveTV.previewStarts.count == 2)
+    }
+
+    @Test func openingSettingsStopsThePreview() {
+        let (router, liveTV) = previewRouter()
+        focusLiveTV(router)
+        router.openSettings()
+        #expect(liveTV.previewChannelID == nil)
+    }
+
+    @Test func openingLiveTVKeepsThePreviewForAdoption() {
+        let (router, liveTV) = previewRouter()
+        focusLiveTV(router)
+        _ = router.handle(.select)
+        #expect(router.screen == .liveTV)
+        #expect(liveTV.calls == ["start id:nflnetwork.us", "open"])
+    }
+
+    @Test func noPreviewWithoutAChannel() {
+        let liveTV = FakeLiveTV()
+        let router = makeRouter(liveTV: liveTV, topShelf: FakeTopShelf())   // no pages, no default channel
+        router.previewDelay = .zero
+        focusLiveTV(router)
+        #expect(liveTV.previewStarts.isEmpty)
+    }
+
+    // MARK: Leaving home (M7c L22, L23)
+
+    @Test func selectOnLiveTVAnimatesThenAdopts() async {
+        let (router, liveTV) = previewRouter()
+        router.homeExitDelay = .milliseconds(20)
+        focusLiveTV(router)
+        _ = router.handle(.select)
+        #expect(router.isLeavingHome)
+        #expect(liveTV.opens == 0)
+        await router.homeExitTask?.value
+        #expect(!router.isLeavingHome)
+        #expect(router.screen == .liveTV)
+        #expect(liveTV.calls == ["start id:nflnetwork.us", "open"])
+    }
+
+    @Test func commandsWaitDuringTheExit() async {
+        let (router, liveTV) = previewRouter()
+        router.homeExitDelay = .milliseconds(20)
+        focusLiveTV(router)
+        _ = router.handle(.select)
+        #expect(router.handle(.right))
+        #expect(router.focusedItem?.id == "iptv")
+        await router.homeExitTask?.value
+        #expect(liveTV.opens == 1)
+    }
+
+    @Test func homeCancelsTheExit() async {
+        let (router, liveTV) = previewRouter()
+        router.homeExitDelay = .milliseconds(20)
+        focusLiveTV(router)
+        _ = router.handle(.select)
+        let task = router.homeExitTask
+        _ = router.handle(.home)
+        #expect(!router.isLeavingHome)
+        await task?.value
+        #expect(liveTV.opens == 0)
+        #expect(router.screen == .home)
+    }
+
+    @Test func aLivePageAnimatesThenOpensItsChannel() async {
+        let (router, liveTV) = previewRouter()
+        router.homeExitDelay = .milliseconds(20)
+        focusLiveTV(router)
+        _ = router.handle(.up)
+        _ = router.handle(.right)
+        _ = router.handle(.select)
+        #expect(router.isLeavingHome)
+        await router.homeExitTask?.value
+        #expect(liveTV.openedChannelIDs == ["id:nbatv.us"])
+    }
+
+    @Test func aPlexPageAnimatesThenOpens() async {
+        let router = carouselRouter()
+        router.homeExitDelay = .milliseconds(20)
+        _ = router.handle(.up)
+        _ = router.handle(.left)            // the page that opens YouTube (nothing real launches)
+        _ = router.handle(.select)
+        #expect(router.isLeavingHome)
+        #expect(router.screen == .home)
+        await router.homeExitTask?.value
+        #expect(router.screen == .youtube)
+        #expect(!router.isLeavingHome)
+    }
+
+    @Test func noAnimationWithoutADelay() {
+        let (router, liveTV) = previewRouter()
+        focusLiveTV(router)
+        _ = router.handle(.select)
+        #expect(!router.isLeavingHome)
+        #expect(liveTV.opens == 1)
+    }
+
+    // MARK: Carousel (M7c L14)
+
+    /// Plex (the first tile) shows a carousel of three pages; the last opens YouTube.
+    private func carouselRouter() -> AppRouter {
+        let shelf = FakeTopShelf()
+        shelf.contents["plex"] = .carousel(title: "Continue Watching", [
+            card("a", .openTile(id: "plex")), card("b", .openTile(id: "plex")), card("c", .openTile(id: "youtube")),
+        ], autoAdvances: true)
+        let router = makeRouter(topShelf: shelf)
+        router.carouselInterval = .seconds(3600)
+        return router
+    }
+
+    @Test func carouselAdvancesAndWraps() {
+        let router = carouselRouter()
+        #expect(router.carouselPage == 0)
+        router.advanceCarousel()
+        router.advanceCarousel()
+        #expect(router.carouselPage == 2)
+        router.advanceCarousel()
+        #expect(router.carouselPage == 0)
+    }
+
+    @Test func upEntersTheCarouselOnItsPage() {
+        let router = carouselRouter()
+        router.advanceCarousel()
+        #expect(router.handle(.up))
+        #expect(router.shelfIndex == 1)
+        // No auto-advance while the carousel has focus.
+        router.advanceCarousel()
+        #expect(router.carouselPage == 1)
+        _ = router.handle(.down)
+        #expect(router.shelfIndex == nil)
+        #expect(router.carouselPage == 1)
+        router.advanceCarousel()
+        #expect(router.carouselPage == 2)
+    }
+
+    @Test func carouselLeftRightWrap() {
+        let router = carouselRouter()
+        _ = router.handle(.up)
+        _ = router.handle(.left)
+        #expect(router.shelfIndex == 2)
+        #expect(router.carouselPage == 2)
+        _ = router.handle(.right)
+        #expect(router.shelfIndex == 0)
+        #expect(router.carouselPage == 0)
+    }
+
+    @Test func selectInTheCarouselActivatesThePage() {
+        let router = carouselRouter()
+        _ = router.handle(.up)
+        _ = router.handle(.left)
+        _ = router.handle(.select)
+        #expect(router.screen == .youtube)
+    }
+
+    @Test func carouselPageResetsWhenTheTileChanges() {
+        let router = carouselRouter()
+        router.advanceCarousel()
+        _ = router.handle(.right)
+        _ = router.handle(.left)
+        #expect(router.carouselPage == 0)
     }
 
     @Test func upFromTheSecondRowMovesToTheFirst() {

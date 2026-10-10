@@ -41,13 +41,19 @@ struct MultiviewLiveTVTests {
     /// Full screen if needed, the guide, the channel's row, its channel cell, its menu, then the second item.
     private func addToMultiview(_ model: LiveTVModel, _ id: Channel.ID) {
         if model.mode == .multiview { _ = model.handle(.back) }
-        _ = model.handle(.select)
+        openGuide(model)
         for _ in 0..<10 where model.guide?.focusedChannel?.id != id { _ = model.handle(.down) }
         for _ in 0..<10 where model.guide?.focusedChannel?.id != id { _ = model.handle(.up) }
         _ = model.handle(.left)
         _ = model.handle(.select)
         _ = model.handle(.down)
         _ = model.handle(.select)
+    }
+
+    /// M7c L11: in the player, Back hides the banner, then opens the guide.
+    private func openGuide(_ model: LiveTVModel) {
+        if model.banner != nil || model.showsTimeshiftBar { _ = model.handle(.back) }
+        _ = model.handle(.back)
     }
 
     /// Moves the open menu to the item, then selects it.
@@ -102,7 +108,7 @@ struct MultiviewLiveTVTests {
         let setup = try await makeSetup()
         defer { setup.fixture.cleanUp() }
         let model = setup.model
-        _ = model.handle(.select)
+        openGuide(model)
         _ = model.handle(.down)
         _ = model.handle(.left)
         _ = model.handle(.select)
@@ -112,10 +118,35 @@ struct MultiviewLiveTVTests {
         _ = model.handle(.select)
         _ = model.handle(.back)
 
-        _ = model.handle(.select)
+        openGuide(model)
         _ = model.handle(.left)
         _ = model.handle(.select)
         #expect(model.menu?.items[1].title == "Show in Multiview")
+    }
+
+    /// M7c L15: Live TV opening into Multiview reuses the preview's player for its window (no reconnect).
+    @Test func multiviewReusesThePreview() async throws {
+        var state = IPTVState(lastChannelID: Self.nfl)
+        state.multiview = MultiviewSnapshot(layout: .sideBySide, slots: [Self.nfl, Self.nba], focusedSlot: 1, isActive: true)
+        let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL, state: state)
+        defer { fixture.cleanUp() }
+        await fixture.library.refreshPlaylist()
+        let player = FakePlayer()
+        let factory = PlayerFactory()
+        let model = LiveTVModel(player: player, makePlayer: factory.make, library: fixture.library,
+                                now: { fixture.clock.now })
+        let preview = try #require(model.defaultPreviewChannelID)
+        #expect(preview == Self.nba)
+        model.startPreview(channelID: preview)
+        model.open()
+        #expect(model.mode == .multiview)
+        #expect(model.previewChannelID == nil)
+        #expect(model.tilePlayers[Self.nba] === player)
+        #expect(player.played == [IPTVFixtures.streamURL(2)])
+        #expect(player.holdsSleepAssertion)
+        // The highlighted window has the sound.
+        #expect(player.audible)
+        #expect(factory.made.first?.audible == false)
     }
 
     // MARK: Inside Multiview
@@ -224,7 +255,9 @@ struct MultiviewLiveTVTests {
         let players = allPlayers(setup)
         let stops = players.map(\.stops)
 
-        model.leave()
+        // M7c L25: Multiview is never kept as the home preview.
+        model.leave(keepingPreview: true)
+        #expect(model.previewChannelID == nil)
         let allStopped = zip(players, stops).allSatisfy { $0.stops > $1 }
         #expect(allStopped)
         #expect(model.multiview == nil)
@@ -287,9 +320,10 @@ struct MultiviewLiveTVTests {
         #expect(full.first?.canvasRect == nil)
         #expect(full.first?.isVisible == true)
 
-        _ = model.handle(.select)
+        openGuide(model)
         #expect(model.videoPlacements.map(\.canvasRect) == [Theme.guidePreviewRect])
-        _ = model.handle(.back)
+        // Select on the playing channel returns to full screen (M7c L11: Back would leave).
+        _ = model.handle(.select)
 
         addToMultiview(model, Self.nba)
         let windows = model.videoPlacements

@@ -23,18 +23,70 @@ final class AppRouter {
 
     private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "AppRouter")
 
-    private(set) var screen: Screen = .home
+    private(set) var screen: Screen = .home {
+        didSet { if screen != oldValue { updateLivePreview() } }
+    }
     /// All tiles in stored order, hidden ones included.
     private(set) var items: [LaunchItem]
     /// The tiles shown on the home screen; `focus` and `activate(_:)` index into these.
     private(set) var visibleItems: [LaunchItem]
     /// Kept while another screen is shown, so Back restores the previous focus position.
-    private(set) var focus: LauncherFocusModel
+    private(set) var focus: LauncherFocusModel {
+        didSet {
+            guard focus.index != oldValue.index else { return }
+            // M7c L25: a failed preview tries again when Live TV gets focus.
+            if liveTV.previewFailed, isLiveTVFocused { liveTV.stopPreview() }
+            updateLivePreview()
+        }
+    }
     private(set) var shakeTriggers: [LaunchItem.ID: Int] = [:]
     /// L2. Hover moves don't bump it.
     private(set) var focusMotion = FocusMotion()
     /// M7 L12: nil = the tiles have focus; else the focused card of the focused tile's shelf.
-    private(set) var shelfIndex: Int?
+    private(set) var shelfIndex: Int? {
+        didSet { if shelfIndex != oldValue { updateLivePreview() } }
+    }
+    /// M7c L14: the carousel's page while the tiles have focus (auto-advances); 0 when the focused tile changes.
+    private(set) var carouselPage = 0
+    /// The tile `carouselPage` belongs to.
+    @ObservationIgnored private var carouselTileID: LaunchItem.ID?
+    @ObservationIgnored private var carouselTask: Task<Void, Never>?
+    /// Injectable (tests advance by hand with `advanceCarousel()`).
+    @ObservationIgnored var carouselInterval: Duration = Theme.carouselInterval
+    /// M7c L28: "Version 1.1.0 Build 2" under the home clock; nil = hidden. Set live by AppDelegate.
+    var homeVersionLabel: String?
+    /// M7c L15: `settings.json` `homeLivePreview`, set live by AppDelegate.
+    @ObservationIgnored var livePreviewEnabled = true {
+        didSet { if livePreviewEnabled != oldValue { updateLivePreview() } }
+    }
+    /// L16: MMTVL is the active app (AppDelegate, from didBecomeActive/didResignActive).
+    @ObservationIgnored var isAppActive = true {
+        didSet {
+            guard isAppActive != oldValue else { return }
+            updateLivePreview()
+            if isAppActive {
+                homeEntryGeneration += 1
+            } else if isLeavingHome {
+                // L23: the launched app took the screen; the home UI is back for the return.
+                finishLeavingHome(animated: false)
+            }
+        }
+    }
+    /// M7c L22, L23: the home UI animates away before Live TV or Plex opens. Commands wait (Home cancels).
+    private(set) var isLeavingHome = false
+    /// Bumped when the home screen comes back (MMTVL active again); the dock slides up.
+    private(set) var homeEntryGeneration = 0
+    /// Injectable: 0 (no animation) by default and in tests; AppDelegate sets `Theme.homeExitDuration`.
+    @ObservationIgnored var homeExitDelay: Duration = .zero
+    @ObservationIgnored private(set) var homeExitTask: Task<Void, Never>?
+    /// Injectable; tests use zero.
+    @ObservationIgnored var previewDelay: Duration = Theme.previewDelay
+    @ObservationIgnored var previewIdleTimeout: Duration = Theme.previewIdleTimeout
+    /// L16: no input for `previewIdleTimeout`, or the displays slept.
+    @ObservationIgnored private(set) var isIdle = false
+    @ObservationIgnored private var previewTask: Task<Void, Never>?
+    @ObservationIgnored private var scheduledPreviewID: Channel.ID?
+    @ObservationIgnored private var idleTask: Task<Void, Never>?
     /// D20: read at init, on going home and after PIN flows, not on every render.
     private var hasPINCache = false
     /// The PIN screen's model while `screen` is `.pin`.
@@ -62,6 +114,8 @@ final class AppRouter {
     /// Injectable clock (tests).
     @ObservationIgnored var now: () -> Date = Date.init
     @ObservationIgnored var onExitToDesktop: (() -> Void)?
+    /// M7c L9: quits MMTVL for real (after the PIN, if one is set).
+    @ObservationIgnored var onQuit: (() -> Void)?
     @ObservationIgnored var onRequestAccessibility: (() -> Void)?
 
     init(items: [LaunchItem], launcher: AppLauncher, settings: SettingsModel, youtube: any YouTubeHosting,
@@ -81,6 +135,7 @@ final class AppRouter {
         hasPINCache = pinStore.load() != nil
         // M7 L18: a web app whose window never showed shakes its tile.
         launcher.onLaunchFailed = { [weak self] id in self?.shakeTriggers[id, default: 0] += 1 }
+        syncCarousel()
     }
 
     /// Replaces the tiles (Settings edits), keeping focus on the same tile where possible.
@@ -100,6 +155,31 @@ final class AppRouter {
         shelfContentChanged()
     }
 
+    /// M7c L32: `settings.json` `homeStartTile`, set live by AppDelegate.
+    @ObservationIgnored var startTileID = "plex"
+
+    /// M7c L32: Home (any remote, the keyboard, the phone, from any screen or app) shows the home screen on the
+    /// start tile.
+    func goHomeToStartTile() {
+        goHome()
+        withAnimation(Theme.focusAnimation) { focusStartTile(id: startTileID) }
+    }
+
+    /// M7c L32: at launch and on Home, the home screen opens on `id` (else the first tile), out of the top shelf, so
+    /// the dock row shows with the next row peeking.
+    func focusStartTile(id: String) {
+        var newFocus = LauncherFocusModel(itemCount: visibleItems.count, perRow: Theme.tilesPerRow)
+        if let index = visibleItems.firstIndex(where: { $0.id == id }) {
+            newFocus.focus(index: index)
+        }
+        focus = newFocus
+        shelfIndex = nil
+        // L8: a pointer resting where the home screen appears mustn't take the focus; only a real move does.
+        pointerLocationAtLastCommand = NSEvent.mouseLocation
+        topShelf.refresh(focusing: focusedItem)
+        shelfContentChanged()
+    }
+
     // MARK: Top shelf (M7 D28, L12)
 
     /// The focused tile, if any.
@@ -116,9 +196,214 @@ final class AppRouter {
 
     /// Call when the shelf's content may have changed: clamps the card focus, or returns to the tile.
     func shelfContentChanged() {
+        defer { updateLivePreview() }
+        syncCarousel()
         guard let index = shelfIndex else { return }
         let count = shelfContent.cards.count
         shelfIndex = count == 0 ? nil : min(index, count - 1)
+    }
+
+    // MARK: Live TV preview (M7c L15, L16, D37)
+
+    /// The channel the home screen should preview now, or nil.
+    /// M7c L25: it preloads with any tile focused while the Live TV tile is on the home screen.
+    var wantedPreviewChannelID: Channel.ID? {
+        guard screen == .home, livePreviewEnabled, isAppActive, !isIdle,
+              let liveItem = visibleItems.first(where: { $0.kind == .internalDestination(.iptv) }),
+              !(liveItem.isPINProtected && hasPINCache)
+        else { return nil }
+        guard isLiveTVFocused else {
+            // Another tile: whatever plays keeps playing (no reconnect), else the default channel.
+            return liveTV.previewChannelID ?? liveTV.defaultPreviewChannelID
+        }
+        // M7c L21: the focused page (or card); Down/Back keep the page, so its channel keeps playing.
+        let content = shelfContent
+        if let index = shelfIndex ?? (content.isCarousel ? carouselPage : nil) {
+            let cards = content.cards
+            if cards.indices.contains(index), case .playChannel(let id) = cards[index].action { return id }
+        }
+        return liveTV.defaultPreviewChannelID
+    }
+
+    private var isLiveTVFocused: Bool {
+        focusedItem?.kind == .internalDestination(.iptv)
+    }
+
+    /// Whether the preview's video shows through the backdrop (the Live TV tile focused and its preview playing).
+    var revealsLivePreview: Bool {
+        screen == .home && isLiveTVFocused && liveTV.isPreviewPlaying
+    }
+
+    /// M7c L25: the preview's video is drawn only while the Live TV tile has focus (other tiles' art and crossfades
+    /// never show it).
+    var showsLivePreviewVideo: Bool {
+        screen == .home && isLiveTVFocused
+    }
+
+    /// Starts (after `previewDelay`), switches or stops the preview. Called on every focus, shelf, screen,
+    /// setting and activity change.
+    func updateLivePreview() {
+        // Live TV owns the player while it's open (an adopted preview keeps playing).
+        if screen == .liveTV {
+            cancelScheduledPreview()
+            return
+        }
+        guard let wanted = wantedPreviewChannelID else {
+            cancelScheduledPreview()
+            if liveTV.previewChannelID != nil || liveTV.previewFailed { liveTV.stopPreview() }
+            return
+        }
+        if idleTask == nil { restartIdleTimer() }
+        if wanted == liveTV.previewChannelID || liveTV.previewFailed {
+            cancelScheduledPreview()
+            return
+        }
+        guard scheduledPreviewID != wanted else { return }
+        cancelScheduledPreview()
+        guard previewDelay > .zero else {
+            liveTV.startPreview(channelID: wanted)
+            return
+        }
+        scheduledPreviewID = wanted
+        let delay = previewDelay
+        previewTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self, scheduledPreviewID == wanted else { return }
+            scheduledPreviewID = nil
+            if wantedPreviewChannelID == wanted { liveTV.startPreview(channelID: wanted) }
+        }
+    }
+
+    private func cancelScheduledPreview() {
+        previewTask?.cancel()
+        previewTask = nil
+        scheduledPreviewID = nil
+    }
+
+    /// L16: any remote command (`InputRouter.onCommandDispatched`).
+    func noteActivity() {
+        restartIdleTimer()
+        if isIdle {
+            isIdle = false
+            updateLivePreview()
+        }
+    }
+
+    /// L16: the displays or the system went to sleep. The next command restarts the preview.
+    func screensDidSleep() {
+        idleTask?.cancel()
+        idleTask = nil
+        isIdle = true
+        updateLivePreview()
+    }
+
+    /// M7c L26: no stream while the screen saver runs.
+    func screenSaverDidStart() {
+        screensDidSleep()
+    }
+
+    /// M7c L26: counts as activity, so the preview can start again.
+    func screenSaverDidStop() {
+        noteActivity()
+    }
+
+    private func restartIdleTimer() {
+        idleTask?.cancel()
+        let timeout = previewIdleTimeout
+        idleTask = Task { [weak self] in
+            try? await Task.sleep(for: timeout)
+            guard !Task.isCancelled, let self else { return }
+            idleTask = nil
+            isIdle = true
+            updateLivePreview()
+        }
+    }
+
+    // MARK: Leaving home (M7c L22, L23)
+
+    /// Animates the home UI away, then runs `open`. With `untilInactive` (an app launch) the UI stays away until
+    /// MMTVL resigns active, or comes back after `Theme.homeExitAppFallback`.
+    private func leaveHome(untilInactive: Bool = false, _ open: @escaping () -> Void) {
+        guard homeExitDelay > .zero else {
+            open()
+            return
+        }
+        homeExitTask?.cancel()
+        withAnimation(Theme.homeExitAnimation) { isLeavingHome = true }
+        let delay = homeExitDelay
+        homeExitTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self, isLeavingHome else { return }
+            open()
+            guard untilInactive else {
+                finishLeavingHome(animated: false)
+                return
+            }
+            try? await Task.sleep(for: Theme.homeExitAppFallback)
+            guard !Task.isCancelled, isLeavingHome else { return }
+            finishLeavingHome(animated: true)
+        }
+    }
+
+    private func finishLeavingHome(animated: Bool) {
+        homeExitTask?.cancel()
+        homeExitTask = nil
+        if animated {
+            withAnimation(Theme.homeReturnAnimation) { isLeavingHome = false }
+        } else {
+            isLeavingHome = false
+        }
+    }
+
+    /// The Live TV page's channel when it isn't the first page (the first is what Live TV opens by itself).
+    private var livePageChannelID: Channel.ID? {
+        let content = shelfContent
+        guard content.isCarousel, carouselPage > 0, content.cards.indices.contains(carouselPage),
+              case .playChannel(let id) = content.cards[carouselPage].action
+        else { return nil }
+        return id
+    }
+
+    // MARK: Carousel (M7c L14)
+
+    /// Resets the page when the focused tile changed, clamps it, and runs the auto-advance timer only while a carousel
+    /// shows on the home screen.
+    private func syncCarousel() {
+        let content = shelfContent
+        if focusedItem?.id != carouselTileID {
+            carouselTileID = focusedItem?.id
+            carouselPage = 0
+            carouselTask?.cancel()
+            carouselTask = nil
+        }
+        let count = content.cards.count
+        if carouselPage >= count { carouselPage = max(count - 1, 0) }
+        if screen == .home && content.autoAdvances && count > 1 {
+            if carouselTask == nil { restartCarouselTimer() }
+        } else {
+            carouselTask?.cancel()
+            carouselTask = nil
+        }
+    }
+
+    /// Auto-advance starts over from the current page.
+    private func restartCarouselTimer() {
+        carouselTask?.cancel()
+        let interval = carouselInterval
+        carouselTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled else { return }
+                self?.advanceCarousel()
+            }
+        }
+    }
+
+    /// One auto-advance step (wraps). Not while the carousel itself has focus.
+    func advanceCarousel() {
+        let content = shelfContent
+        guard screen == .home, content.autoAdvances, shelfIndex == nil, !content.cards.isEmpty else { return }
+        withAnimation(Theme.carouselCrossfade) { carouselPage = (carouselPage + 1) % content.cards.count }
     }
 
     /// Mouse hover over a card (with the pointer-moved rule, M1 L8).
@@ -134,17 +419,39 @@ final class AppRouter {
         shelfIndex = nil
         switch cards[index].action {
         case .playChannel(let id):
-            openLiveTV(channelID: id)
+            leaveHome { [weak self] in self?.openLiveTV(channelID: id) }
         case .openTile(let id):
             guard let tileIndex = visibleItems.firstIndex(where: { $0.id == id }) else { return }
-            activate(tileIndex)
+            let item = visibleItems[tileIndex]
+            // The PIN screen comes first, without the animation.
+            guard !(item.isPINProtected && hasPIN) else {
+                activate(tileIndex)
+                return
+            }
+            // M7c L23: a Plex page fades to its art, then the tile opens (an app keeps the UI away until it's up).
+            let isApp = switch item.kind {
+            case .application, .url, .defaultBrowser: true
+            case .internalDestination, .system: false
+            }
+            leaveHome(untilInactive: isApp) { [weak self] in self?.activate(tileIndex) }
         }
     }
 
     private func routeShelf(_ command: RemoteCommand, index: Int) -> Bool {
+        let content = shelfContent
         switch command {
+        case .left where content.isCarousel, .right where content.isCarousel:
+            // M7c L14: pages wrap around.
+            let count = content.cards.count
+            let new = (index + (command == .left ? -1 : 1) + count) % count
+            withAnimation(Theme.carouselCrossfade) {
+                shelfIndex = new
+                carouselPage = new
+            }
+            bumpFocusMotion(command)
+            return true
         case .left, .right:
-            let count = shelfContent.cards.count
+            let count = content.cards.count
             let new = min(max(index + (command == .left ? -1 : 1), 0), count - 1)
             if new != index {
                 shelfIndex = new
@@ -154,6 +461,8 @@ final class AppRouter {
         case .down, .back, .home:
             shelfIndex = nil
             bumpFocusMotion(.down)
+            // M7c L14: auto-advance resumes from this page.
+            if content.autoAdvances { restartCarouselTimer() }
             return true
         case .select:
             bumpFocusMotion(.select)
@@ -169,7 +478,19 @@ final class AppRouter {
     /// Returns true if the command was consumed.
     func handle(_ command: RemoteCommand) -> Bool {
         if command == .home { launcher.homePressed() }
+        if isLeavingHome {
+            // L22: commands wait for the animation; Home cancels it and stays home.
+            if command == .home {
+                finishLeavingHome(animated: true)
+                withAnimation(Theme.focusAnimation) { focusStartTile(id: startTileID) }
+            }
+            return true
+        }
         let consumed = route(command)
+        // M7c L32: every screen's Home lands on the home screen; then on the start tile.
+        if command == .home && screen == .home {
+            withAnimation(Theme.focusAnimation) { focusStartTile(id: startTileID) }
+        }
         if consumed {
             pointerLocationAtLastCommand = NSEvent.mouseLocation
         }
@@ -183,8 +504,8 @@ final class AppRouter {
             if let shelfIndex { return routeShelf(command, index: shelfIndex) }
             switch command {
             case .up where focus.position.row == 0 && !shelfContent.cards.isEmpty:
-                // L12: Up from the first row enters the shelf.
-                shelfIndex = 0
+                // L12: Up from the first row enters the shelf; a carousel on its current page (M7c L14).
+                shelfIndex = shelfContent.isCarousel ? carouselPage : 0
                 bumpFocusMotion(.up)
                 return true
             case .up, .down, .left, .right:
@@ -193,6 +514,7 @@ final class AppRouter {
                 if moved {
                     bumpFocusMotion(command)
                     topShelf.refresh(focusing: focusedItem)
+                    syncCarousel()
                 }
                 return true
             case .select:
@@ -278,11 +600,13 @@ final class AppRouter {
 
     /// Shows the home screen, keeping the focus position. Leaving YouTube pauses it (L3); leaving Live TV stops it (M4 L7).
     func goHome() {
+        if isLeavingHome { finishLeavingHome(animated: false) }
         if screen == .youtube {
             youtube.pause()
         }
         if screen == .liveTV {
-            liveTV.leave()
+            // M7c L25: the channel keeps playing as the preview; `updateLivePreview` below stops it if unwanted.
+            liveTV.leave(keepingPreview: livePreviewEnabled)
         }
         closePINEntry()
         if screen == .settings { settings.screenDidClose() }
@@ -291,6 +615,7 @@ final class AppRouter {
         tileArt.reloadIfChanged()
         topShelf.refresh(focusing: focusedItem)
         shelfContentChanged()
+        updateLivePreview()
     }
 
     var hasPIN: Bool { pinStore.load() != nil }
@@ -300,6 +625,18 @@ final class AppRouter {
         screenBeforePIN = screen == .settings ? .settings : .home
         pinEntry = PINEntryModel(purpose: purpose, storedPIN: pinStore.load(), lockout: pinLockout)
         screen = .pin(purpose)
+    }
+
+    /// M7c L9: ⌘Q or the Dock's Quit while the kiosk lock is on: the PIN first, if one is set.
+    func requestQuit() {
+        if case .pin(.quit) = screen { return }
+        if hasPIN {
+            // The PIN screen can't sit over Live TV or YouTube (they'd keep playing); cancelling returns home.
+            if screen != .home && screen != .settings { goHome() }
+            requestPIN(.quit)
+        } else {
+            onQuit?()
+        }
     }
 
     /// Mouse click on the PIN screen's keypad.
@@ -325,6 +662,9 @@ final class AppRouter {
             case .exitToDesktop:
                 screen = .home
                 onExitToDesktop?()
+            case .quit:
+                screen = screenBeforePIN
+                onQuit?()
             case .setNew, .change, .turnOff:
                 screen = screenBeforePIN
             }
@@ -398,7 +738,10 @@ final class AppRouter {
         shelfIndex = nil
         var moved = false
         withAnimation(Theme.focusAnimation) { moved = focus.focus(index: index) }
-        if moved { topShelf.refresh(focusing: focusedItem) }
+        if moved {
+            topShelf.refresh(focusing: focusedItem)
+            syncCarousel()
+        }
     }
 
     /// L21: the mouse wheel moves home focus one row per `Theme.homeScrollStep` points (trackpad) or per line (wheel).
@@ -452,20 +795,32 @@ final class AppRouter {
                 shakeTriggers[item.id, default: 0] += 1
                 return
             }
-            Task {
-                do {
-                    try await launcher.launch(item)
-                } catch {
-                    Self.logger.error("Failed to launch \(item.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                    shakeTriggers[item.id, default: 0] += 1
+            let launch = { [weak self] in
+                Task {
+                    do {
+                        try await self?.launcher.launch(item)
+                    } catch {
+                        Self.logger.error("Failed to launch \(item.id, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                        self?.shakeTriggers[item.id, default: 0] += 1
+                    }
                 }
+            }
+            // M7c L23: the Plex tile (its carousel showing) fades to its art first; the UI stays away until the app
+            // takes the screen.
+            if !isLeavingHome && item.id == focusedItem?.id && shelfContent.isCarousel {
+                leaveHome(untilInactive: true) { _ = launch() }
+            } else {
+                _ = launch()
             }
         case .internalDestination(.settings):
             openSettings()
         case .internalDestination(.youtube):
             openYouTube()
         case .internalDestination(.iptv):
-            openLiveTV()
+            // M7c L21: a page other than the first keeps playing after Down; Select opens that channel.
+            // L22: after the home UI animates away (the preview's video stays put).
+            let channelID = livePageChannelID
+            leaveHome { [weak self] in self?.openLiveTV(channelID: channelID) }
         case .system(.exitToDesktop):
             onExitToDesktop?()
         }
@@ -487,14 +842,31 @@ struct LauncherRootView: View {
             LiveTVRootView(model: liveTV)
         } else {
             GeometryReader { geometry in
-                content
-                    .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height)
-                    .scaleEffect(Theme.scale(for: geometry.size))
-                    .frame(width: geometry.size.width, height: geometry.size.height)
+                ZStack {
+                    // M7c L15: the Live TV preview's video, under the canvas at the window's size (as M4 L16).
+                    if router.screen == .home, liveTV.previewChannelID != nil,
+                       let view = (liveTV.player as? MPVPlayerController)?.videoView {
+                        // M7c L25: kept in the window while it preloads (mpv needs the render context).
+                        MPVVideoRepresentable(view: view)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .opacity(router.showsLivePreviewVideo ? homeFade : 0)
+                            .animation(Theme.focusAnimation, value: homeFade)
+                            .animation(Theme.shelfBackdropCrossfade, value: router.showsLivePreviewVideo)
+                    }
+                    content
+                        .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height)
+                        .scaleEffect(Theme.scale(for: geometry.size))
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                }
             }
             .background(Theme.backgroundGradient)
             .ignoresSafeArea()
         }
+    }
+
+    /// The backdrop's dim as the home rows scroll (M7c L19); the preview video follows it.
+    private var homeFade: Double {
+        HomeLayout.heroOpacity(focusedRow: router.focus.position.row)
     }
 
     @ViewBuilder
@@ -510,6 +882,11 @@ struct LauncherRootView: View {
                 focusMotion: router.focusMotion,
                 shelf: router.shelfContent,
                 shelfIndex: router.shelfIndex,
+                carouselPage: router.carouselPage,
+                revealsLivePreview: router.revealsLivePreview,
+                isLeaving: router.isLeavingHome,
+                versionLabel: router.homeVersionLabel,
+                entryGeneration: router.homeEntryGeneration,
                 onHoverCard: router.hoverShelfCard,
                 onActivateCard: router.activateShelfCard,
                 onRefreshShelf: { router.topShelf.refresh(focusing: router.focusedItem) },

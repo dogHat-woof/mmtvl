@@ -4,6 +4,8 @@ import Foundation
 nonisolated enum PINPurpose: Hashable, Sendable {
     /// Verify, then continue.
     case openSettings, openTile(id: String), exitToDesktop
+    /// M7c L9: ⌘Q or the Dock's Quit while the kiosk lock is on.
+    case quit
     /// Settings → PIN section.
     case setNew, change, turnOff
 }
@@ -41,7 +43,7 @@ nonisolated struct PINFlow: Equatable, Sendable {
                 return .next
             case .turnOff:
                 return .removed
-            case .openSettings, .openTile, .exitToDesktop, .setNew:
+            case .openSettings, .openTile, .exitToDesktop, .quit, .setNew:
                 return .verified
             }
         case .enterNew:

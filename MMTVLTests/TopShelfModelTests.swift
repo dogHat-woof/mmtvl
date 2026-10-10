@@ -15,7 +15,7 @@ struct TopShelfModelTests {
 
     /// 12 channels; c1 has a programme on now (started 5 min ago, 25 min left).
     private func makeModel(favorites: [Channel.ID] = [], hidden: [Channel.ID] = [], recent: [Channel.ID] = [],
-                           channels: [Channel]? = nil) -> TopShelfModel {
+                           channels: [Channel]? = nil, defaultChannel: @escaping () -> Channel.ID? = { nil }) -> TopShelfModel {
         let all = channels ?? (1...12).map { channel($0) }
         let lineup = ChannelLineup(channels: all, preferences: ChannelPreferences(favorites: favorites, hiddenChannels: hidden))
         let source = LiveShelfSource(
@@ -24,7 +24,8 @@ struct TopShelfModelTests {
                 guard channel.id == "id:c1" else { return (nil, nil) }
                 let programme = Programme(channelID: "c1", start: Self.now - 300, stop: Self.now + 1500, title: "The Game")
                 return (programme, nil)
-            }
+            },
+            defaultChannel: defaultChannel
         )
         return TopShelfModel(live: source, now: { Self.now })
     }
@@ -33,7 +34,37 @@ struct TopShelfModelTests {
         let model = makeModel(favorites: ["id:c3", "id:c1"], recent: ["id:c5"])
         await model.reloadLive()
         #expect(model.liveCards.map(\.id) == ["live.id:c3", "live.id:c1"])
-        #expect(model.content(for: liveTile) == .cards(title: "On Now", model.liveCards))
+        // M7c L21: channel pages that don't auto-advance.
+        #expect(model.content(for: liveTile) == .carousel(title: "On Now", model.liveCards, autoAdvances: false))
+    }
+
+    /// M7c L21: the default channel is the first page, not repeated.
+    @Test func theDefaultChannelComesFirst() async {
+        let model = makeModel(favorites: ["id:c3", "id:c1"], defaultChannel: { "id:c1" })
+        await model.reloadLive()
+        #expect(model.liveCards.map(\.id) == ["live.id:c1", "live.id:c3"])
+
+        let other = makeModel(recent: ["id:c5", "id:c2"], defaultChannel: { "id:c9" })
+        await other.reloadLive()
+        #expect(other.liveCards.map(\.id) == ["live.id:c9", "live.id:c5", "live.id:c2"])
+
+        let hidden = makeModel(hidden: ["id:c9"], recent: ["id:c5"], defaultChannel: { "id:c9" })
+        await hidden.reloadLive()
+        #expect(hidden.liveCards.map(\.id) == ["live.id:c5"])
+    }
+
+    @Test func aNewDefaultChannelReloads() async {
+        var defaultID: Channel.ID? = "id:c1"
+        let model = makeModel(favorites: ["id:c3"], defaultChannel: { defaultID })
+        model.refresh(focusing: nil)
+        await model.pendingTask?.value
+        let first = model.pendingTask
+        model.refresh(focusing: liveTile)
+        #expect(model.pendingTask == first)
+        defaultID = "id:c3"
+        model.refresh(focusing: liveTile)
+        await model.pendingTask?.value
+        #expect(model.liveCards.map(\.id) == ["live.id:c3"])
     }
 
     @Test func recentsWhenThereAreNoFavorites() async {
@@ -111,11 +142,23 @@ struct TopShelfModelTests {
 
         model.refresh(focusing: tile)
         await plex.refreshTask?.value
-        guard case .cards(let title, let cards) = model.content(for: tile) else {
-            Issue.record("No Plex cards")
+        // M7c L14: Plex is a full-screen carousel with 1920 × 1080 backdrops.
+        guard case .carousel(let title, let cards, let autoAdvances) = model.content(for: tile) else {
+            Issue.record("No Plex carousel")
             return
         }
+        #expect(model.content(for: tile).isCarousel)
+        #expect(autoAdvances)
         #expect(title == "Continue Watching")
+        guard case .remote(let backdrop, _) = cards[0].backdrop else {
+            Issue.record("No backdrop")
+            return
+        }
+        #expect(backdrop.absoluteString.contains("width=1920"))
+        #expect(backdrop.absoluteString.contains("height=1080"))
+        #expect(cards[0].minutesLeft == 1)
+        #expect(cards[0].logo == nil)
+        #expect(cards[1].backdrop == nil)
         #expect(cards.map(\.id) == ["plex.501", "plex.601"])
         #expect(cards.allSatisfy { $0.action == .openTile(id: "my-plex") })
         #expect(cards[0].title == "Friends")

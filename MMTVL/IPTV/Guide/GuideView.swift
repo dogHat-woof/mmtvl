@@ -43,9 +43,9 @@ struct GuideView: View {
     /// The bottom hint per focus and purpose (M6).
     nonisolated static func hint(focus: GuideModel.Focus, isPicking: Bool) -> String {
         switch (focus, isPicking) {
-        case (.grid, false): "Select: watch · Left at now: channel options · Back: close"
+        case (.grid, false): "Select: watch · Left at now: channel options · Back: leave Live TV"
         case (.grid, true): "Select: show in window · Left at now: channel · Back: cancel"
-        case (.channel, false): "Select: options · Left: groups · Right: programmes · Back: close"
+        case (.channel, false): "Select: options · Left: groups · Right: programmes · Back: leave Live TV"
         case (.channel, true): "Select: show in window · Left: groups · Right: programmes · Back: cancel"
         case (.groups, _): "Select: show group · Back: close list"
         }
@@ -157,12 +157,8 @@ struct GuideView: View {
                 .foregroundStyle(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText)
                 .frame(width: 44, alignment: .trailing)
             if let logo = channel.logoURL {
-                AsyncImage(url: logo) { image in
-                    image.resizable().scaledToFit()
-                } placeholder: {
-                    Color.clear
-                }
-                .frame(width: Theme.guideLogoSize, height: Theme.guideLogoSize)
+                ChannelLogoView(url: logo)
+                    .frame(width: Theme.guideLogoSize, height: Theme.guideLogoSize)
             }
             Text(channel.name)
                 .font(Theme.guideChannelFont)

@@ -18,8 +18,8 @@ nonisolated enum MultiviewLayout: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    /// The gap between neighboring windows; `Theme.multiviewGap` reads it.
-    static let gap: CGFloat = 8
+    /// The gap between neighboring windows; `Theme.multiviewGap` reads it. M7c L12: windows touch.
+    static let gap: CGFloat = 0
 
     var title: String {
         switch self {

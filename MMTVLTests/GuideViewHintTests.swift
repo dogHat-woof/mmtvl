@@ -3,9 +3,9 @@ import Testing
 
 struct GuideViewHintTests {
     @Test func watchHints() {
-        #expect(GuideView.hint(focus: .grid, isPicking: false) == "Select: watch · Left at now: channel options · Back: close")
+        #expect(GuideView.hint(focus: .grid, isPicking: false) == "Select: watch · Left at now: channel options · Back: leave Live TV")
         #expect(GuideView.hint(focus: .channel, isPicking: false)
-                == "Select: options · Left: groups · Right: programmes · Back: close")
+                == "Select: options · Left: groups · Right: programmes · Back: leave Live TV")
         #expect(GuideView.hint(focus: .groups(0), isPicking: false) == "Select: show group · Back: close list")
     }
 

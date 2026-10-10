@@ -84,8 +84,8 @@ struct LiveTVRootView: View {
     }
 }
 
-/// Hosts the player's one video view.
-private struct MPVVideoRepresentable: NSViewRepresentable {
+/// Hosts the player's one video view (also the home screen's Live TV preview, M7c L15).
+struct MPVVideoRepresentable: NSViewRepresentable {
     let view: MPVVideoView
 
     func makeNSView(context: Context) -> MPVVideoView { view }
@@ -192,7 +192,7 @@ private struct PlayerOverlayView: View {
             Text(message)
                 .font(Theme.settingsTitleFont)
                 .foregroundStyle(Theme.primaryText)
-            Text("Select: try again · Up/Down: change channel · Back: return")
+            Text("Select: try again · Up/Down: change channel · Back: guide")
                 .font(Theme.settingsHintFont)
                 .foregroundStyle(Theme.secondaryText)
         }
@@ -208,12 +208,8 @@ struct LiveBannerView: View {
     var body: some View {
         HStack(alignment: .top, spacing: 32) {
             if let logo = banner.channel.logoURL {
-                AsyncImage(url: logo) { image in
-                    image.resizable().scaledToFit()
-                } placeholder: {
-                    Color.clear
-                }
-                .frame(width: Theme.liveBannerLogoSize, height: Theme.liveBannerLogoSize)
+                ChannelLogoView(url: logo)
+                    .frame(width: Theme.liveBannerLogoSize, height: Theme.liveBannerLogoSize)
             }
             VStack(alignment: .leading, spacing: 12) {
                 Text("\(banner.channel.number)  \(banner.channel.name)")

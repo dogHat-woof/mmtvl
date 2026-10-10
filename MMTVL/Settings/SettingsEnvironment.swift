@@ -3,7 +3,8 @@ import Foundation
 /// Everything the Settings model does with side effects. The app wires the real thing; tests pass fakes.
 struct SettingsEnvironment {
     var isKiosk: Bool
-    var versionString: String
+    /// M7c L28: shown in Settings → About.
+    var version: AppVersion
     /// Apply live + save `settings.json`.
     var applySettings: (AppSettings) -> Void
     /// `AppRouter.setItems` + save `launch-items.json`.

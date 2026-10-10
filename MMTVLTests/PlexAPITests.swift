@@ -171,4 +171,29 @@ struct PlexAPITests {
         #expect(bare.imagePath == nil)
         #expect(bare.progress == nil)
     }
+
+    /// M7c L14.
+    @Test func minutesLeft() throws {
+        let episode = try JSONDecoder().decode(PlexAPI.Metadata.self, from: Data(Self.episode.utf8))
+        #expect(PlexAPI.minutesLeft(episode) == 15)
+        let movie = try JSONDecoder().decode(PlexAPI.Metadata.self, from: Data(Self.movie.utf8))
+        #expect(PlexAPI.minutesLeft(movie) == 1)
+        #expect(PlexAPI.minutesLeft(PlexAPI.Metadata(viewOffset: 10)) == nil)
+        #expect(PlexAPI.minutesLeft(PlexAPI.Metadata(viewOffset: 9_000, duration: 6_000)) == 0)
+    }
+
+    /// M7c L14 (Q20): the clear logo when the server lists one; a bad `Image` field doesn't fail the item.
+    @Test func clearLogo() throws {
+        let json = """
+        {"ratingKey":"7","type":"movie","title":"Heat",
+         "Image":[{"type":"coverPoster","url":"/p"},{"type":"clearLogo","url":"/library/metadata/7/clearLogo/1"}]}
+        """
+        let item = try JSONDecoder().decode(PlexAPI.Metadata.self, from: Data(json.utf8))
+        #expect(PlexAPI.clearLogoPath(item) == "/library/metadata/7/clearLogo/1")
+        let movie = try JSONDecoder().decode(PlexAPI.Metadata.self, from: Data(Self.movie.utf8))
+        #expect(PlexAPI.clearLogoPath(movie) == nil)
+        let odd = try JSONDecoder().decode(PlexAPI.Metadata.self, from: Data(#"{"title":"X","Image":"nope"}"#.utf8))
+        #expect(odd.title == "X")
+        #expect(PlexAPI.clearLogoPath(odd) == nil)
+    }
 }

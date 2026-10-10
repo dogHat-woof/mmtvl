@@ -18,6 +18,8 @@ final class PhoneRemoteRecorder {
     var tokenCount = 0
     var statusChanges = 0
     var pointerActions: [PointerAction] = []
+    var repairs = false
+    var repairCalls = 0
 
     var environment: PhoneRemoteEnvironment {
         PhoneRemoteEnvironment(
@@ -39,7 +41,11 @@ final class PhoneRemoteRecorder {
                 self.tokenCount += 1
                 return "tok\(self.tokenCount)"
             },
-            pointer: { self.pointerActions.append($0) }
+            pointer: { self.pointerActions.append($0) },
+            repairForeground: {
+                self.repairCalls += 1
+                return self.repairs
+            }
         )
     }
 }
@@ -171,6 +177,22 @@ struct PhoneRemoteTests {
         send(#"{"type":"command","command":"up"}"#)
         #expect(recorder.posted.count == 2)
         #expect(transport.messages(to: 1).last == .toast(PhoneRemote.accessibilityMessage))
+    }
+
+    /// M7c L3: MMTVL's window shows but it isn't active; the command goes to MMTVL, not out as a key.
+    @Test func commandsRepairTheForeground() {
+        paired()
+        recorder.isActive = false
+        recorder.repairs = true
+        send(#"{"type":"command","command":"down"}"#)
+        #expect(recorder.dispatched.map(\.0) == [.down])
+        #expect(recorder.dispatched.map(\.1) == [false])
+        #expect(recorder.posted.isEmpty)
+        #expect(recorder.repairCalls == 1)
+
+        recorder.isActive = true
+        send(#"{"type":"command","command":"up"}"#)
+        #expect(recorder.repairCalls == 1)
     }
 
     @Test func textDiffs() {

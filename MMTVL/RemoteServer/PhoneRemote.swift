@@ -29,6 +29,9 @@ struct PhoneRemoteEnvironment {
     var makeToken: () -> String
     /// M7b: PhonePointer.perform (trackpad).
     var pointer: (PointerAction) -> Void
+    /// M7c L3: MMTVL's window shows but MMTVL isn't active (nothing else in front): brings it forward
+    /// and returns true, so the command goes to MMTVL instead of out as a synthetic key.
+    var repairForeground: () -> Bool = { false }
 }
 
 /// The phone remote coordinator (D24): auth, pairing, command routing, text, volume and status pushes.
@@ -230,7 +233,7 @@ final class PhoneRemote {
 
     /// L5.
     private func route(_ command: RemoteCommand, session: RemoteSessionID) {
-        if environment.isLauncherActive() {
+        if launcherInFront() {
             environment.dispatch(command, false)
         } else if command == .home {
             environment.dispatch(.home, true)
@@ -243,7 +246,7 @@ final class PhoneRemote {
 
     /// L7: inside MMTVL only the YouTube screen takes text; elsewhere it needs post-event access.
     private func canType(session: RemoteSessionID) -> Bool {
-        if environment.isLauncherActive() && !environment.launcherAcceptsText() {
+        if launcherInFront() && !environment.launcherAcceptsText() {
             transport.send(.toast(Self.nothingToTypeMessage), to: session)
             return false
         }
@@ -252,6 +255,11 @@ final class PhoneRemote {
             return false
         }
         return true
+    }
+
+    /// L3: active, or visible and repaired.
+    private func launcherInFront() -> Bool {
+        environment.isLauncherActive() || environment.repairForeground()
     }
 
     private func sendStatus(to session: RemoteSessionID) {

@@ -24,6 +24,8 @@ protocol LivePlayer: AnyObject {
     func setAudible(_ audible: Bool)
     /// M6 L6. Applied at once if the core exists, else when it's created.
     func setBufferProfile(_ profile: BufferProfile)
+    /// M7c L15: false while the home screen's muted preview plays, so the display can still sleep. Default true.
+    func setHoldsSleepAssertion(_ holds: Bool)
 }
 
 /// One mpv core and its video view. Live TV pools up to five (M6 L2).
@@ -44,6 +46,11 @@ final class MPVPlayerController: LivePlayer {
     /// Created with the mpv core on first use; LiveTVRootView hosts it.
     private(set) var videoView: MPVVideoView?
     @ObservationIgnored var onFailure: (() -> Void)?
+    /// M7c L29: follows the provider's redirect once (nil = mpv follows it).
+    @ObservationIgnored var resolver: StreamResolver? = .shared
+    @ObservationIgnored private var resolveTask: Task<Void, Never>?
+    /// M7c L30: mpv loads through the loopback relay (nil, or not running = straight from the CDN).
+    @ObservationIgnored var relay: HLSRelay? = .shared
 
     @ObservationIgnored private var mpv: MPVHandle?
     @ObservationIgnored private var currentURL: URL?
@@ -58,8 +65,11 @@ final class MPVPlayerController: LivePlayer {
     @ObservationIgnored private var volumeMuted = false
     /// M6 L5: false mutes a Multiview window without sound.
     @ObservationIgnored private var audible = true
+    @ObservationIgnored private var holdsSleep = true
     @ObservationIgnored private var bufferProfile = BufferProfile.full
     @ObservationIgnored private var loggedDecoder = false
+    /// M7c L27: when the current load (or retry) started; nil once its first frame is logged.
+    @ObservationIgnored private var loadStartedAt: ContinuousClock.Instant?
     @ObservationIgnored private let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "MPV")
 
     init() {
@@ -103,6 +113,9 @@ final class MPVPlayerController: LivePlayer {
     }
 
     func stop() {
+        loadStartedAt = nil
+        resolveTask?.cancel()
+        resolveTask = nil
         retryTask?.cancel()
         retryTask = nil
         pendingURL = nil
@@ -151,6 +164,15 @@ final class MPVPlayerController: LivePlayer {
         applyBufferProfile()
     }
 
+    func setHoldsSleepAssertion(_ holds: Bool) {
+        holdsSleep = holds
+        applySleepAssertion()
+    }
+
+    private func applySleepAssertion() {
+        sleep.hold(holdsSleep && (state.phase == .loading || state.phase == .playing))
+    }
+
     // MARK: - Private
 
     private func applyVolume() {
@@ -178,11 +200,35 @@ final class MPVPlayerController: LivePlayer {
             return
         }
         pendingURL = nil
+        resolveTask?.cancel()
+        resolveTask = nil
+        // M7c L27: the time to the first frame includes resolving.
+        loadStartedAt = .now
+        guard let resolver else {
+            loadFile(url, original: url)
+            return
+        }
+        // M7c L29: the CDN address at once if it was resolved ahead of time, else after resolving.
+        if let resolved = resolver.cached(url) {
+            loadFile(resolved, original: url)
+            return
+        }
+        resolveTask = Task { [weak self] in
+            let resolved = await resolver.resolve(url)
+            guard !Task.isCancelled, let self, self.currentURL == url else { return }
+            self.loadFile(resolved, original: url)
+        }
+    }
+
+    private func loadFile(_ url: URL, original: URL) {
         loggedDecoder = false
         liveEdge.reset()
+        // M7c L30: the last retry goes straight to the CDN, in case the relay is the problem.
+        let relayed = retries < Self.maxRetries ? relay?.localURL(for: url) : nil
         mpv?.setString("pause", "no")
-        mpv?.command(["loadfile", url.absoluteString, "replace"])
-        logger.info("Loading a stream from \(url.host() ?? "?", privacy: .public) (player \(self.index))")
+        mpv?.command(["loadfile", (relayed ?? url).absoluteString, "replace"])
+        // M7c L27: notice, so `log show` keeps it.
+        logger.notice("Loading a stream from \(original.host() ?? "?", privacy: .public) via \(url.host() ?? "?", privacy: .public)\(relayed == nil ? "" : " through the relay", privacy: .public) (player \(self.index))")
     }
 
     private func loadPending() {
@@ -196,9 +242,16 @@ final class MPVPlayerController: LivePlayer {
             if state.phase == .loading || state.phase == .playing {
                 state.phase = .playing
             }
+            if let loadStartedAt {
+                self.loadStartedAt = nil
+                let elapsed = ContinuousClock.now - loadStartedAt
+                let ms = elapsed.components.seconds * 1000 + elapsed.components.attoseconds / 1_000_000_000_000_000
+                logger.notice("Playing after \(ms) ms (player \(self.index))")
+            }
             if !loggedDecoder, let mpv {
                 loggedDecoder = true
-                logger.info("Decoder \(mpv.string("hwdec-current") ?? "?", privacy: .public) (player \(self.index))")
+                // M7c L27: notice, so a fallback to software decoding ("no") shows in `log show`.
+                logger.notice("Decoder \(mpv.string("hwdec-current") ?? "?", privacy: .public) (player \(self.index))")
             }
         case .endFile(let reason, let error):
             guard reason == .eof || reason == .error,
@@ -206,6 +259,8 @@ final class MPVPlayerController: LivePlayer {
                   let url = currentURL
             else { return }
             logger.error("Stream ended (\(String(describing: reason), privacy: .public), error \(error)); retries used \(self.retries) (player \(self.index))")
+            // M7c L29: the resolved address may have expired; the retry resolves again.
+            resolver?.invalidate(url)
             if retries < Self.maxRetries {
                 retries += 1
                 state.phase = .loading
@@ -220,14 +275,15 @@ final class MPVPlayerController: LivePlayer {
                 onFailure?()
             }
         case .log(let level, let text):
-            logger.info("mpv \(level, privacy: .public): \(text, privacy: .public)")
+            // Warnings and errors only (`mpv_request_log_messages("warn")`); notice keeps them for `log show` (L27).
+            logger.notice("mpv \(level, privacy: .public): \(text, privacy: .public)")
         case .fileLoaded, .shutdown:
             break
         }
     }
 
     private func phaseDidChange() {
-        sleep.hold(state.phase == .loading || state.phase == .playing)
+        applySleepAssertion()
         let polls = state.phase == .playing || state.phase == .paused
         if polls, pollTimer == nil {
             pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in

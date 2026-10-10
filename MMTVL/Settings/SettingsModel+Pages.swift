@@ -186,8 +186,18 @@ extension SettingsModel {
             ]),
             SettingsSection(id: "system", title: "System", rows: [
                 SettingsRow(id: "relaunch", title: "Relaunch MMTVL", action: .relaunch),
+                SettingsRow(id: "kioskLock", title: "Keep Other Apps Out", value: Self.onOff(settings.kioskLock),
+                            detail: "⌘Tab, ⌘Q and the Dock can't leave MMTVL", action: .toggle(.kioskLock)),
                 SettingsRow(id: "exit", title: "Exit to Desktop", action: .exitToDesktop),
-            ], footer: "MMTVL \(environment.versionString) · Saved in ~/Library/Application Support/MMTVL"),
+            ]),
+            // M7c L28.
+            SettingsSection(id: "about", title: "About", rows: [
+                SettingsRow(id: "about.version", title: "Version", value: environment.version.version),
+                SettingsRow(id: "about.build", title: "Build", value: environment.version.build),
+                SettingsRow(id: "about.showOnHome", title: "Show Version on Home",
+                            value: Self.onOff(settings.showVersionOnHome), detail: "Under the clock, for testing builds",
+                            action: .toggle(.showVersionOnHome)),
+            ], footer: "Settings are saved in ~/Library/Application Support/MMTVL"),
         ]
     }
 
@@ -211,6 +221,7 @@ extension SettingsModel {
         let tileRows = items.map { item in
             var detail = item.kindDescription
             if !environment.isInstalled(item) { detail += " · Not installed" }
+            if item.id == startTileID { detail += " · Start tile" }
             return SettingsRow(
                 id: Self.tileRowID(item.id),
                 title: environment.tileTitle(item),
@@ -225,7 +236,7 @@ extension SettingsModel {
         }
         return [
             SettingsSection(id: "tiles", title: "Tiles", rows: tileRows,
-                            footer: "Hidden tiles stay here but don't show on the Home screen."),
+                            footer: "Hidden tiles stay here but don't show on the Home screen. MMTVL opens on the start tile, and Home returns to it; to change it, select a tile, then Start Here."),
             SettingsSection(id: "manage", rows: [
                 SettingsRow(id: "addTile", title: "Add Tile", showsDisclosure: true, action: .push(.addTile)),
                 SettingsRow(id: "restoreDefaults", title: "Restore Default Tiles", showsDisclosure: true,
@@ -238,6 +249,7 @@ extension SettingsModel {
         guard let item = item(id: id) else { return [] }
         if item.isSettingsTile {
             return [SettingsSection(id: "options", rows: [
+                startHereRow(item),
                 tileArtRow(id: id),
                 SettingsRow(id: "tile.move", title: "Move", action: .startMove(id: id)),
             ], footer: "Settings is always on the Home screen and asks for the PIN when one is set.")]
@@ -261,6 +273,9 @@ extension SettingsModel {
                                     detail: hasPIN ? nil : "Set a PIN in Settings first",
                                     action: .toggleTileRequiresPIN(id: id)))
         }
+        if !item.isExitToDesktop {
+            rows.append(startHereRow(item))
+        }
         let isDefault = LaunchItem.defaults.contains { $0.id == id }
         rows.append(tileArtRow(id: id))
         rows.append(SettingsRow(id: "tile.move", title: "Move", action: .startMove(id: id)))
@@ -269,6 +284,21 @@ extension SettingsModel {
                                 action: .removeTile(id: id)))
         let footer = item.isExitToDesktop ? "Exit to Desktop always asks for the PIN when one is set." : nil
         return [SettingsSection(id: "options", rows: rows, footer: footer)]
+    }
+
+    /// M7c L32: the tile focused when MMTVL opens; a hidden start tile falls back to the first tile.
+    var startTileID: String? {
+        let visible = items.visible
+        return visible.contains { $0.id == settings.homeStartTile } ? settings.homeStartTile : visible.first?.id
+    }
+
+    /// M7c L32.
+    private func startHereRow(_ item: LaunchItem) -> SettingsRow {
+        let isStart = item.id == startTileID
+        var detail = "MMTVL opens on this tile, and Home returns to it"
+        if !item.isVisible { detail = "Show it on the Home screen first" }
+        return SettingsRow(id: "tile.start", title: "Start Here", value: isStart ? "On" : "Off", detail: detail,
+                           action: .setStartTile(id: item.id))
     }
 
     /// M7 L23: web app tiles only.
@@ -310,13 +340,15 @@ extension SettingsModel {
     private func tileArtSections(id: String) -> [SettingsSection] {
         guard let item = item(id: id) else { return [] }
         let custom = environment.tileArtFileName(id)
-        let styleDetail = custom == nil ? nil : "Used when there's no picture"
+        // M7c L33: choosing a style removes the picture, so no style shows as selected while one is in use.
+        let styleDetail = custom == nil ? nil : "Removes your picture"
+        let current = custom == nil ? item.tileArtStyle : nil
         var styleRows = [SettingsRow(id: "art.designed", title: "Designed",
-                                     value: item.tileArtStyle == .designed ? "Selected" : nil, detail: styleDetail,
+                                     value: current == .designed ? "Selected" : nil, detail: styleDetail,
                                      action: .setTileArtStyle(id: id, .designed))]
         if offersIconStyle(item) {
             styleRows.append(SettingsRow(id: "art.icon", title: "App Icon",
-                                         value: item.tileArtStyle == .icon ? "Selected" : nil, detail: styleDetail,
+                                         value: current == .icon ? "Selected" : nil, detail: styleDetail,
                                          action: .setTileArtStyle(id: id, .icon)))
         }
         var sections = [SettingsSection(id: "style", title: "Style", rows: styleRows)]
@@ -342,7 +374,8 @@ extension SettingsModel {
             pictureRows.insert(SettingsRow(id: "art.message", title: tileArtMessage), at: 0)
         }
         sections.append(SettingsSection(id: "pictures", title: "Pictures on This Mac", rows: pictureRows,
-                                        footer: "You can also put a 5:3 picture named \(id).png in …/MMTVL/tile-art."))
+                                        footer: "Logos on a plain or transparent background get padding and a matching color. "
+                                            + "You can also put a picture named \(id).png in …/MMTVL/tile-art."))
         return sections
     }
 
@@ -394,6 +427,11 @@ extension SettingsModel {
 
         sections.append(guidesSection)
         sections.append(channelsSection)
+        sections.append(SettingsSection(id: "homePreview", rows: [
+            SettingsRow(id: "iptv.homePreview", title: "Preview on Home", value: Self.onOff(settings.homeLivePreview),
+                        detail: "Loads the channel, muted, while the home screen shows; you see it when Live TV is focused",
+                        action: .toggle(.homeLivePreview)),
+        ]))
         sections.append(SettingsSection(id: "manage", rows: [
             SettingsRow(id: "iptv.refresh", title: "Refresh Now", action: .refreshIPTV),
             SettingsRow(id: "iptv.remove", title: "Remove Live TV Source", showsDisclosure: true,

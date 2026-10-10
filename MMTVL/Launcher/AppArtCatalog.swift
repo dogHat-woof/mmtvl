@@ -100,3 +100,126 @@ nonisolated enum IconPalette {
         return ArtStyle(top: color.withBrightness(0.9), bottom: color.withBrightness(0.25))
     }
 }
+
+/// M7c L33: the background an app icon's glyph sits on, so the tile can continue it (tvOS's flat brand tiles).
+nonisolated enum IconBackground {
+    /// Side of the square the icon is sampled at.
+    static let sampleSize = 64
+    /// Where the bands are sampled, as fractions of the icon's height: just inside the icon shape's top and bottom
+    /// edges (macOS 26 icons fill about 10…90 %), clear of the rim and of most glyphs.
+    static let topBand: ClosedRange<Double> = 0.125...0.155
+    static let bottomBand: ClosedRange<Double> = 0.845...0.875
+    /// The bands' horizontal extent.
+    static let bandWidth: ClosedRange<Double> = 0.3...0.7
+    /// Largest mean distance of a band's pixels from its average (0…1 per channel) that still counts as one color.
+    static let maxSpread = 0.05
+
+    /// The icon's background at the top and bottom bands; nil when a band isn't opaque or isn't one color
+    /// (an icon that doesn't fill its shape, or a glyph or picture reaching the edge). `rgba`: 8-bit RGBA rows, top first.
+    static func style(fromRGBA rgba: [UInt8], width: Int, height: Int) -> ArtStyle? {
+        guard let top = bandColor(rgba, width: width, height: height, rows: topBand),
+              let bottom = bandColor(rgba, width: width, height: height, rows: bottomBand)
+        else { return nil }
+        return ArtStyle(top: top, bottom: bottom)
+    }
+
+    private static func bandColor(_ rgba: [UInt8], width: Int, height: Int, rows: ClosedRange<Double>) -> ArtColor? {
+        let pixels = PixelSampler.pixels(rgba, width: width, height: height, rows: rows, columns: bandWidth)
+        guard !pixels.isEmpty, pixels.allSatisfy({ $0.alpha > 0.94 }) else { return nil }
+        return PixelSampler.uniformColor(pixels, maxSpread: maxSpread)
+    }
+}
+
+/// M7c L33: what surrounds a custom picture, to decide whether it's a logo (padded) or a photo (fills).
+nonisolated enum PictureEdges: Equatable, Sendable {
+    /// Mostly transparent edges (at least `clearFraction` of the ring; a logo may touch the edges): a cut-out logo. `lightContent`: its visible pixels are mostly light (it needs a dark tile).
+    case transparent(lightContent: Bool)
+    /// One opaque color all around: a logo on a plain background.
+    case solid(ArtColor)
+    /// Anything else (a photo or poster): shown as before.
+    case busy
+
+    static let sampleSize = 64
+    /// The ring that is checked, as a fraction of each side.
+    static let ringFraction = 0.04
+    static let maxSpread = 0.06
+    static let clearFraction = 0.3
+
+    /// `rgba`: 8-bit RGBA rows, top first, premultiplied or not (only opaque pixels' colors are compared).
+    static func classify(rgba: [UInt8], width: Int, height: Int) -> PictureEdges {
+        let ringX = max(1, Int((Double(width) * ringFraction).rounded()))
+        let ringY = max(1, Int((Double(height) * ringFraction).rounded()))
+        var ring: [PixelSampler.Pixel] = []
+        var inside: [PixelSampler.Pixel] = []
+        for y in 0..<height {
+            for x in 0..<width {
+                let pixel = PixelSampler.pixel(rgba, width: width, x: x, y: y)
+                if x < ringX || x >= width - ringX || y < ringY || y >= height - ringY {
+                    ring.append(pixel)
+                } else {
+                    inside.append(pixel)
+                }
+            }
+        }
+        guard !ring.isEmpty else { return .busy }
+        let clear = ring.filter { $0.alpha < 0.12 }.count
+        if Double(clear) >= Double(ring.count) * clearFraction {
+            let visible = inside.filter { $0.alpha > 0.5 }
+            guard !visible.isEmpty else { return .transparent(lightContent: true) }
+            let luminance = visible.reduce(0.0) { $0 + $1.luminance } / Double(visible.count)
+            return .transparent(lightContent: luminance > 0.5)
+        }
+        guard ring.allSatisfy({ $0.alpha > 0.94 }), let color = PixelSampler.uniformColor(ring, maxSpread: maxSpread)
+        else { return .busy }
+        return .solid(color)
+    }
+}
+
+/// Reading 8-bit RGBA buffers (M7c L33).
+nonisolated enum PixelSampler {
+    struct Pixel {
+        var red: Double
+        var green: Double
+        var blue: Double
+        var alpha: Double
+
+        /// Un-premultiplied color (premultiplied buffers), Rec. 709 luminance.
+        var luminance: Double {
+            let scale = alpha > 0 ? 1 / alpha : 0
+            return min(1, (0.2126 * red + 0.7152 * green + 0.0722 * blue) * scale)
+        }
+    }
+
+    static func pixel(_ rgba: [UInt8], width: Int, x: Int, y: Int) -> Pixel {
+        let offset = (y * width + x) * 4
+        guard offset + 3 < rgba.count else { return Pixel(red: 0, green: 0, blue: 0, alpha: 0) }
+        return Pixel(red: Double(rgba[offset]) / 255, green: Double(rgba[offset + 1]) / 255,
+                     blue: Double(rgba[offset + 2]) / 255, alpha: Double(rgba[offset + 3]) / 255)
+    }
+
+    /// The pixels in a band given as fractions of the height (`rows`) and width (`columns`).
+    static func pixels(_ rgba: [UInt8], width: Int, height: Int, rows: ClosedRange<Double>,
+                       columns: ClosedRange<Double>) -> [Pixel] {
+        let firstRow = Int(Double(height) * rows.lowerBound), lastRow = max(firstRow, Int(Double(height) * rows.upperBound) - 1)
+        let firstColumn = Int(Double(width) * columns.lowerBound)
+        let lastColumn = max(firstColumn, Int(Double(width) * columns.upperBound) - 1)
+        guard firstRow >= 0, lastRow < height, firstColumn >= 0, lastColumn < width else { return [] }
+        var result: [Pixel] = []
+        for y in firstRow...lastRow {
+            for x in firstColumn...lastColumn { result.append(pixel(rgba, width: width, x: x, y: y)) }
+        }
+        return result
+    }
+
+    /// The average color when the pixels are one color (mean distance from the average at most `maxSpread`), else nil.
+    static func uniformColor(_ pixels: [Pixel], maxSpread: Double) -> ArtColor? {
+        guard !pixels.isEmpty else { return nil }
+        let count = Double(pixels.count)
+        let mean = ArtColor(red: pixels.reduce(0) { $0 + $1.red } / count, green: pixels.reduce(0) { $0 + $1.green } / count,
+                            blue: pixels.reduce(0) { $0 + $1.blue } / count)
+        let spread = pixels.reduce(0.0) {
+            $0 + max(abs($1.red - mean.red), abs($1.green - mean.green), abs($1.blue - mean.blue))
+        } / count
+        return spread <= maxSpread ? mean : nil
+    }
+}

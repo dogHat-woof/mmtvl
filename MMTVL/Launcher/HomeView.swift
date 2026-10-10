@@ -13,6 +13,17 @@ struct HomeView: View {
     /// M7 L12: the focused tile's shelf, and the focused card (nil = the tiles have focus).
     let shelf: ShelfContent
     let shelfIndex: Int?
+    /// M7c L14.
+    let carouselPage: Int
+    /// M7c L15: the Live TV preview plays behind the canvas; the backdrop's art fades out.
+    var revealsLivePreview = false
+    /// M7c L22, L23: the home UI animates away before live content opens (the router animates the change).
+    var isLeaving = false
+    /// M7c L28: "Version 1.1.0 Build 2" under the clock; nil = hidden.
+    var versionLabel: String? = nil
+    /// Bumped when MMTVL comes back; the dock slides up.
+    var entryGeneration = 0
+    @State private var isEntering = false
     let onHoverCard: (Int) -> Void
     let onActivateCard: (Int) -> Void
     let onRefreshShelf: () -> Void
@@ -22,13 +33,15 @@ struct HomeView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            // L27: the focused tile's art fills the screen; it fades as the rows scroll (L21).
+            // L27: the focused tile's art fills the screen; it dims in the grid (M7c L19).
             ShelfBackdrop(
                 item: focusedItem,
                 art: focusedItem.map { tileArt.art(for: $0, icon: launcher.icon(for: $0), bundleID: launcher.bundleID(for: $0)) },
-                isDimmed: !shelf.cards.isEmpty
+                isDimmed: !shelf.cards.isEmpty && !shelf.isCarousel,
+                carousel: shelf.isCarousel ? (shelf.cards, shelfIndex ?? carouselPage, shelfImages) : nil,
+                artOpacity: revealsLivePreview ? 0 : 1
             )
-            .opacity(max(0, 1 - scrollOffset / Theme.shelfFadeDistance))
+            .opacity(HomeLayout.heroOpacity(focusedRow: focus.position.row))
             .animation(Theme.focusAnimation, value: focus.position.row)
 
             TopShelfView(
@@ -38,7 +51,8 @@ struct HomeView: View {
                 focusMotion: focusMotion,
                 onHoverCard: onHoverCard,
                 onActivateCard: onActivateCard,
-                images: shelfImages
+                images: shelfImages,
+                carouselPage: carouselPage
             )
             // L13: the Live TV shelf's "time left" stays current while the home screen shows.
             .background {
@@ -46,10 +60,19 @@ struct HomeView: View {
                     Color.clear.onChange(of: context.date) { onRefreshShelf() }
                 }
             }
-            // L21: the shelf scrolls away with the rows and fades.
-            .offset(y: -scrollOffset)
-            .opacity(max(0, 1 - scrollOffset / Theme.shelfFadeDistance))
+            // M7c L19: the shelf shows only with row 0 focused.
+            .opacity(HomeLayout.shelfOpacity(focusedRow: focus.position.row))
             .animation(Theme.focusAnimation, value: focus.position.row)
+            .opacity(isLeaving ? 0 : 1)
+
+            // M7c L19 (D38): the glass dock behind row 0; it scrolls away with the row.
+            Color.clear
+                .glassPanel(in: RoundedRectangle(cornerRadius: Theme.homeDockCornerRadius, style: .continuous))
+                .frame(width: HomeLayout.dockFrame.width, height: HomeLayout.dockFrame.height)
+                .offset(x: HomeLayout.dockFrame.minX, y: HomeLayout.dockFrame.minY - scrollOffset)
+                .animation(Theme.focusAnimation, value: focus.position.row)
+                .allowsHitTesting(false)
+                .modifier(HomeExitMotion(isAway: isLeaving || isEntering))
 
             VStack(alignment: .leading, spacing: Theme.rowSpacing) {
                 ForEach(Array(rowRanges.enumerated()), id: \.offset) { _, range in
@@ -60,11 +83,12 @@ struct HomeView: View {
                     }
                 }
             }
-            .padding(.horizontal, Theme.sideMargin)
+            .padding(.horizontal, Theme.homeRowMargin)
             .padding(.top, HomeLayout.rowTop(0))
             // L21: later rows scroll up so the focused row is fully visible.
             .offset(y: -scrollOffset)
             .animation(Theme.focusAnimation, value: focus.position.row)
+            .modifier(HomeExitMotion(isAway: isLeaving || isEntering))
 
             // Scrolled rows pass under the clock.
             Theme.backgroundTopFade
@@ -73,17 +97,31 @@ struct HomeView: View {
                 .animation(Theme.focusAnimation, value: scrollOffset > 0)
                 .allowsHitTesting(false)
 
-            clock
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.top, 60)
-                .padding(.horizontal, Theme.sideMargin)
-                .zIndex(1)
+            VStack(alignment: .trailing, spacing: Theme.homeClockStackSpacing) {
+                clock
+                if let versionLabel { capsule(Text(versionLabel)) }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.top, 60)
+            .padding(.horizontal, Theme.sideMargin)
+            .opacity(isLeaving ? 0 : 1)
+            .zIndex(1)
         }
         .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height, alignment: .topLeading)
         // L3: pictures dropped in the folder show up when the home screen appears.
         .onAppear {
             tileArt.reloadIfChanged()
             onRefreshShelf()
+            slideIn()
+        }
+        .onChange(of: entryGeneration) { slideIn() }
+    }
+
+    /// M7c L23: the dock and rows slide up and fade in when the home screen comes back.
+    private func slideIn() {
+        isEntering = true
+        Task { @MainActor in
+            withAnimation(Theme.homeReturnAnimation) { isEntering = false }
         }
     }
 
@@ -98,14 +136,19 @@ struct HomeView: View {
     /// L28: on a small glass capsule.
     private var clock: some View {
         TimelineView(.everyMinute) { context in
-            Text(context.date.formatted(date: .omitted, time: .shortened))
-                .font(Theme.clockFont)
-                .foregroundStyle(Theme.primaryText)
-                .monospacedDigit()
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-                .glassPanel(in: Capsule())
+            capsule(Text(context.date.formatted(date: .omitted, time: .shortened)))
         }
+    }
+
+    /// The clock's look (M7c L28: the version uses it too).
+    private func capsule(_ text: Text) -> some View {
+        text
+            .font(Theme.clockFont)
+            .foregroundStyle(Theme.primaryText)
+            .monospacedDigit()
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
+            .glassPanel(in: Capsule())
     }
 
     /// Item index ranges per row, matching the focus model's chunking.
@@ -133,5 +176,16 @@ struct HomeView: View {
             if hovering { onHover(index) }
         }
         .onTapGesture { onActivate(index) }
+    }
+}
+
+/// M7c L22: the dock and rows slide down and fade while the home UI is away.
+private struct HomeExitMotion: ViewModifier {
+    let isAway: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .offset(y: isAway ? Theme.homeExitSlide : 0)
+            .opacity(isAway ? 0 : 1)
     }
 }

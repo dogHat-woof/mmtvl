@@ -10,13 +10,16 @@ final class ShelfImageLoader {
     typealias Fetch = @Sendable (URL, [String: String]) async throws -> Data
 
     static let maxEntries = 60
+    /// M7c L14: images wider than `maxPixelWidth` (carousel backdrops) are kept apart, at most this many.
+    static let maxBackdropEntries = 12
     static let failureMemory: TimeInterval = 5 * 60
     /// Cards are 352 points wide, drawn at up to 2×.
     nonisolated static let maxPixelWidth = 704
 
     private var images: [String: NSImage] = [:]
-    /// Insertion order of `images`, oldest first.
+    /// Insertion order of `images`, oldest first: card-sized and large images separately.
     @ObservationIgnored private var order: [String] = []
+    @ObservationIgnored private var backdropOrder: [String] = []
     @ObservationIgnored private var inFlight: Set<String> = []
     @ObservationIgnored private var failures: [String: Date] = [:]
     @ObservationIgnored private let fetch: Fetch
@@ -30,10 +33,11 @@ final class ShelfImageLoader {
         self.now = now
     }
 
-    /// A cached image, or nil while one fetch runs (the view redraws when it lands). `.channelLogo` → nil (`AsyncImage`).
-    func image(for image: ShelfCard.Image) -> NSImage? {
+    /// A cached image, or nil while one fetch runs (the view redraws when it lands). `.channelLogo` → nil (`ChannelLogoCache`).
+    /// `maxPixelWidth`: 704 for cards, 1920 for carousel backdrops (M7c L14); the cache key includes it.
+    func image(for image: ShelfCard.Image, maxPixelWidth: Int = ShelfImageLoader.maxPixelWidth) -> NSImage? {
         guard case .remote(let url, let headers) = image else { return nil }
-        let key = url.absoluteString
+        let key = Self.key(url, maxPixelWidth)
         if let cached = images[key] { return cached }
         if let failedAt = failures[key], now().timeIntervalSince(failedAt) < Self.failureMemory { return nil }
         guard !inFlight.contains(key) else { return nil }
@@ -42,16 +46,20 @@ final class ShelfImageLoader {
         lastTask = Task { [weak self] in
             let result: NSImage?
             do {
-                result = Self.downsample(try await fetch(url, headers))
+                result = Self.downsample(try await fetch(url, headers), maxPixelWidth: maxPixelWidth)
             } catch {
                 result = nil
             }
-            self?.finish(key, result, host: url.host())
+            self?.finish(key, result, isLarge: maxPixelWidth > Self.maxPixelWidth, host: url.host())
         }
         return nil
     }
 
-    private func finish(_ key: String, _ image: NSImage?, host: String?) {
+    nonisolated static func key(_ url: URL, _ maxPixelWidth: Int) -> String {
+        "\(maxPixelWidth) \(url.absoluteString)"
+    }
+
+    private func finish(_ key: String, _ image: NSImage?, isLarge: Bool, host: String?) {
         inFlight.remove(key)
         guard let image else {
             failures[key] = now()
@@ -60,13 +68,20 @@ final class ShelfImageLoader {
         }
         failures[key] = nil
         images[key] = image
-        order.append(key)
-        while order.count > Self.maxEntries {
-            images[order.removeFirst()] = nil
+        if isLarge {
+            backdropOrder.append(key)
+            while backdropOrder.count > Self.maxBackdropEntries {
+                images[backdropOrder.removeFirst()] = nil
+            }
+        } else {
+            order.append(key)
+            while order.count > Self.maxEntries {
+                images[order.removeFirst()] = nil
+            }
         }
     }
 
-    nonisolated static func downsample(_ data: Data) -> NSImage? {
+    nonisolated static func downsample(_ data: Data, maxPixelWidth: Int = maxPixelWidth) -> NSImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,

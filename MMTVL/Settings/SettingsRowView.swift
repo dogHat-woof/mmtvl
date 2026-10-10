@@ -132,7 +132,7 @@ struct RowImageView: View {
         switch choice {
         case .current: return tileArt.art(for: item, icon: icon, bundleID: bundleID)
         case .style(let style): return tileArt.styledArt(for: item, icon: icon, bundleID: bundleID, style: style)
-        case .file(let url): return tileArt.preview(of: url).map(TileArt.picture)
+        case .file(let url): return tileArt.previewArt(of: url)
         }
     }
 

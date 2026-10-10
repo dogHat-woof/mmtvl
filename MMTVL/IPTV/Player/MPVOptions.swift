@@ -23,6 +23,8 @@ nonisolated enum MPVOptions {
         ("idle", "yes"), ("keep-open", "no"),
         ("cache", "yes"), ("demuxer-max-bytes", forwardBuffer), ("demuxer-max-back-bytes", backBuffer),
         ("network-timeout", "15"),
+        // M7c L29: one connection per HLS playlist; a second parallel one only adds a TLS handshake at start.
+        ("demuxer-lavf-o", "http_multiple=0"),
         // M6 L7: render calls run on the main thread; don't block them for frame timing.
         ("video-timing-offset", "0"),
     ]

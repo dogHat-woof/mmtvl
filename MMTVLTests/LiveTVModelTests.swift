@@ -91,6 +91,18 @@ struct LiveTVModelTests {
         #expect(model.banner?.channel.name == "Knicks @ Heat")
     }
 
+    /// M7c L29: the channels one zap away are resolved ahead of time.
+    @Test func playingPrefetchesTheNeighbors() async throws {
+        let (model, _, fixture) = try makeModel(state: IPTVState(lastChannelID: "id:lakers @ celtics", lastGroup: "NBA Games"))
+        defer { fixture.cleanUp() }
+        var prefetched: [[URL]] = []
+        model.prefetchStreams = { prefetched.append($0) }
+        await open(model)
+        #expect(prefetched == [[IPTVFixtures.streamURL(5)]])
+        _ = model.handle(.down)
+        #expect(prefetched.last == [IPTVFixtures.streamURL(4)])
+    }
+
     @Test func zapUsesTheChannelsOwnGroupWhenTheRememberedOneLacksIt() async throws {
         let (model, _, fixture) = try makeModel(state: IPTVState(lastChannelID: "id:nflnetwork.us", lastGroup: "NBA Games"))
         defer { fixture.cleanUp() }
@@ -150,14 +162,36 @@ struct LiveTVModelTests {
         #expect(player.pauses == 1)
     }
 
-    @Test func backHidesOverlaysThenLeaves() async throws {
-        let (model, _, fixture) = try makeModel(state: Self.watching)
+    /// M7c L11.
+    @Test func backHidesOverlaysThenOpensTheGuide() async throws {
+        let (model, player, fixture) = try makeModel(state: Self.watching)
         defer { fixture.cleanUp() }
         await open(model)
         #expect(model.banner != nil)
         #expect(model.handle(.back) == .handled)
         #expect(model.banner == nil)
-        #expect(model.handle(.back) == .leave)
+        #expect(model.mode == .player)
+        #expect(model.handle(.back) == .handled)
+        #expect(model.mode == .guide)
+        #expect(model.guide?.focusedChannel?.id == model.currentChannel?.id)
+        #expect(player.played.count == 1)
+    }
+
+    /// M7c L11: Select shows the banner and timeshift bar; a second Select hides them.
+    @Test func selectShowsThenHidesTheBanner() async throws {
+        let (model, _, fixture) = try makeModel(state: Self.watching)
+        defer { fixture.cleanUp() }
+        await open(model)
+        _ = model.handle(.back)
+        #expect(model.banner == nil)
+        #expect(model.handle(.select) == .handled)
+        #expect(model.mode == .player)
+        #expect(model.banner != nil)
+        #expect(model.showsTimeshiftBar)
+        _ = model.handle(.select)
+        #expect(model.banner == nil)
+        #expect(!model.showsTimeshiftBar)
+        #expect(model.mode == .player)
     }
 
     @Test func failureRefreshesThePlaylistOnceThenShowsAnError() async throws {
@@ -221,20 +255,53 @@ struct LiveTVModelTests {
         return (model, player, fixture)
     }
 
-    @Test func selectInThePlayerOpensTheGuideOnTheCurrentChannel() async throws {
+    /// M7c L11: Back hides the banner shown on opening, then opens the guide.
+    private func openGuide(_ model: LiveTVModel) {
+        if model.banner != nil || model.showsTimeshiftBar { _ = model.handle(.back) }
+        _ = model.handle(.back)
+    }
+
+    @Test func backInThePlayerOpensTheGuideOnTheCurrentChannel() async throws {
         let (model, _, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
-        #expect(model.handle(.select) == .handled)
+        openGuide(model)
         #expect(model.mode == .guide)
         #expect(model.guide?.selectedGroup == "All Channels")
         #expect(model.guide?.focusedChannel?.id == "id:nbatv.us")
         #expect(model.banner == nil)
     }
 
+    /// M7c L31: the highlighted channel is warmed once the highlight rests; scrolling past isn't, nor the one playing.
+    @Test func theHighlightedChannelIsWarmed() async throws {
+        let (model, _, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        var warmed: [URL] = []
+        model.warmStream = { warmed.append($0) }
+        model.guideWarmDelay = .milliseconds(30)
+        openGuide(model)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(warmed.isEmpty)   // NBA TV is playing
+
+        _ = model.handle(.down)
+        _ = model.handle(.down)
+        try await Task.sleep(for: .milliseconds(100))
+        let resting = try #require(model.guide?.focusedChannel)
+        #expect(warmed == [resting.streamURL])
+
+        _ = model.handle(.right)   // the same channel again, within the rewarm interval
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(warmed.count == 1)
+
+        _ = model.handle(.up)
+        _ = model.handle(.up)   // back on NBA TV
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(warmed.count == 1)
+    }
+
     @Test func programmesAreLoadedForTheGuide() async throws {
         let (model, _, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
-        _ = model.handle(.select)
+        openGuide(model)
         await model.pendingTask?.value
         #expect(model.guide?.programmes["id:nbatv.us"]?.first?.title == "NBA TV 0")
         #expect(model.guide?.programmes["id:nflnetwork.us"]?.count == 4)
@@ -244,7 +311,7 @@ struct LiveTVModelTests {
     @Test func selectOnAnotherRowPlaysIt() async throws {
         let (model, player, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
-        _ = model.handle(.select)
+        openGuide(model)
         _ = model.handle(.up)
         #expect(model.handle(.select) == .handled)
         #expect(model.mode == .player)
@@ -256,25 +323,25 @@ struct LiveTVModelTests {
     @Test func selectOnTheCurrentRowReturnsWithoutReloading() async throws {
         let (model, player, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
-        _ = model.handle(.select)
+        openGuide(model)
         _ = model.handle(.select)
         #expect(model.mode == .player)
         #expect(player.played == [IPTVFixtures.streamURL(2)])
         #expect(model.banner?.channel.id == "id:nbatv.us")
     }
 
-    @Test func backInTheGuideReturnsToThePlayer() async throws {
+    /// M7c L11.
+    @Test func backInTheGuideLeaves() async throws {
         let (model, _, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
-        _ = model.handle(.select)
-        #expect(model.handle(.back) == .handled)
-        #expect(model.mode == .player)
+        openGuide(model)
+        #expect(model.handle(.back) == .leave)
     }
 
     @Test func playPauseInTheGuidePausesThePreview() async throws {
         let (model, player, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
-        _ = model.handle(.select)
+        openGuide(model)
         _ = model.handle(.playPause)
         #expect(player.pauses == 1)
         #expect(model.mode == .guide)
@@ -283,7 +350,7 @@ struct LiveTVModelTests {
     @Test func groupChangeIsRemembered() async throws {
         let (model, _, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
-        _ = model.handle(.select)
+        openGuide(model)
         _ = model.handle(.left)                 // the now-cell → the channel cell
         _ = model.handle(.left)                 // → groups
         #expect(model.guide?.focus == .groups(0))
@@ -299,7 +366,7 @@ struct LiveTVModelTests {
     @Test func leaveClearsTheGuide() async throws {
         let (model, _, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
-        _ = model.handle(.select)
+        openGuide(model)
         model.leave()
         #expect(model.guide == nil)
     }
@@ -309,7 +376,7 @@ struct LiveTVModelTests {
     @Test func selectOnTheChannelCellOpensTheChannelMenu() async throws {
         let (model, _, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
-        _ = model.handle(.select)
+        openGuide(model)
         _ = model.handle(.up)
         _ = model.handle(.left)
         #expect(model.handle(.select) == .handled)
@@ -321,7 +388,7 @@ struct LiveTVModelTests {
 
     /// Guide on NBA TV, then Up to NFL Network, Left to its channel cell, Select.
     private func openNFLMenu(_ model: LiveTVModel) {
-        _ = model.handle(.select)
+        openGuide(model)
         _ = model.handle(.up)
         _ = model.handle(.left)
         _ = model.handle(.select)
@@ -383,7 +450,7 @@ struct LiveTVModelTests {
     @Test func matchGuideMenu() async throws {
         let (model, _, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
-        _ = model.handle(.select)
+        openGuide(model)
         _ = model.handle(.down)
         _ = model.handle(.left)
         _ = model.handle(.select)
@@ -431,7 +498,7 @@ struct LiveTVModelTests {
     @Test func watchInTheChannelMenuPlays() async throws {
         let (model, player, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
-        _ = model.handle(.select)
+        openGuide(model)
         _ = model.handle(.up)
         _ = model.handle(.left)
         _ = model.handle(.select)
@@ -445,7 +512,7 @@ struct LiveTVModelTests {
     @Test func backClosesTheChannelMenu() async throws {
         let (model, _, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
-        _ = model.handle(.select)
+        openGuide(model)
         _ = model.handle(.left)
         _ = model.handle(.select)
         #expect(model.menu != nil)
@@ -457,7 +524,7 @@ struct LiveTVModelTests {
     @Test func homeWithTheMenuOpenLeaves() async throws {
         let (model, _, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
-        _ = model.handle(.select)
+        openGuide(model)
         _ = model.handle(.left)
         _ = model.handle(.select)
         #expect(model.handle(.home) == .leave)
@@ -502,7 +569,7 @@ struct LiveTVModelTests {
     @Test func menuInTheGuideOpensTheFocusedChannelsMenu() async throws {
         let (model, _, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
-        _ = model.handle(.select)
+        openGuide(model)
         _ = model.handle(.up)
         #expect(model.handle(.menu) == .handled)
         #expect(model.menu?.title == "NFL Network")
@@ -511,7 +578,7 @@ struct LiveTVModelTests {
     @Test func channelUpDownPageTheGuide() async throws {
         let (model, player, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
-        _ = model.handle(.select)
+        openGuide(model)
         _ = model.handle(.channelDown)
         #expect(model.guide?.focusedChannel?.name == "Knicks @ Heat")
         _ = model.handle(.channelUp)
@@ -520,4 +587,165 @@ struct LiveTVModelTests {
         #expect(player.played == [IPTVFixtures.streamURL(2)])
     }
 
+}
+
+/// M7c L15, L16: the home screen's muted preview and Select adopting it.
+struct LiveTVPreviewTests {
+    static let nfl = "id:nflnetwork.us"
+    static let nba = "id:nbatv.us"
+
+    /// The playlist loaded, Live TV not open; last watched NFL Network.
+    private func makeModel(state: IPTVState = IPTVState(lastChannelID: "id:nflnetwork.us")) async throws
+        -> (LiveTVModel, FakePlayer, LibraryFixture) {
+        let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL, state: state)
+        await fixture.library.refreshPlaylist()
+        let player = FakePlayer()
+        let model = LiveTVModel(player: player, makePlayer: { FakePlayer() }, library: fixture.library,
+                                now: { fixture.clock.now })
+        return (model, player, fixture)
+    }
+
+    @Test func startMutesWithoutASleepAssertion() async throws {
+        let (model, player, fixture) = try await makeModel()
+        defer { fixture.cleanUp() }
+        model.startPreview(channelID: Self.nfl)
+        #expect(model.previewChannelID == Self.nfl)
+        #expect(player.played == [IPTVFixtures.streamURL(1)])
+        #expect(!player.audible)
+        #expect(!player.holdsSleepAssertion)
+        #expect(!model.isPreviewPlaying)
+        player.state.phase = .playing
+        #expect(model.isPreviewPlaying)
+
+        model.startPreview(channelID: Self.nfl)
+        #expect(player.played.count == 1)
+    }
+
+    @Test func unknownChannelIsIgnored() async throws {
+        let (model, player, fixture) = try await makeModel()
+        defer { fixture.cleanUp() }
+        model.startPreview(channelID: "id:nope")
+        #expect(model.previewChannelID == nil)
+        #expect(player.played.isEmpty)
+    }
+
+    /// M7c L25: leaving keeps a playing channel as the preview: muted, no sleep assertion, no reconnect.
+    @Test func leaveCanKeepTheChannelAsThePreview() async throws {
+        let (model, player, fixture) = try await makeModel()
+        defer { fixture.cleanUp() }
+        model.open()
+        await model.pendingTask?.value
+        #expect(model.mode == .player)
+        player.state.phase = .playing
+        let stops = player.stops
+        model.leave(keepingPreview: true)
+        #expect(model.previewChannelID == Self.nfl)
+        #expect(player.stops == stops)
+        #expect(!player.audible)
+        #expect(!player.holdsSleepAssertion)
+
+        // Opening again adopts it.
+        model.open()
+        #expect(model.mode == .player)
+        #expect(player.played.count == 1)
+        #expect(player.audible)
+    }
+
+    @Test func leaveWithoutKeepingStops() async throws {
+        let (model, player, fixture) = try await makeModel()
+        defer { fixture.cleanUp() }
+        model.open()
+        await model.pendingTask?.value
+        #expect(model.mode == .player)
+        player.state.phase = .playing
+        model.leave(keepingPreview: false)
+        #expect(model.previewChannelID == nil)
+        #expect(player.state.phase == .idle)
+    }
+
+    @Test func aFailedChannelIsntKept() async throws {
+        let (model, player, fixture) = try await makeModel()
+        defer { fixture.cleanUp() }
+        model.open()
+        await model.pendingTask?.value
+        #expect(model.mode == .player)
+        player.state.phase = .failed
+        model.leave(keepingPreview: true)
+        #expect(model.previewChannelID == nil)
+    }
+
+    @Test func stopRestores() async throws {
+        let (model, player, fixture) = try await makeModel()
+        defer { fixture.cleanUp() }
+        model.startPreview(channelID: Self.nfl)
+        model.stopPreview()
+        #expect(model.previewChannelID == nil)
+        #expect(player.stops == 1)
+        #expect(player.audible)
+        #expect(player.holdsSleepAssertion)
+    }
+
+    @Test func openingThePreviewedChannelAdoptsIt() async throws {
+        let (model, player, fixture) = try await makeModel()
+        defer { fixture.cleanUp() }
+        model.startPreview(channelID: Self.nfl)
+        player.state.phase = .playing
+        model.open()
+        #expect(model.mode == .player)
+        #expect(player.played.count == 1)
+        #expect(player.stops == 0)
+        #expect(player.audible)
+        #expect(player.holdsSleepAssertion)
+        #expect(model.previewChannelID == nil)
+        #expect(model.currentChannel?.id == Self.nfl)
+        #expect(model.banner?.channel.id == Self.nfl)
+    }
+
+    @Test func aCardOnThePreviewedChannelAdoptsIt() async throws {
+        let (model, player, fixture) = try await makeModel()
+        defer { fixture.cleanUp() }
+        model.startPreview(channelID: Self.nba)
+        model.open(channelID: Self.nba)
+        #expect(model.mode == .player)
+        #expect(player.played == [IPTVFixtures.streamURL(2)])
+        #expect(fixture.library.state.lastChannelID == Self.nba)
+    }
+
+    @Test func openingAnotherChannelStopsThePreview() async throws {
+        let (model, player, fixture) = try await makeModel()
+        defer { fixture.cleanUp() }
+        model.startPreview(channelID: Self.nba)
+        model.open()
+        #expect(model.previewChannelID == nil)
+        #expect(player.stops == 1)
+        await model.pendingTask?.value
+        #expect(model.currentChannel?.id == Self.nfl)
+        #expect(player.played == [IPTVFixtures.streamURL(2), IPTVFixtures.streamURL(1)])
+        #expect(player.audible)
+    }
+
+    @Test func aFailedPreviewStops() async throws {
+        let (model, player, fixture) = try await makeModel()
+        defer { fixture.cleanUp() }
+        model.startPreview(channelID: Self.nfl)
+        player.fail()
+        #expect(model.previewChannelID == nil)
+        #expect(model.previewFailed)
+        #expect(player.audible)
+        model.startPreview(channelID: Self.nfl)
+        #expect(!model.previewFailed)
+        #expect(model.previewChannelID == Self.nfl)
+    }
+
+    @Test func defaultPrefersMultiviewsHighlightedWindow() async throws {
+        let (plain, _, plainFixture) = try await makeModel()
+        defer { plainFixture.cleanUp() }
+        #expect(plain.defaultPreviewChannelID == Self.nfl)
+
+        var state = IPTVState(lastChannelID: Self.nfl)
+        state.multiview = MultiviewSnapshot(layout: .sideBySide, slots: [Self.nfl, Self.nba], focusedSlot: 1, isActive: true)
+        let (model, _, fixture) = try await makeModel(state: state)
+        defer { fixture.cleanUp() }
+        #expect(model.defaultPreviewChannelID == Self.nba)
+    }
 }

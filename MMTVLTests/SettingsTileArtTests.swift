@@ -52,11 +52,25 @@ struct SettingsTileArtTests {
         model.activate(rowID: "art.file.0")
         #expect(recorder.pictureSets == ["plex ← Poster.PNG"])
         #expect(model.row(id: "art.custom")?.title == "plex.png")
-        #expect(model.row(id: "art.designed")?.detail == "Used when there's no picture")
+        #expect(model.row(id: "art.designed")?.detail == "Removes your picture")
+        #expect(model.row(id: "art.designed")?.value == nil)
         model.activate(rowID: "art.removeCustom")
         #expect(recorder.pictureRemovals == ["plex"])
         #expect(model.row(id: "art.custom") == nil)
         #expect(model.focusedRowID == "art.designed")
+    }
+
+    /// M7c L33: going back to a style removes the picture.
+    @Test func choosingAStyleRemovesThePicture() async {
+        let (model, recorder) = await onArtPage()
+        model.activate(rowID: "art.file.0")
+        model.activate(rowID: "art.designed")
+        #expect(recorder.pictureRemovals == ["plex"])
+        #expect(model.row(id: "art.custom") == nil)
+        #expect(model.row(id: "art.designed")?.value == "Selected")
+        // Without a picture, nothing is removed.
+        model.activate(rowID: "art.icon")
+        #expect(recorder.pictureRemovals == ["plex"])
     }
 
     @Test func aFailedCopySaysSo() async {

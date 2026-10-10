@@ -2,22 +2,45 @@ import CoreGraphics
 import Testing
 @testable import MMTVL
 
+/// M7c L19 (D38): the tvOS 26 dock layout.
 struct HomeLayoutTests {
     @Test func rowPitchHasOneSource() {
-        #expect(Theme.tileRowPitch == 312)
-        #expect(abs(HomeLayout.rowTop(0) - 486) < 0.001)
-        #expect(abs(HomeLayout.rowTop(2) - (486 + 2 * 312)) < 0.001)
+        #expect(Theme.tileRowPitch == 244)
+        #expect(HomeLayout.rowTop(0) == 800)
+        #expect(HomeLayout.rowTop(2) == 1288, "rowTop(2) = \(HomeLayout.rowTop(2))")
     }
 
-    @Test func firstTwoRowsDontScroll() {
+    @Test func secondRowPeeksAtTheBottom() {
+        let visible = Theme.canvasSize.height - HomeLayout.rowTop(1)
+        #expect(visible > 0)
+        #expect(visible <= 50)
+    }
+
+    @Test func sixTilesFillTheWidth() {
+        let width = CGFloat(Theme.tilesPerRow) * Theme.tileSize.width + CGFloat(Theme.tilesPerRow - 1) * Theme.tileSpacing
+            + 2 * Theme.homeRowMargin
+        #expect(Theme.tilesPerRow == 6)
+        #expect(width == Theme.canvasSize.width)
+    }
+
+    @Test func theDockWrapsRowZero() {
+        let dock = HomeLayout.dockFrame
+        #expect(dock.minY < HomeLayout.rowTop(0))
+        #expect(dock.maxY > HomeLayout.rowTop(0) + Theme.tileSize.height)
+        #expect(dock.maxY < HomeLayout.rowTop(0) + Theme.tileSize.height + Theme.tileTitleSpacing)
+    }
+
+    @Test func rowZeroDoesntScroll() {
         #expect(HomeLayout.scrollOffset(focusedRow: 0) == 0)
-        #expect(HomeLayout.scrollOffset(focusedRow: 1) == 0)
+        #expect(HomeLayout.heroOpacity(focusedRow: 0) == 1)
+        #expect(HomeLayout.shelfOpacity(focusedRow: 0) == 1)
     }
 
-    @Test func laterRowsSitAtTheBottom() {
-        // 486 + 2×312 + 240 + 40 − 1080
-        #expect(abs(HomeLayout.scrollOffset(focusedRow: 2) - 310) < 0.001)
-        #expect(abs(HomeLayout.scrollOffset(focusedRow: 3) - 622) < 0.001)
-        #expect(abs(HomeLayout.scrollOffset(focusedRow: 4) - 934) < 0.001)
+    @Test func laterRowsSitAtTheGridTop() {
+        for row in 1...4 {
+            #expect(HomeLayout.rowTop(row) - HomeLayout.scrollOffset(focusedRow: row) == Theme.homeGridFocusTop)
+        }
+        #expect(HomeLayout.heroOpacity(focusedRow: 1) == Theme.homeGridHeroOpacity)
+        #expect(HomeLayout.shelfOpacity(focusedRow: 2) == 0)
     }
 }

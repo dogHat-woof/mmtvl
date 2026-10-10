@@ -336,12 +336,16 @@ final class PlexAccount {
     /// The action names a placeholder tile; `TopShelfModel` rewrites it to the Plex tile's id.
     private func card(_ item: PlexAPI.Metadata, index: Int, server: URL) -> ShelfCard {
         let card = PlexAPI.card(item)
-        let image: ShelfCard.Image = card.imagePath.map { path in
-            .remote(PlexAPI.imageURL(server: server, path: path, width: PlexAPI.imageSize.width,
-                                     height: PlexAPI.imageSize.height), headers: imageHeaders)
-        } ?? .channelLogo(nil)
+        func remote(_ path: String, _ size: (width: Int, height: Int)) -> ShelfCard.Image {
+            .remote(PlexAPI.imageURL(server: server, path: path, width: size.width, height: size.height),
+                    headers: imageHeaders)
+        }
+        let image = card.imagePath.map { remote($0, PlexAPI.imageSize) } ?? .channelLogo(nil)
         return ShelfCard(id: "plex.\(item.ratingKey ?? "\(index)")", title: card.title, subtitle: card.subtitle,
-                         image: image, progress: card.progress, action: .openTile(id: "plex"))
+                         image: image, progress: card.progress, action: .openTile(id: "plex"),
+                         backdrop: card.imagePath.map { remote($0, PlexAPI.backdropSize) },
+                         logo: PlexAPI.clearLogoPath(item).map { remote($0, PlexAPI.logoSize) },
+                         minutesLeft: PlexAPI.minutesLeft(item))
     }
 
     /// Step 11: the real Metadata field names, once, at debug level (names only, never values).
