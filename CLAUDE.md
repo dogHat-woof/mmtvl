@@ -14,6 +14,7 @@ MMTVL is a personal, native macOS media launcher styled after tvOS. It runs full
 - `/build-plan docs/plans/M<n>-<slug>.md`: implement a sub plan step by step. It can run on a smaller model / lower effort.
 - When implementing: follow the sub plan, tick its checkboxes, and keep the milestone status in the master plan current. Don't redesign. If the plan is wrong or ambiguous, record it under *Deviations & questions* in the sub plan and ask.
 - Architecture-level changes must be reflected in the master plan's decisions table (§4).
+- Completed sub plans live in `docs/plans/archive/`: when a milestone is `Done`, `git mv` its plan there and update its link in the master plan (§6). Only active and upcoming plans stay in `docs/plans/`.
 
 ## Commands
 

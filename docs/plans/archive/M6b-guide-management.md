@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | In progress |
+| Status | Done |
 | Depends on | M4 (Live TV: library, EPG store, matcher, guide), M6 (guide channel menu, `LiveMenu`) |
 | Master plan decisions used | D2, D3, D8, D9, D10, D14, D19, D20, D23, D26 (new) |
 | Planned | 2026-10-06 |
@@ -688,10 +688,10 @@ After every step, build with `xcodebuild -project MMTVL.xcodeproj -scheme MMTVL 
     - The tests pass.
     - **Manual (windowed):** for a FanDuel channel with no guide, Match Guide lists the right FanDuel guide channel in the first few rows; choose it; within ~15 s the guide row shows programmes. Relaunch: still matched. *Automatic* undoes it.
 
-- [ ] **8. Kiosk check on the TV**: no files
+- [x] **8. Kiosk check on the TV**: no files
   - Run *Manual verification* in kiosk mode on the Mac mini and TV. Record results and counts in *Deviations*.
 
-- [ ] **9. Docs wrap-up**: `CLAUDE.md`, `docs/plans/MASTER_PLAN.md`, this file
+- [x] **9. Docs wrap-up**: `CLAUDE.md`, `docs/plans/MASTER_PLAN.md`, this file
   - **CLAUDE.md:**
     - Keychain: guide URLs are account **`iptv-guide-urls`** (a JSON array; M4's `iptv-guide-url` is migrated and removed). Settings shows a guide's host and, when it looks like a guide file, its file name (L2); logs still show the host only.
     - New config file **`iptv-channels.json`**: `favorites` (channel ids, in order), `hiddenChannels`, `hiddenGroups`. Hand edits while MMTVL is quit.
@@ -702,7 +702,7 @@ After every step, build with `xcodebuild -project MMTVL.xcodeproj -scheme MMTVL 
   - Tick this plan's boxes.
   - Done when the docs match the code.
 
-- [ ] **10. Full test run**: no files
+- [x] **10. Full test run**: no files
   - `xcodebuild … test` passes.
   - Done when every *Manual verification* item is ticked or recorded in *Deviations*.
 
@@ -736,15 +736,15 @@ Tests never touch the network or mpv. Keychain tests use their own service, as i
 
 In kiosk mode on the Mac mini and TV:
 
-- [ ] After the update, the migrated US2 guide is listed under Settings → Live TV → Guides and the guide has programmes again.
-- [ ] Add FANDUEL1 (and, if wanted, CA2/IN1/MY1/UK1 from *Research*). Each row shows programmes and channels. Record "Guide data for N of M channels" before and after.
-- [ ] Move a guide up/down; remove one; the counts follow without a long wait (no download).
-- [ ] Match Guide on a FanDuel channel and on "TVG": the right channel is among the first suggestions. Programmes appear within ~15 s. They survive a relaunch. *Automatic* and *No Guide* work.
-- [ ] Favorites: add four channels; Favorites is the first group, with stars; Move Up/Down reorder it; zapping in Favorites wraps.
-- [ ] Hide Channel from the guide; Settings → Hidden Channels shows it; Show brings it back.
-- [ ] Settings → Groups: hide "NHL Games" and "MLB Games"; they're gone from the guide and from zapping; show them again.
-- [ ] Multiview's picker guide shows the Favorites group and respects hiding.
-- [ ] Refresh Now imports every guide; a guide with a bad URL shows "Failed: …" while the others still load.
+- [x] After the update, the migrated US2 guide is listed under Settings → Live TV → Guides and the guide has programmes again.
+- [x] Add FANDUEL1 (and, if wanted, CA2/IN1/MY1/UK1 from *Research*). Each row shows programmes and channels. Record "Guide data for N of M channels" before and after.
+- [x] Move a guide up/down; remove one; the counts follow without a long wait (no download).
+- [x] Match Guide on a FanDuel channel and on "TVG": the right channel is among the first suggestions. Programmes appear within ~15 s. They survive a relaunch. *Automatic* and *No Guide* work.
+- [x] Favorites: add four channels; Favorites is the first group, with stars; Move Up/Down reorder it; zapping in Favorites wraps.
+- [x] Hide Channel from the guide; Settings → Hidden Channels shows it; Show brings it back.
+- [x] Settings → Groups: hide "NHL Games" and "MLB Games"; they're gone from the guide and from zapping; show them again.
+- [x] Multiview's picker guide shows the Favorites group and respects hiding.
+- [x] Refresh Now imports every guide; a guide with a bad URL shows "Failed: …" while the others still load.
 
 ## Risks & fallbacks
 
@@ -770,3 +770,4 @@ Executors append here when the plan is wrong or ambiguous: the date, the step, w
 - **2026-10-06 (step 7, small):** `guideMatchOptions` reports `.epg(current)` only when the override's target is the current match (an override that didn't resolve reads as `.automatic`, per "an override that resolved").
 - **2026-10-06 (step 7, tests):** with the test fixture, "NFL RedZone" shares no token with "Red Zone" (`redzone` vs `red`, `zone`), so it isn't a suggestion for Red Zone. The LiveTVModel test chooses NFL RedZone from **NFL Network**'s Match Guide menu instead (they share `nfl`); Red Zone's menu is still checked for title, wide panel, first rows and focus. On real data this means a guide name written as one word ("RedZone") won't be suggested for a playlist name written as two ("Red Zone"); the fallback is `epg-overrides.json` (Risks).
 - **2026-10-06 (executor, status):** steps 1–7 are ticked on their automated tests (full run: 484 tests pass). Their **manual (windowed)** checks (steps 1, 3, 5, 6, 7) and step 8 (kiosk on the TV) need the user and are not done. Step 9's CLAUDE.md part is done; its master-plan part (M6b → Done, Q7 with the guides added and the final coverage) waits for step 8's counts. Step 10's test run passes; it stays open until *Manual verification* is ticked. Status stays **In progress**.
+- **2026-10-10 (user):** every manual check (steps 1, 3, 5, 6, 7 windowed; step 8 kiosk on the TV; *Manual verification*) is done and passed. The "Guide data for N of M channels" counts weren't recorded. Steps 8–10 ticked; status **Done**; plan archived.

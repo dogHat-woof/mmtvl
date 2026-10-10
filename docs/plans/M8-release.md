@@ -66,7 +66,7 @@ Anyone can download MMTVL from the repo's GitHub Releases page (a zip). It opens
 
 - **gitleaks** (v8.24.x, maintenance mode): `gitleaks git -v --redact <repo>` scans all history through `git log -p`; `gitleaks dir -v <path>` scans files; `--config` takes a `.gitleaks.toml` with `[extend] useDefault = true` plus extra rules; `--report-path`/`--report-format json` ([gitleaks](https://github.com/gitleaks/gitleaks)). Not installed on the dev Mac (`brew install gitleaks`).
 - **git-filter-repo** (`brew install git-filter-repo`, not installed): `--replace-text <file>` rewrites file contents in every commit (lines `literal==>replacement` or `regex:pattern==>replacement`), `--replace-message <file>` does the same for commit messages, `--mailmap <file>` rewrites author/committer identities. It wants a fresh clone and removes `origin`.
-- Planner's survey of the history (2026-10-06): no real tokens found. Playlist and stream URLs appear only as placeholders (`https://iptv.example/app2/<18-char token>`, test value `abc`). But the docs and two test files name the provider (`the provider`, `iptv.example`, 24 matches) and its stream CDN (`stream-cdn.example`, 1 match in `docs/plans/M4-live-tv.md`). LAN addresses in tests are fixtures (`192.168.1.x`, `*.plex.direct`). 27 commits have author email `user@example.com`; 15 use `57643254+dwolcot1@users.noreply.github.com`.
+- Planner's survey of the history (2026-10-06): no real tokens found. Playlist and stream URLs appear only as placeholders (`https://iptv.example/app2/<18-char token>`, test value `abc`). But the docs and two test files name the provider (`the provider`, `iptv.example`, 24 matches) and its stream CDN (`stream-cdn.example`, 1 match in `docs/plans/archive/M4-live-tv.md`). LAN addresses in tests are fixtures (`192.168.1.x`, `*.plex.direct`). 27 commits have author email `user@example.com`; 15 use `57643254+dwolcot1@users.noreply.github.com`.
 - **GitHub keeps every pull request's commits** (`refs/pull/<n>/head`), and they can't be deleted by the repo owner. Force-pushing rewritten history into the existing repo and making it public would still expose the old commits through PRs #1–#15. Hence L13: publish the rewritten history to a **new** repository.
 
 ## Design
@@ -297,7 +297,7 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
   - Verify in `$TMPDIR/mmtvl-public`:
     - `git log --all -p | grep -c -i the provider` → 0; same for `fastly`, `protonmail` and every private term (`grep -i -F -f`);
     - `git log --all --format='%ae %ce' | sort -u` shows only the noreply address, `noreply@anthropic.com` (co-author trailers are in messages, not authors) and GitHub's `noreply@github.com` (merge commits);
-    - read the rewritten wording in `docs/plans/MASTER_PLAN.md` §3 and `docs/plans/M4-live-tv.md`: if a sentence reads badly ("the provider TV"), fix it in a normal commit after step 10, not by rewriting again;
+    - read the rewritten wording in `docs/plans/MASTER_PLAN.md` §3 and `docs/plans/archive/M4-live-tv.md`: if a sentence reads badly ("the provider TV"), fix it in a normal commit after step 10, not by rewriting again;
     - build and run all tests there (`xcodebuild -project MMTVL.xcodeproj -scheme MMTVL -derivedDataPath build test`); the test fixtures that used the provider host now use `iptv.example` and must still pass;
     - re-run step 8's gitleaks commands there: clean.
   - Done when: all checks pass. Nothing has been pushed.
