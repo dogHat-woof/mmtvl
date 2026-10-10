@@ -33,27 +33,40 @@ enum Theme {
     // MARK: Typography
 
     static let clockFont = Font.title2
+    /// M7c L28: between the clock and the version capsule under it.
+    static let homeClockStackSpacing: CGFloat = 12
     static let tileTitleFont = Font.title3.weight(.medium)
     static let tileCaptionFont = Font.callout
     static let tileSymbolSize: CGFloat = 72
 
     // MARK: Layout
 
-    static let tileSize = CGSize(width: 300, height: 180)   // 5:3
+    // M7c L19 (D38): the tvOS 26 dock: six tiles in a row low on the screen, the next row peeking.
+    static let tileSize = CGSize(width: 270, height: 162)   // 5:3
     static let tileCornerRadius: CGFloat = 16
     static let tileIconFraction: CGFloat = 0.6               // icon height / tile height
-    static let tileSpacing: CGFloat = 48
-    static let rowSpacing: CGFloat = 72
+    static let tileSpacing: CGFloat = 36
+    static let rowSpacing: CGFloat = 16
     static let sideMargin: CGFloat = 120
-    static let tilesPerRow = 5
-    static let rowsTopFraction: CGFloat = 0.45               // tiles start ~45% down; top is reserved for the M7 top shelf
+    /// The rows' side margin (six tiles fill the width).
+    static let homeRowMargin: CGFloat = 60
+    static let tilesPerRow = 6
+    /// Row 0's top on the canvas; row 1 then peeks at the bottom edge.
+    static let homeFirstRowTop: CGFloat = 800
     /// M7 L21: the tile title has a fixed height (hidden when unfocused), so every row has the same pitch.
     static let tileTitleHeight: CGFloat = 36
-    static let tileTitleSpacing: CGFloat = 24
+    /// Below the dock panel.
+    static let tileTitleSpacing: CGFloat = 30
     /// Distance from one row's top to the next one's.
     static var tileRowPitch: CGFloat { tileSize.height + tileTitleSpacing + tileTitleHeight + rowSpacing }
-    /// Space kept under the focused row when the home screen scrolls.
-    static let homeBottomMargin: CGFloat = 40
+    /// The glass dock behind row 0: inset from the screen edges, padding around the tiles, corner radius.
+    static let homeDockInset: CGFloat = 30
+    static let homeDockPadding: CGFloat = 20
+    static let homeDockCornerRadius: CGFloat = 40
+    /// With a later row focused, that row's top sits here (a grid; the row above stays visible).
+    static let homeGridFocusTop: CGFloat = 520
+    /// The hero (backdrop, preview video) dims to this in the grid.
+    static let homeGridHeroOpacity: Double = 0.3
     /// Precise (trackpad) scroll distance that moves focus one row.
     static let homeScrollStep: CGFloat = 40
     static let homeClockFadeHeight: CGFloat = 160
@@ -71,8 +84,28 @@ enum Theme {
     static let neutralArtBottom = Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1E / 255)
     /// The white symbol on gradient art, as a fraction of the art's height.
     static let tileArtSymbolFraction: CGFloat = 0.45
+    /// M7c step 16: a custom picture that isn't 5:3 shows whole over a blurred, dimmed copy of itself.
+    static let tileArtFitBlur: CGFloat = 40
+    static let tileArtFitDim: Double = 0.25
     /// The app icon on designed art (M7 L24), as a fraction of the art's height.
     static let designedArtIconFraction: CGFloat = 0.62
+    /// M7c L33: glyph art draws the whole icon at this fraction of the art's height, then fades out its shape's
+    /// edge (the rim, corners and shadow), so the glyph sits on the icon's own background filling the tile.
+    static let glyphArtIconFraction: CGFloat = 0.95
+    /// The kept part of the icon: a rounded square inset by this fraction of the icon's side on each side,
+    /// with this corner radius and edge blur (fractions of the side). macOS 26 icon shapes fill about 10…90 %;
+    /// some (Plex) have a rim reaching 14 %.
+    static let glyphArtMaskInset: CGFloat = 0.15
+    static let glyphArtMaskCornerRadius: CGFloat = 0.14
+    static let glyphArtMaskBlur: CGFloat = 0.02
+    /// Glyph art's icon is rasterized at this many pixels (the tile shows it at about 350 on a 4K TV).
+    static let glyphArtIconPixels = 512
+    /// M7c L33: a logo picture (transparent or plain edges) is inset by these fractions of the tile's width and height
+    /// on each side, like tvOS's logo tiles.
+    static let tileLogoInset = CGSize(width: 0.18, height: 0.2)
+    /// Behind a transparent logo: dark for a light logo, light for a dark one.
+    static let tileLogoDarkBackdrop = Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1E / 255)
+    static let tileLogoLightBackdrop = Color(red: 0xF2 / 255, green: 0xF2 / 255, blue: 0xF7 / 255)
     static let tileIconBackdropBlur: CGFloat = 40
     /// The icon backdrop's size as a multiple of the tile width.
     static let tileIconBackdropScale: CGFloat = 2.2
@@ -87,6 +120,39 @@ enum Theme {
     // MARK: Top shelf (M7 L12)
 
     static let shelfHeight: CGFloat = 440
+    /// M7c L14: the Plex carousel advances this often (the router's default).
+    static let carouselInterval: Duration = .seconds(8)
+    static let carouselCrossfade = Animation.easeInOut(duration: 1.2)
+    static let carouselIntervalSeconds = Double(carouselInterval.components.seconds)
+    static let carouselZoom: CGFloat = 1.05
+    static let carouselTitleFont = Font.system(size: 64, weight: .bold)
+    static let carouselSubtitleFont = Font.system(size: 26)
+    static let carouselLogoMaxSize = CGSize(width: 640, height: 200)
+    static let carouselProgressWidth: CGFloat = 360
+    static let carouselDotSize: CGFloat = 10
+    static let carouselInfoMaxWidth: CGFloat = 900
+    /// Backdrops and logos are decoded at up to this width (`ShelfImageLoader`'s large store).
+    static let carouselImagePixelWidth = 1920
+    /// M7c L20: the hero's text block, top-left; a scrim behind it; channel logos on Live TV pages; the page dots
+    /// this far above the dock.
+    static let carouselInfoOrigin = CGPoint(x: 120, y: 80)
+    static let shelfInfoScrimOpacity: Double = 0.45
+    static let shelfInfoScrimRadius: CGFloat = 1000
+    static let carouselChannelLogoMaxSize = CGSize(width: 160, height: 80)
+    static let carouselDotsAboveDock: CGFloat = 28
+    /// M7c L22, L23: Select on live content animates the home UI away (the dock and rows slide down and fade, the
+    /// text fades), then opens it; coming back, the dock slides up.
+    static let homeExitDuration: Duration = .milliseconds(450)
+    static let homeExitAnimation = Animation.easeIn(duration: 0.45)
+    static let homeReturnAnimation = Animation.easeOut(duration: 0.35)
+    static let homeExitSlide: CGFloat = 240
+    /// L23: after an app launch the home UI comes back by itself if MMTVL is still active this long after.
+    static let homeExitAppFallback: Duration = .seconds(3)
+    /// M7c L15: the Live TV preview starts after this much focus; its video is revealed with this fade.
+    static let previewDelay: Duration = .milliseconds(800)
+    static let previewRevealAnimation = Animation.easeInOut(duration: 0.5)
+    /// L16: no remote input for this long stops the preview.
+    static let previewIdleTimeout: Duration = .seconds(600)
     static let shelfCardSize = CGSize(width: 352, height: 198)
     static let shelfCardSpacing: CGFloat = 40
     static let shelfCardCornerRadius: CGFloat = 12
@@ -102,8 +168,6 @@ enum Theme {
     static let shelfCardsTop: CGFloat = 140
     static let shelfBannerBlur: CGFloat = 30
     static let shelfBannerDim: Double = 0.25
-    /// The shelf fades out over this much scrolling (L21).
-    static let shelfFadeDistance: CGFloat = 200
     static let shelfCrossfade = Animation.easeInOut(duration: 0.25)
 
     // MARK: Glass (M7 L26)
@@ -127,9 +191,9 @@ enum Theme {
     static let shelfScrimOpacity: Double = 0.75
     /// Darkens the art behind the clock.
     static let shelfClockScrimOpacity: Double = 0.35
-    /// Designed art on the backdrop: the icon's height and center.
-    static let shelfBackdropIconSize: CGFloat = 420
-    static let shelfBackdropIconCenter = CGPoint(x: 1440, y: 300)
+    /// M7c L13: the designed art's accent glow (the backdrop no longer draws the app icon).
+    static let shelfBackdropGlowRadius: CGFloat = 420
+    static let shelfBackdropGlowCenter = CGPoint(x: 1440, y: 300)
     static let shelfBackdropCrossfade = Animation.easeInOut(duration: 0.35)
     /// Extra darkening of the art while cards show.
     static let shelfCardsDim: Double = 0.35

@@ -13,6 +13,7 @@ final class FakePlayer: LivePlayer {
     var volume: (level: Int, muted: Bool)?
     var audible = true
     var bufferProfile = BufferProfile.full
+    var holdsSleepAssertion = true
 
     func play(_ url: URL) {
         played.append(url)
@@ -38,6 +39,7 @@ final class FakePlayer: LivePlayer {
     func setVolume(_ level: Int, muted: Bool) { volume = (level, muted) }
     func setAudible(_ audible: Bool) { self.audible = audible }
     func setBufferProfile(_ profile: BufferProfile) { bufferProfile = profile }
+    func setHoldsSleepAssertion(_ holds: Bool) { holdsSleepAssertion = holds }
 
     /// Retries exhausted.
     func fail() {

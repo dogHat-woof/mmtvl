@@ -18,13 +18,34 @@ struct TileArtView: View {
     @ViewBuilder
     private var content: some View {
         switch art {
-        case .picture(let image):
-            Image(nsImage: image)
-                .resizable()
-                .interpolation(.high)
-                .scaledToFill()
-                .frame(width: size.width, height: size.height)
-                .clipped()
+        case .picture(let image, .solid(let backdrop)):
+            // M7c L33: a logo, inset on its own (or a contrasting) color.
+            ZStack {
+                backdrop
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: size.width * (1 - 2 * Theme.tileLogoInset.width),
+                           height: size.height * (1 - 2 * Theme.tileLogoInset.height))
+            }
+        case .picture(let image, .blurred):
+            // M7c step 16: the whole picture, over a blurred, dimmed copy that fills what it doesn't (tvOS);
+            // a 5:3 picture fills the tile as before.
+            ZStack {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: size.width, height: size.height)
+                    .blur(radius: Theme.tileArtFitBlur * size.width / Theme.tileSize.width, opaque: true)
+                    .overlay(Color.black.opacity(Theme.tileArtFitDim))
+                    .clipped()
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: size.width, height: size.height)
+            }
         case .gradient(let top, let bottom, let symbol):
             ZStack {
                 LinearGradient(colors: [top, bottom], startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -56,6 +77,8 @@ struct TileArtView: View {
                     }
                 }
             }
+        case .glyph(let top, let bottom, let icon):
+            glyph(top: top, bottom: bottom, icon: icon)
         case .icon(let icon):
             ZStack {
                 Image(nsImage: icon)
@@ -75,6 +98,32 @@ struct TileArtView: View {
                             .frame(height: size.height * Theme.tileIconFraction)
                     }
                 }
+            }
+        }
+    }
+
+    /// M7c L33: the icon with its shape's edge faded out, on a gradient that continues its background: the gradient's
+    /// ends sit where the icon's background was sampled, so the two meet without a seam.
+    private func glyph(top: Color, bottom: Color, icon: NSImage) -> some View {
+        let side = size.height * Theme.glyphArtIconFraction
+        let iconTop = (size.height - side) / 2
+        func y(_ band: ClosedRange<Double>) -> CGFloat {
+            (iconTop + side * (band.lowerBound + band.upperBound) / 2) / size.height
+        }
+        return ZStack {
+            LinearGradient(colors: [top, bottom], startPoint: UnitPoint(x: 0.5, y: y(IconBackground.topBand)),
+                           endPoint: UnitPoint(x: 0.5, y: y(IconBackground.bottomBand)))
+            ParallaxLayer {
+                Image(nsImage: icon)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: side, height: side)
+                    .mask {
+                        RoundedRectangle(cornerRadius: side * Theme.glyphArtMaskCornerRadius, style: .continuous)
+                            .padding(side * Theme.glyphArtMaskInset)
+                            .blur(radius: side * Theme.glyphArtMaskBlur)
+                    }
             }
         }
     }

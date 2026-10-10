@@ -26,6 +26,15 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
     var castDeviceID: String?
     /// M7b L18: keep Reflector 4 running hidden (Settings → Casting → Android).
     var reflectorAutoStart = true
+    /// M7c L6 (D36): kiosk mode keeps other apps out (⌘Tab, ⌘Q, the Dock); Settings root → Keep Other Apps Out.
+    var kioskLock = true
+    /// M7c L15 (D37): the Live TV tile plays the last channel, muted, behind the home screen (Settings → Live TV).
+    var homeLivePreview = true
+    /// M7c L28: "Version 1.1.0 Build 2" under the home screen's clock while testing (Settings root → About).
+    var showVersionOnHome = true
+    /// M7c L32: the tile focused when MMTVL opens (a `launch-items.json` id; Settings → a tile → Start Here).
+    /// Missing or hidden: the first tile.
+    var homeStartTile = "plex"
 
     var volumeMode: VolumeMode { VolumeMode(rawValue: phoneRemoteVolume) ?? .auto }
     var validatedPhoneRemotePort: Int { (1024...65534).contains(phoneRemotePort) ? phoneRemotePort : 8765 }
@@ -51,5 +60,10 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
         castDeviceID = try container.decodeIfPresent(String.self, forKey: .castDeviceID)
         reflectorAutoStart = try container.decodeIfPresent(Bool.self, forKey: .reflectorAutoStart)
             ?? defaults.reflectorAutoStart
+        kioskLock = try container.decodeIfPresent(Bool.self, forKey: .kioskLock) ?? defaults.kioskLock
+        homeLivePreview = try container.decodeIfPresent(Bool.self, forKey: .homeLivePreview) ?? defaults.homeLivePreview
+        showVersionOnHome = try container.decodeIfPresent(Bool.self, forKey: .showVersionOnHome)
+            ?? defaults.showVersionOnHome
+        homeStartTile = try container.decodeIfPresent(String.self, forKey: .homeStartTile) ?? defaults.homeStartTile
     }
 }

@@ -82,7 +82,7 @@ func makeSettingsModel(
     recorder.hasPIN = hasPIN
     let environment = SettingsEnvironment(
         isKiosk: kiosk,
-        versionString: "1.0",
+        version: AppVersion(version: "1.1.0", build: "7"),
         applySettings: { recorder.appliedSettings.append($0) },
         applyItems: { recorder.appliedItems.append($0) },
         isAccessibilityTrusted: { recorder.trusted },

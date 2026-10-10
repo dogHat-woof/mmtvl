@@ -88,6 +88,12 @@ final class AppLauncher {
     var onReturnToLauncher: (() -> Void)?
     /// M7 L18: a web app's window never showed; the router shakes the tile (its id).
     var onLaunchFailed: ((String) -> Void)?
+    /// M7c L8b: the bundle ids a launch may bring forward (the app, a web app's browser), before it opens.
+    var onOpened: (([String]) -> Void)?
+
+    static let finderBundleID = "com.apple.finder"
+    /// Item 20: macOS's full-screen exit animation takes about 0.7 s.
+    static let quitSettleDelay: Duration = .seconds(1)
 
     /// L18: how long to look for a web app's window after a hand-off, and how often.
     static let webAppWindowSearch: Duration = .seconds(10)
@@ -142,7 +148,7 @@ final class AppLauncher {
     /// when it finishes starting; it keeps running (D18).
     func homePressed() {
         guard let bundleID = cancellation.homePressed(at: Date()) else { return }
-        Self.logger.info("Home during the launch of \(bundleID, privacy: .public); it won't take the screen")
+        Self.logger.notice("Home during the launch of \(bundleID, privacy: .public); it won't take the screen")
     }
 
     func isInstalled(_ item: LaunchItem) -> Bool {
@@ -214,11 +220,12 @@ final class AppLauncher {
                 throw LaunchError.notInstalled(bundleID: bundleID)
             }
             let webApp = WebApp.info(bundleURL: url)
+            onOpened?([bundleID] + (webApp.map { [$0.browserBundleID] } ?? []))
             if let webApp, let startURL = item.startURL {
                 try await launchWebApp(item, bundleID: bundleID, info: webApp, startURL: startURL)
                 return
             }
-            Self.logger.info("Launching \(bundleID, privacy: .public)")
+            Self.logger.notice("Launching \(bundleID, privacy: .public)")
             cancellation.began(bundleID, at: Date())
             let app = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
             launchedPIDs.insert(app.processIdentifier)
@@ -232,9 +239,12 @@ final class AppLauncher {
                 throw LaunchError.notInstalled(bundleID: "default browser")
             }
             let bundleID = Bundle(url: browserURL)?.bundleIdentifier
-            if let bundleID { cancellation.began(bundleID, at: Date()) }
+            if let bundleID {
+                onOpened?([bundleID])
+                cancellation.began(bundleID, at: Date())
+            }
             configuration.arguments = Self.launchArguments(browserBundleID: bundleID, fullScreen: fullScreen)
-            Self.logger.info("Launching default browser \(bundleID ?? "?", privacy: .public) with \(configuration.arguments, privacy: .public)")
+            Self.logger.notice("Launching default browser \(bundleID ?? "?", privacy: .public) with \(configuration.arguments, privacy: .public)")
             let app = try await NSWorkspace.shared.openApplication(at: browserURL, configuration: configuration)
             launchedPIDs.insert(app.processIdentifier)
             makeFullScreenIfWanted(item, pid: app.processIdentifier)
@@ -243,13 +253,16 @@ final class AppLauncher {
             guard let browserURL = appURL(for: browserBundleID) else {
                 throw LaunchError.notInstalled(bundleID: browserBundleID)
             }
-            Self.logger.info("Opening \(url.absoluteString, privacy: .public) in \(browserBundleID, privacy: .public)")
+            Self.logger.notice("Opening \(url.absoluteString, privacy: .public) in \(browserBundleID, privacy: .public)")
+            onOpened?([browserBundleID])
             cancellation.began(browserBundleID, at: Date())
             let app = try await NSWorkspace.shared.open([url], withApplicationAt: browserURL, configuration: configuration)
             launchedPIDs.insert(app.processIdentifier)
+            makeFullScreenIfWanted(item, pid: app.processIdentifier)
 
         case .url(let url, nil):
-            Self.logger.info("Opening \(url.absoluteString, privacy: .public) in the default browser")
+            Self.logger.notice("Opening \(url.absoluteString, privacy: .public) in the default browser")
+            if let browserID = defaultBrowserURL().flatMap({ Bundle(url: $0)?.bundleIdentifier }) { onOpened?([browserID]) }
             NSWorkspace.shared.open(url)
 
         case .internalDestination, .system:
@@ -263,7 +276,7 @@ final class AppLauncher {
         guard let browserURL = appURL(for: info.browserBundleID) else {
             throw LaunchError.notInstalled(bundleID: info.browserBundleID)
         }
-        Self.logger.info("Launching web app \(bundleID, privacy: .public) on a page at \(startURL.host() ?? "?", privacy: .public)")
+        Self.logger.notice("Launching web app \(bundleID, privacy: .public) on a page at \(startURL.host() ?? "?", privacy: .public)")
         // Home during the launch cancels the web app coming forward, not the browser.
         cancellation.began(bundleID, at: Date())
         let configuration = NSWorkspace.OpenConfiguration()
@@ -282,14 +295,14 @@ final class AppLauncher {
             let shims = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
                 .filter { $0.processIdentifier != deadPID && !$0.isTerminated }
             if let shim = shims.first(where: { fullScreener.hasWindow(pid: $0.processIdentifier) }) {
-                Self.logger.info("Web app \(bundleID, privacy: .public) is open")
+                Self.logger.notice("Web app \(bundleID, privacy: .public) is open")
                 launchedPIDs.insert(shim.processIdentifier)
                 makeFullScreenIfWanted(item, pid: shim.processIdentifier)
                 return
             }
             for browser in NSRunningApplication.runningApplications(withBundleIdentifier: info.browserBundleID) {
                 if let window = fullScreener.findWindow(pid: browser.processIdentifier, titlePrefix: info.name) {
-                    Self.logger.info("Web app \(bundleID, privacy: .public) opened in a browser window")
+                    Self.logger.notice("Web app \(bundleID, privacy: .public) opened in a browser window")
                     if item.wantsFullScreen { await fullScreener.makeFullScreen(window: window) }
                     return
                 }
@@ -301,9 +314,17 @@ final class AppLauncher {
     }
 
     /// D15: also covers apps that were already running, where `--start-fullscreen` has no effect.
+    /// M7c L10: browser tiles (not web apps) also get View → Always Show Toolbar in Full Screen.
     private func makeFullScreenIfWanted(_ item: LaunchItem, pid: pid_t) {
         guard item.wantsFullScreen && AccessibilityPermission.isTrusted else { return }
-        Task { await fullScreener.makeFullScreen(pid: pid) }
+        let isBrowserTile = switch item.kind {
+        case .defaultBrowser, .url: true
+        case .application, .internalDestination, .system: false
+        }
+        Task {
+            await fullScreener.makeFullScreen(pid: pid)
+            if isBrowserTile { await BrowserToolbar.ensureShown(pid: pid) }
+        }
     }
 
     private func appURL(for bundleID: String) -> URL? {
@@ -316,7 +337,7 @@ final class AppLauncher {
 
     private func applicationDidActivate(bundleID: String?) {
         guard cancellation.shouldReturn(activated: bundleID, at: Date()) else { return }
-        Self.logger.info("\(bundleID ?? "?", privacy: .public) came forward after Home; returning to the launcher")
+        Self.logger.notice("\(bundleID ?? "?", privacy: .public) came forward after Home; returning to the launcher")
         onReturnToLauncher?()
     }
 
@@ -326,22 +347,29 @@ final class AppLauncher {
            case .application(let bundleID) = webApp.item.kind {
             // L18: the shim handed off to the browser; the app isn't closed. Look for its window instead.
             launchedPIDs.remove(pid)
-            Self.logger.info("Web app \(bundleID, privacy: .public) handed off to the browser; looking for its window")
+            Self.logger.notice("Web app \(bundleID, privacy: .public) handed off to the browser; looking for its window")
             Task { await findWebAppWindow(webApp.item, bundleID: bundleID, info: webApp.info, excluding: pid) }
             return
         }
         guard launchedPIDs.remove(pid) != nil else { return }
 
-        // L5: only come back if the user hasn't deliberately switched to another app.
+        // L5: only come back if the user hasn't deliberately switched to another app. M7c: macOS makes Finder
+        // frontmost when a full-screen app quits, which isn't the user's choice.
         let frontmost = NSWorkspace.shared.frontmostApplication
         let isOurs = frontmost == nil
             || frontmost?.processIdentifier == ProcessInfo.processInfo.processIdentifier
             || frontmost?.processIdentifier == pid
+            || frontmost?.bundleIdentifier == Self.finderBundleID
         guard isOurs else {
-            Self.logger.info("Launched app \(pid) quit, but \(frontmost?.bundleIdentifier ?? "?", privacy: .public) is frontmost; staying put")
+            Self.logger.notice("Launched app \(pid) quit, but \(frontmost?.bundleIdentifier ?? "?", privacy: .public) is frontmost; staying put")
             return
         }
-        Self.logger.info("Launched app \(pid) quit; returning to launcher")
-        onReturnToLauncher?()
+        Self.logger.notice("Launched app \(pid) quit; returning to launcher")
+        // Item 20: let macOS finish closing a full-screen app's Space first; activating MMTVL (and setting its
+        // presentation options) during that animation left the Dock stuck on the dead Space.
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.quitSettleDelay)
+            self?.onReturnToLauncher?()
+        }
     }
 }

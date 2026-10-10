@@ -7,12 +7,31 @@ struct ShelfBackdrop: View {
     let art: TileArt?
     /// Cards are showing: the art is darkened so their captions read.
     let isDimmed: Bool
+    /// M7c L14: a carousel replaces the tile's art (the scrims stay).
+    var carousel: (cards: [ShelfCard], page: Int, images: ShelfImageLoader)?
+    /// M7c L15: 0 while the Live TV preview plays behind the canvas (the scrims stay).
+    var artOpacity: Double = 1
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             if let art {
-                artLayer(art)
+                Group {
+                    if let carousel {
+                        ShelfCarouselBackdrop(cards: carousel.cards, page: carousel.page, images: carousel.images) {
+                            artLayer(art)
+                        }
+                    } else {
+                        artLayer(art)
+                    }
+                }
+                .opacity(artOpacity)
+                .animation(Theme.previewRevealAnimation, value: artOpacity)
                 Color.black.opacity(isDimmed ? Theme.shelfCardsDim : 0)
+                if carousel != nil {
+                    // M7c L20: the hero's text sits top-left.
+                    RadialGradient(colors: [.black.opacity(Theme.shelfInfoScrimOpacity), .clear],
+                                   center: .topLeading, startRadius: 0, endRadius: Theme.shelfInfoScrimRadius)
+                }
                 LinearGradient(stops: [
                     .init(color: .clear, location: Theme.shelfScrimStart),
                     .init(color: .black.opacity(Theme.shelfScrimOpacity), location: 1),
@@ -33,33 +52,28 @@ struct ShelfBackdrop: View {
     private func artLayer(_ art: TileArt) -> some View {
         let size = Theme.canvasSize
         switch art {
-        case .picture(let image):
+        case .picture(_, .solid(let backdrop)):
+            backdrop
+        case .picture(let image, .blurred):
             Image(nsImage: image)
                 .resizable()
                 .interpolation(.high)
                 .scaledToFill()
                 .frame(width: size.width, height: size.height)
                 .clipped()
-        case .gradient(let top, let bottom, let symbol):
-            ZStack(alignment: .topLeading) {
-                LinearGradient(colors: [top, bottom], startPoint: .topLeading, endPoint: .bottomTrailing)
-                foreground { Image(systemName: symbol).font(.system(size: Theme.shelfBackdropIconSize * 0.7)).foregroundStyle(.white) }
-            }
-        case .designed(let top, let bottom, let accent, let icon, let symbol):
+        // M7c L13: color and blur only; the tiles keep their own icons.
+        case .gradient(let top, let bottom, _):
+            LinearGradient(colors: [top, bottom], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case .glyph(let top, let bottom, _):
+            LinearGradient(colors: [top, bottom], startPoint: .top, endPoint: .bottom)
+        case .designed(let top, let bottom, let accent, _, _):
             ZStack(alignment: .topLeading) {
                 LinearGradient(colors: [top, bottom], startPoint: .topLeading, endPoint: .bottomTrailing)
                 if let accent {
                     RadialGradient(colors: [accent.opacity(0.4), .clear],
-                                   center: UnitPoint(x: Theme.shelfBackdropIconCenter.x / size.width,
-                                                     y: Theme.shelfBackdropIconCenter.y / size.height),
-                                   startRadius: 0, endRadius: Theme.shelfBackdropIconSize)
-                }
-                foreground {
-                    if let icon {
-                        iconImage(icon)
-                    } else {
-                        Image(systemName: symbol).font(.system(size: Theme.shelfBackdropIconSize * 0.7)).foregroundStyle(.white)
-                    }
+                                   center: UnitPoint(x: Theme.shelfBackdropGlowCenter.x / size.width,
+                                                     y: Theme.shelfBackdropGlowCenter.y / size.height),
+                                   startRadius: 0, endRadius: Theme.shelfBackdropGlowRadius)
                 }
             }
         case .icon(let icon):
@@ -71,25 +85,8 @@ struct ShelfBackdrop: View {
                     .blur(radius: Theme.shelfBannerBlur)
                     .clipped()
                 Color.black.opacity(Theme.shelfBannerDim)
-                foreground { iconImage(icon) }
             }
         }
-    }
-
-    private func iconImage(_ icon: NSImage) -> some View {
-        Image(nsImage: icon)
-            .resizable()
-            .interpolation(.high)
-            .scaledToFit()
-            .frame(height: Theme.shelfBackdropIconSize)
-            .shadow(color: .black.opacity(0.4), radius: 40, y: 20)
-    }
-
-    /// The icon or symbol, centered at `Theme.shelfBackdropIconCenter`.
-    private func foreground(@ViewBuilder _ content: () -> some View) -> some View {
-        content()
-            .frame(width: Theme.shelfBackdropIconSize * 1.6, height: Theme.shelfBackdropIconSize * 1.2)
-            .position(Theme.shelfBackdropIconCenter)
     }
 }
 
@@ -104,11 +101,19 @@ struct TopShelfView: View {
     let onHoverCard: (Int) -> Void
     let onActivateCard: (Int) -> Void
     let images: ShelfImageLoader
+    /// M7c L14: the carousel's page while the tiles have focus.
+    var carouselPage = 0
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            if case .cards(let title, let cards) = content {
+            switch content {
+            case .cards(let title, let cards):
                 cardRow(title: title, cards: cards)
+            case .carousel(_, let cards, _):
+                ShelfCarouselInfo(cards: cards, page: focusedIndex ?? carouselPage, isFocused: focusedIndex != nil,
+                                  images: images, onActivate: onActivateCard)
+            case .banner:
+                EmptyView()
             }
         }
         .frame(width: Theme.canvasSize.width, height: Theme.shelfHeight, alignment: .topLeading)
@@ -186,9 +191,7 @@ struct TopShelfView: View {
     private func cardImage(_ image: ShelfCard.Image) -> some View {
         switch image {
         case .channelLogo(let url):
-            AsyncImage(url: url) { image in
-                image.resizable().scaledToFit()
-            } placeholder: {
+            ChannelLogoView(url: url) {
                 Image(systemName: "tv").font(.system(size: 56)).foregroundStyle(Theme.secondaryText)
             }
             .frame(width: Theme.shelfCardSize.width * 0.6, height: Theme.shelfCardSize.height * 0.5)

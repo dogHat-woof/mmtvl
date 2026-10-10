@@ -62,6 +62,35 @@ struct ShelfImageLoaderTests {
         #expect(loader.image(for: remote(60)) != nil)
     }
 
+    /// M7c L14: the same URL at another width is another image.
+    @Test func keysByWidth() async {
+        let fetcher = Fetcher()
+        let loader = ShelfImageLoader(fetch: fetcher.fetch)
+        _ = loader.image(for: remote(1))
+        await loader.lastTask?.value
+        #expect(loader.image(for: remote(1)) != nil)
+        #expect(loader.image(for: remote(1), maxPixelWidth: 1920) == nil)
+        await loader.lastTask?.value
+        #expect(loader.image(for: remote(1), maxPixelWidth: 1920) != nil)
+        #expect(fetcher.count(URL(string: "https://server/img/1")!) == 2)
+    }
+
+    /// M7c L14: backdrops are capped at 12, apart from the 60 card images.
+    @Test func backdropsAreCappedSeparately() async {
+        let fetcher = Fetcher()
+        let loader = ShelfImageLoader(fetch: fetcher.fetch)
+        _ = loader.image(for: remote(100))
+        await loader.lastTask?.value
+        for n in 0...12 {
+            _ = loader.image(for: remote(n), maxPixelWidth: 1920)
+            await loader.lastTask?.value
+        }
+        #expect(loader.image(for: remote(0), maxPixelWidth: 1920) == nil)   // dropped
+        await loader.lastTask?.value
+        #expect(loader.image(for: remote(12), maxPixelWidth: 1920) != nil)
+        #expect(loader.image(for: remote(100)) != nil)                      // the card image stays
+    }
+
     @Test func failuresAreRememberedForFiveMinutes() async {
         let fetcher = Fetcher()
         var now = Date(timeIntervalSince1970: 0)

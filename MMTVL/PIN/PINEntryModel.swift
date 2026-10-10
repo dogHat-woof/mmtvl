@@ -29,7 +29,11 @@ final class PINEntryModel {
     var title: String {
         switch flow.stage {
         case .verify:
-            purpose == .change || purpose == .turnOff ? "Enter Current PIN" : "Enter PIN"
+            switch purpose {
+            case .change, .turnOff: "Enter Current PIN"
+            case .quit: "Enter PIN to quit MMTVL"
+            default: "Enter PIN"
+            }
         case .enterNew:
             "Enter a New PIN"
         case .confirmNew:

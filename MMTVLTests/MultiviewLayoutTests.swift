@@ -38,15 +38,10 @@ struct MultiviewLayoutTests {
         }
     }
 
+    /// M7c L12: no gaps, the windows touch.
     @Test(arguments: MultiviewLayout.allCases)
-    func slotsAreInset(_ layout: MultiviewLayout) {
-        for (index, raw) in layout.rawSlots.enumerated() {
-            if layout == .pictureInPicture && index == 0 {
-                #expect(layout.slots[index] == CGRect(x: 0, y: 0, width: 1920, height: 1080))
-            } else {
-                #expect(layout.slots[index] == raw.insetBy(dx: 4, dy: 4))
-            }
-        }
+    func slotsAreTheRawSlots(_ layout: MultiviewLayout) {
+        #expect(layout.slots == layout.rawSlots)
     }
 
     @Test func onePlusFourMatchesTheTable() {

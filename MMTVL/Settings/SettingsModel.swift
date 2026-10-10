@@ -188,6 +188,12 @@ final class SettingsModel {
             settings = new
             environment.applySettings(new)
             refreshStatus()
+        case .setStartTile(let id):
+            guard settings.homeStartTile != id, item(id: id)?.isVisible == true else { return }
+            var new = settings
+            new.homeStartTile = id
+            settings = new
+            environment.applySettings(new)
         case .requestAccessibility:
             environment.requestAccessibility()
         case .openLoginItemsSettings:
@@ -294,6 +300,11 @@ final class SettingsModel {
             updateItems(items.settingStartURL(nil, id: id))
             setFocus("tile.startURL")
         case .setTileArtStyle(let id, let style):
+            // M7c L33: a style replaces the tile's picture.
+            if environment.tileArtFileName(id) != nil {
+                environment.removeTilePicture(id)
+                refreshStatus()
+            }
             updateItems(items.settingArtStyle(style, id: id))
         case .useTileArtPicture(let id, let url):
             tileArtMessage = environment.setTilePicture(id, url)

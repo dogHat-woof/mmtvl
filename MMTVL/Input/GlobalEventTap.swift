@@ -57,6 +57,8 @@ final class GlobalEventTap {
     private let inputRouter: InputRouter
     private var port: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    /// M7c L8a: the kiosk lock is on (set by AppDelegate).
+    var lockActive: () -> Bool = { false }
 
     init(inputRouter: InputRouter) {
         self.inputRouter = inputRouter
@@ -130,6 +132,11 @@ final class GlobalEventTap {
                     let trigger = InputBinding.Trigger.key(keyCode: code, modifiers: Array(modifiers)).normalized
                     DispatchQueue.main.async { [inputRouter] in inputRouter.capture(trigger) }
                 }
+                return true
+            }
+            // M7c L8a: with another app in front, ⌘Tab and friends never reach the system. While MMTVL is active
+            // the presentation options do this, and ⌘Q/⌘W must still reach MMTVL.
+            if !NSApp.isActive && lockActive() && KioskLock.blocks(keyCode: code, modifiers: modifiers) {
                 return true
             }
             // Non-global keys pass through; the local monitor handles them while we're active.

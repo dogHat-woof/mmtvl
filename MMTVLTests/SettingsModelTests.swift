@@ -191,8 +191,8 @@ struct SettingsHomeScreenTests {
     @Test func settingsTileCanOnlyMove() {
         let (model, recorder) = modelOnHomeScreen()
         model.perform(.push(.tile(id: "settings")))
-        // Tile Art (M7 L25) and Move; never hide or remove.
-        #expect(model.focusableRowIDs == ["tile.art", "tile.move"])
+        // Start Here (M7c L32), Tile Art (M7 L25) and Move; never hide or remove.
+        #expect(model.focusableRowIDs == ["tile.start", "tile.art", "tile.move"])
         model.perform(.toggleTileVisible(id: "settings"))
         model.perform(.removeTile(id: "settings"))
         #expect(recorder.appliedItems.isEmpty)
@@ -366,6 +366,57 @@ struct SettingsLiveTVTests {
         #expect(model.page == .liveTV)
     }
 
+    /// M7c L15.
+    @Test func previewOnHomeTogglesTheSetting() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = Self.status
+        model.refreshStatus()
+        model.perform(.push(.liveTV))
+        let row = model.row(id: "iptv.homePreview")
+        #expect(row?.value == "On")
+        #expect(row?.detail == "Loads the channel, muted, while the home screen shows; you see it when Live TV is focused")
+        model.activate(rowID: "iptv.homePreview")
+        #expect(recorder.appliedSettings.last?.homeLivePreview == false)
+        #expect(model.row(id: "iptv.homePreview")?.value == "Off")
+    }
+
+    /// M7c L28.
+    @Test func aboutShowsTheVersionAndBuild() {
+        let (model, recorder) = makeSettingsModel()
+        #expect(model.row(id: "about.version")?.value == "1.1.0")
+        #expect(model.row(id: "about.build")?.value == "7")
+        #expect(model.row(id: "about.version")?.action == nil)
+        #expect(model.row(id: "about.showOnHome")?.value == "On")
+        model.activate(rowID: "about.showOnHome")
+        #expect(recorder.appliedSettings.last?.showVersionOnHome == false)
+        #expect(model.row(id: "about.showOnHome")?.value == "Off")
+    }
+
+    /// M7c L32.
+    @Test func startHereChoosesTheStartTile() {
+        let (model, recorder) = makeSettingsModel()
+        model.perform(.push(.homeScreen))
+        #expect(model.row(id: SettingsModel.tileRowID("plex"))?.detail?.hasSuffix(" · Start tile") == true)
+        model.perform(.push(.tile(id: "iptv")))
+        #expect(model.row(id: "tile.start")?.value == "Off")
+        model.activate(rowID: "tile.start")
+        #expect(recorder.appliedSettings.last?.homeStartTile == "iptv")
+        #expect(model.row(id: "tile.start")?.value == "On")
+        model.perform(.push(.tile(id: "exit")))
+        #expect(model.row(id: "tile.start") == nil)
+    }
+
+    @Test func aHiddenStartTileFallsBackToTheFirstTile() {
+        var settings = AppSettings()
+        settings.homeStartTile = "youtube"
+        let items = LaunchItem.defaults.settingHidden(true, id: "youtube")
+        let (model, recorder) = makeSettingsModel(settings: settings, items: items)
+        #expect(model.startTileID == "plex")
+        model.perform(.push(.tile(id: "youtube")))
+        model.activate(rowID: "tile.start")
+        #expect(recorder.appliedSettings.isEmpty)
+    }
+
     @Test func pageWithoutPlaylistOnlyPastes() {
         let (model, recorder) = makeSettingsModel()
         model.perform(.push(.liveTV))
@@ -404,7 +455,8 @@ struct SettingsLiveTVTests {
         model.refreshStatus()
         model.perform(.push(.liveTV))
         #expect(model.focusableRowIDs == ["iptv.playlist.paste", "iptv.guide.g1", "iptv.guide.g2", "iptv.guide.add",
-                                          "iptv.groups", "iptv.hiddenChannels", "iptv.refresh", "iptv.remove"])
+                                          "iptv.groups", "iptv.hiddenChannels", "iptv.homePreview", "iptv.refresh",
+                                          "iptv.remove"])
         let info = model.row(id: "iptv.playlist.info")
         #expect(info?.title == "iptv.example")
         #expect(info?.value == "5 Channels")
@@ -422,7 +474,7 @@ struct SettingsLiveTVTests {
 
         model.press(.down, .down, .down, .select)
         #expect(recorder.pastes == [.guide])
-        model.press(.down, .down, .down, .select)
+        model.press(.down, .down, .down, .down, .select)
         #expect(recorder.iptvRefreshes == 1)
     }
 
@@ -434,7 +486,7 @@ struct SettingsLiveTVTests {
         model.refreshStatus()
         model.perform(.push(.liveTV))
         #expect(model.focusableRowIDs == ["iptv.playlist.paste", "iptv.guide.add", "iptv.groups", "iptv.hiddenChannels",
-                                          "iptv.refresh", "iptv.remove"])
+                                          "iptv.homePreview", "iptv.refresh", "iptv.remove"])
         #expect(model.row(id: "iptv.guide.p")?.value == "From Playlist")
         #expect(model.row(id: "iptv.guide.p")?.action == nil)
     }
@@ -597,6 +649,16 @@ struct SettingsLiveTVTests {
         model.activate(rowID: "channelUp")
         #expect(recorder.appliedSettings.last?.channelUpMovesUpList == false)
         #expect(model.row(id: "channelUp")?.value == "Higher Number")
+    }
+
+    /// M7c L6.
+    @Test func keepOtherAppsOutRowTogglesTheLock() {
+        let (model, recorder) = makeSettingsModel()
+        #expect(model.row(id: "kioskLock")?.value == "On")
+        #expect(model.row(id: "kioskLock")?.action == .toggle(.kioskLock))
+        model.activate(rowID: "kioskLock")
+        #expect(recorder.appliedSettings.last?.kioskLock == false)
+        #expect(model.row(id: "kioskLock")?.value == "Off")
     }
 }
 

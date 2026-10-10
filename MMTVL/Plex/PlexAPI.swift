@@ -114,15 +114,24 @@ nonisolated enum PlexAPI {
         var grandparentArt: String?
         var viewOffset: Int?
         var duration: Int?
+        /// M7c L14: newer servers list extra art here (`type: "clearLogo"` is a transparent title logo).
+        var images: [ImageRef]?
+
+        struct ImageRef: Decodable, Equatable, Sendable {
+            var type: String?
+            var url: String?
+        }
 
         enum CodingKeys: String, CodingKey {
             case ratingKey, type, title, grandparentTitle, parentIndex, index, year, thumb, art, grandparentThumb,
                  grandparentArt, viewOffset, duration
+            case images = "Image"
         }
 
         init(ratingKey: String? = nil, type: String? = nil, title: String? = nil, grandparentTitle: String? = nil,
              parentIndex: Int? = nil, index: Int? = nil, year: Int? = nil, thumb: String? = nil, art: String? = nil,
-             grandparentThumb: String? = nil, grandparentArt: String? = nil, viewOffset: Int? = nil, duration: Int? = nil) {
+             grandparentThumb: String? = nil, grandparentArt: String? = nil, viewOffset: Int? = nil, duration: Int? = nil,
+             images: [ImageRef]? = nil) {
             self.ratingKey = ratingKey
             self.type = type
             self.title = title
@@ -136,6 +145,7 @@ nonisolated enum PlexAPI {
             self.grandparentArt = grandparentArt
             self.viewOffset = viewOffset
             self.duration = duration
+            self.images = images
         }
 
         /// Lenient: a field of an unexpected type reads as nil instead of failing the item.
@@ -162,6 +172,7 @@ nonisolated enum PlexAPI {
             grandparentArt = string(.grandparentArt)
             viewOffset = int(.viewOffset)
             duration = int(.duration)
+            images = try? c.decodeIfPresent([ImageRef].self, forKey: .images)
         }
     }
 
@@ -170,6 +181,9 @@ nonisolated enum PlexAPI {
     static let identityTimeout: TimeInterval = 4
     static let continueWatchingCount = 12
     static let imageSize = (width: 704, height: 396)
+    /// M7c L14: the carousel's full-screen art and the clear logo.
+    static let backdropSize = (width: 1920, height: 1080)
+    static let logoSize = (width: 800, height: 300)
 
     // MARK: Requests
 
@@ -311,6 +325,17 @@ nonisolated enum PlexAPI {
                     item.grandparentArt ?? item.art ?? item.thumb, progress)
         }
         return (item.title ?? "", item.year.map(String.init) ?? "", item.art ?? item.thumb, progress)
+    }
+
+    /// M7c L14: the clear logo's path, if the server lists one.
+    static func clearLogoPath(_ item: Metadata) -> String? {
+        item.images?.first { $0.type == "clearLogo" && $0.url?.isEmpty == false }?.url
+    }
+
+    /// M7c L14: whole minutes left, rounded up; nil without both the offset and the duration.
+    static func minutesLeft(_ item: Metadata) -> Int? {
+        guard let offset = item.viewOffset, let duration = item.duration, duration > 0 else { return nil }
+        return Int((Double(max(duration - offset, 0)) / 60_000).rounded(.up))
     }
 
     /// ISO 8601, with or without fractional seconds.

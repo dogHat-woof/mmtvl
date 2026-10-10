@@ -22,7 +22,8 @@ enum AppRelauncher {
     }
 
     /// Forwards the launch arguments, so `-windowed YES` stays windowed.
-    static func relaunch() {
+    /// `allowTermination` lifts the kiosk lock's quit guard first (M7c L9).
+    static func relaunch(allowTermination: () -> Void = {}) {
         let process = Process()
         process.executableURL = URL(filePath: "/bin/sh")
         process.arguments = processArguments(
@@ -37,6 +38,7 @@ enum AppRelauncher {
             return
         }
         logger.info("Relaunching")
+        allowTermination()
         NSApp.terminate(nil)
     }
 }

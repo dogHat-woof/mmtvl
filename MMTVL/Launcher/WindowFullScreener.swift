@@ -18,7 +18,7 @@ final class WindowFullScreener {
         while ContinuousClock.now < deadline, !Task.isCancelled {
             if let window = Self.mainWindow(of: app) {
                 if Self.isFullScreen(window) {
-                    Self.logger.info("Window of pid \(pid) is full screen")
+                    Self.logger.notice("Window of pid \(pid) is full screen")
                     return
                 }
                 // `true as CFBoolean` avoids the non-Sendable global `kCFBooleanTrue`.

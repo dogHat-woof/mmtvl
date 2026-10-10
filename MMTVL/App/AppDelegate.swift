@@ -34,6 +34,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var reflector: ReflectorMonitor?
     /// M7b L15: the last AirPlay probe; refreshed when Settings → Casting opens.
     private var airPlayState: AirPlayReceiverState = .unknown
+    /// M7c L9: set by the PIN-checked quit, Relaunch and a logout/shutdown; otherwise the kiosk lock cancels a quit.
+    private var allowsTermination = false
+    /// M7c L8b: takes the screen back from apps MMTVL didn't open.
+    private let kioskGuard = KioskGuard()
+    private var powerOffObserver: NSObjectProtocol?
+    /// M7c L16: the displays or the system went to sleep; the Live TV preview stops.
+    private var screensSleepObservers: [NSObjectProtocol] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !AppEnvironment.isRunningTests else { return }
@@ -83,7 +90,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let liveTV = LiveTVModel(player: MPVPlayerController(), makePlayer: { MPVPlayerController() }, library: iptvLibrary)
         liveTV.channelUpMovesUpList = settings.channelUpMovesUpList
         self.liveTV = liveTV
-        let topShelf = TopShelfModel(live: .library(iptvLibrary), plex: plex)
+        var liveShelf = LiveShelfSource.library(iptvLibrary)
+        liveShelf.defaultChannel = { [weak liveTV] in liveTV?.defaultPreviewChannelID }
+        // M7c L24.
+        liveTV.prefetchLogos = { ChannelLogoCache.shared.prefetch($0) }
+        liveTV.prefetchStreams = { StreamResolver.shared.prefetch($0) }
+        // M7c L30: the loopback relay mpv loads Live TV through.
+        HLSRelay.shared.start()
+        // M7c L31: a channel highlighted in the guide starts loading before Select.
+        liveTV.warmStream = { url in
+            Task { HLSRelay.shared.prefetch(await StreamResolver.shared.resolve(url)) }
+        }
+        ChannelLogoCache.shared.pruneDisk()
+        let topShelf = TopShelfModel(live: liveShelf, plex: plex)
         let router = AppRouter(items: items, launcher: launcher, settings: settingsModel, youtube: youtube,
                                liveTV: liveTV, pinStore: .keychain, tileArt: TileArtStore(), topShelf: topShelf)
         topShelf.onChange = { [weak router] in router?.shelfContentChanged() }
@@ -96,8 +115,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.windowController = windowController
 
         router.onExitToDesktop = { [weak windowController] in windowController?.exitToDesktop() }
+        router.onQuit = { [weak self] in
+            self?.allowsTermination = true
+            // Not from inside applicationShouldTerminate.
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
         router.onRequestAccessibility = { [weak self] in self?.requestAccessibility() }
-        launcher.onReturnToLauncher = { [weak windowController] in windowController?.show() }
+        launcher.onReturnToLauncher = { [weak windowController] in windowController?.show(reason: "appQuit") }
+        launcher.onOpened = { [weak self] in self?.kioskGuard.opened(bundleIDs: $0) }
         // Leanback's own exit; it may fire several times, going home is idempotent.
         youtube.onExit = { [weak router] in
             if router?.screen == .youtube { router?.goHome() }
@@ -109,7 +134,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // M7b L21: Home on MMTVL also ends a mirroring session.
         inputRouter.handler = { [weak self, weak router] command in
-            if command == .home { self?.endMirroringIfNeeded() }
+            if command == .home {
+                self?.endMirroringIfNeeded()
+                self?.kioskGuard.homePressed()
+            }
             return router?.handle(command) ?? false
         }
         inputRouter.onScrollWheel = { [weak router] deltaY, precise in router?.scrollWheel(deltaY: deltaY, precise: precise) }
@@ -117,7 +145,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Reads the current setting, which Settings can change live.
         inputRouter.onCommandDispatched = { [weak self] in
             if self?.settings.cursorAutoHide == true { NSCursor.setHiddenUntilMouseMoves(true) }
+            self?.router?.noteActivity()
         }
+        router.startTileID = settings.homeStartTile
+        router.focusStartTile(id: router.startTileID)
+        router.livePreviewEnabled = settings.homeLivePreview
+        router.homeVersionLabel = settings.showVersionOnHome ? AppVersion.current.label : nil
+        router.homeExitDelay = Theme.homeExitDuration
+        router.isAppActive = NSApp.isActive
+        observeScreensSleep()
         inputRouter.start()
 
         // L2: global input is off in -windowed mode, so the dev Mac keeps its Home key.
@@ -130,11 +166,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if kiosk {
             LoginItem.apply(enabled: settings.launchAtLogin)
             observeWake()
+            observePowerOff()
         }
+        updateKioskLock()
         setUpPhoneRemote(inputRouter: inputRouter, router: router)
         setUpCasting()
 
-        windowController.show()
+        windowController.show(reason: "launch")
         setUpReflector()
 
         // M4 L4/L5: channels are fetched at every launch; the guide only when stale.
@@ -194,7 +232,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             now: { Date() },
             makeCode: { PairingCode.random() },
             makeToken: { PhoneToken.make() },
-            pointer: { [weak self] in self?.phonePointer.perform($0) }
+            pointer: { [weak self] in self?.phonePointer.perform($0) },
+            repairForeground: { [weak self] in self?.repairForeground() ?? false }
         ))
         server.onMessage = { [weak phoneRemote] id, data in phoneRemote?.receive(data, from: id) }
         server.onSessionClosed = { [weak phoneRemote] id in phoneRemote?.sessionClosed(id) }
@@ -204,6 +243,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.phoneRemote = phoneRemote
         if settings.phoneRemoteEnabled { startPhoneRemote() }
         observeAppActivation()
+    }
+
+    /// M7c L3: the window shows but MMTVL isn't active and nothing else is in front (after a launched app quit).
+    private func repairForeground() -> Bool {
+        guard !AppEnvironment.windowedMode, !NSApp.isActive,
+              let windowController, windowController.window.isVisible
+        else { return false }
+        let front = NSWorkspace.shared.frontmostApplication
+        guard front == nil || front?.bundleIdentifier == "com.apple.finder"
+                || front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+        else { return false }
+        Task { await windowController.bringForward(reason: "repair") }
+        return true
     }
 
     /// M7b D30: the YouTube DIAL receiver, in kiosk and -windowed mode alike.
@@ -226,7 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         endMirroringIfNeeded()
         launcher.homePressed()
         router?.castYouTube(query: query)
-        windowController?.show()
+        windowController?.show(reason: "cast")
     }
 
     /// M7b D32, L18–L22: keep Reflector running hidden and follow its mirroring sessions.
@@ -246,7 +298,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     || front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
             else { return }
             self?.router?.goHome()
-            self?.windowController?.show()
+            self?.windowController?.show(reason: "mirroringEnded")
         }
         reflector.onStatusChange = { [weak self] in self?.router?.settings.refreshStatus() }
         self.reflector = reflector
@@ -280,9 +332,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.phoneRemote?.frontAppChanged() }
+        ) { [weak self] notification in
+            let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            let bundleID = app?.bundleIdentifier
+            let isRegular = app?.activationPolicy == .regular
+            let isSelf = app?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+            MainActor.assumeIsolated {
+                self?.phoneRemote?.frontAppChanged()
+                self?.guardActivation(bundleID: bundleID, isRegular: isRegular, isSelf: isSelf)
+            }
         }
+    }
+
+    /// M7c L8b: an app MMTVL didn't open came forward; take the screen back like Home.
+    private func guardActivation(bundleID: String?, isRegular: Bool, isSelf: Bool) {
+        kioskGuard.isEnabled = isLockEffective
+        guard kioskGuard.appDidActivate(bundleID: bundleID, isRegular: isRegular, isSelf: isSelf) == .takeBack else { return }
+        launcher.homePressed()
+        router?.goHome()
+        windowController?.show(reason: "guard")
     }
 
     /// What Settings → Phone Remote shows.
@@ -456,9 +524,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // M7b L21: Home during mirroring ends it.
         endMirroringIfNeeded()
         // D18: the other app keeps running. An app still starting won't take the screen back when it's up.
+        kioskGuard.homePressed()
         launcher.homePressed()
-        router?.goHome()
-        windowController?.show()
+        router?.goHomeToStartTile()
+        windowController?.show(reason: "home")
     }
 
     /// L9: system wake (not display-only wake) returns to the launcher home screen,
@@ -477,7 +546,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             try? await Task.sleep(for: .seconds(2))
             router?.goHome()
-            windowController?.show()
+            windowController?.show(reason: "wake")
             eventTap?.ensureEnabled()
             if settings.phoneRemoteEnabled, case .failed = remoteServer?.state {
                 startPhoneRemote()
@@ -485,6 +554,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             castReceiver?.restart()
             reflector?.systemDidWake()
         }
+    }
+
+    /// M7c L6: the lock applies in kiosk mode with `kioskLock` on and the event tap running (Home must work).
+    /// Exit to Desktop turns it off until the next show (`KioskWindowController.isExitedToDesktop`).
+    private var lockConfigured: Bool {
+        !AppEnvironment.windowedMode && settings.kioskLock && settings.globalInputEnabled && eventTap?.isRunning == true
+    }
+
+    private var isLockEffective: Bool {
+        lockConfigured && windowController?.isExitedToDesktop != true
+    }
+
+    private func updateKioskLock() {
+        windowController?.lockOptions = lockConfigured
+    }
+
+    /// M7c L16: display sleep and system sleep stop the Live TV preview.
+    private func observeScreensSleep() {
+        let center = NSWorkspace.shared.notificationCenter
+        screensSleepObservers = [NSWorkspace.screensDidSleepNotification, NSWorkspace.willSleepNotification].map { name in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.router?.screensDidSleep() }
+            }
+        }
+        // M7c L26: the screen saver stops the Live TV preview; its end counts as activity.
+        let distributed = DistributedNotificationCenter.default()
+        screensSleepObservers.append(distributed.addObserver(
+            forName: Notification.Name("com.apple.screensaver.didstart"), object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.router?.screenSaverDidStart() }
+        })
+        screensSleepObservers.append(distributed.addObserver(
+            forName: Notification.Name("com.apple.screensaver.didstop"), object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.router?.screenSaverDidStop() }
+        })
+    }
+
+    /// L9: a logout, restart or shutdown may always quit MMTVL.
+    private func observePowerOff() {
+        powerOffObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willPowerOffNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.allowsTermination = true }
+        }
+    }
+
+    /// L9: ⌘Q and the Dock's Quit ask for the PIN while the kiosk lock is on.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !allowsTermination, isLockEffective, let router else { return .terminateNow }
+        Self.logger.info("Quit needs the PIN (kiosk lock)")
+        router.requestQuit()
+        if case .pin(.quit) = router.screen {
+            windowController?.show(reason: "quit")
+        }
+        return .terminateCancel
     }
 
     /// Applies a Settings change live (L3) and saves `settings.json`.
@@ -531,6 +658,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         reflector?.autoStart = new.reflectorAutoStart
+        router?.startTileID = new.homeStartTile
+        router?.livePreviewEnabled = new.homeLivePreview
+        router?.homeVersionLabel = new.showVersionOnHome ? AppVersion.current.label : nil
+        updateKioskLock()
         if kiosk && new.launchAtLogin != old.launchAtLogin {
             LoginItem.apply(enabled: new.launchAtLogin)
         }
@@ -567,8 +698,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startGlobalInput(showOnboarding: Bool) {
         guard let inputRouter else { return }
         let eventTap = self.eventTap ?? GlobalEventTap(inputRouter: inputRouter)
+        eventTap.lockActive = { [weak self] in self?.isLockEffective ?? false }
         self.eventTap = eventTap
-        if eventTap.start() { return }
+        if eventTap.start() {
+            updateKioskLock()
+            return
+        }
         if showOnboarding {
             router?.showAccessibilityOnboarding()
         }
@@ -576,6 +711,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func requestAccessibility() {
+        kioskGuard.openedSystemSettings()
         AccessibilityPermission.request()
         // Harmless when granted; prompts if PostEvent is ever separate from Accessibility (M5).
         SyntheticInput.requestAccess()
@@ -596,33 +732,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 } else {
                     startGlobalInput(showOnboarding: false)
                 }
+                updateKioskLock()
             }
             if router?.screen == .accessibilityOnboarding { router?.goHome() }
             router?.settings.refreshStatus()
             // Come back from System Settings.
-            windowController?.show()
+            windowController?.show(reason: "accessibilityGranted")
         }
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
         // L10: e.g. back from granting Accessibility or approving the login item in System Settings.
         router?.settings.refreshStatus()
+        router?.isAppActive = true
+        windowController?.appDidBecomeActive()
+    }
+
+    /// M7c L16: an app launched or Exit to Desktop stops the Live TV preview.
+    func applicationDidResignActive(_ notification: Notification) {
+        router?.isAppActive = false
+        windowController?.appDidResignActive()
     }
 
     private func makeSettingsEnvironment(kiosk: Bool) -> SettingsEnvironment {
         SettingsEnvironment(
             isKiosk: kiosk,
-            versionString: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?",
+            version: .current,
             applySettings: { [weak self] in self?.applySettings($0) },
             applyItems: { [weak self] in self?.applyItems($0) },
             isAccessibilityTrusted: { AccessibilityPermission.isTrusted },
             requestAccessibility: { [weak self] in self?.requestAccessibility() },
             loginItemStatus: { LoginItem.status },
-            openLoginItemsSettings: { LoginItem.openSystemSettings() },
+            openLoginItemsSettings: { [weak self] in
+                self?.kioskGuard.openedSystemSettings()
+                LoginItem.openSystemSettings()
+            },
             scanInstalledApps: {
                 await InstalledApps.scanInBackground(excludingBundleIDs: [Bundle.main.bundleIdentifier ?? ""])
             },
-            relaunch: { AppRelauncher.relaunch() },
+            relaunch: { [weak self] in AppRelauncher.relaunch(allowTermination: { self?.allowsTermination = true }) },
             exitToDesktop: { [weak self] in
                 self?.router?.goHome()
                 self?.windowController?.exitToDesktop()
@@ -687,7 +835,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             removeTilePicture: { [weak self] in self?.router?.tileArt.removePicture(for: $0) },
             castingStatus: { [weak self] in self?.castingSettingsStatus() ?? CastingSettingsStatus() },
             refreshCasting: { [weak self] in self?.refreshCasting() },
-            openAirPlaySettings: {
+            openAirPlaySettings: { [weak self] in
+                self?.kioskGuard.openedSystemSettings()
                 if let url = URL(string: "x-apple.systempreferences:com.apple.AirDrop-Handoff-Settings.extension") {
                     NSWorkspace.shared.open(url)
                 }
@@ -696,7 +845,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        windowController?.show()
+        windowController?.show(reason: "reopen")
         return true
     }
 }

@@ -7,13 +7,24 @@ import os
 /// What a tile shows (M7 L3, L4).
 enum TileArt: Equatable {
     /// A custom picture from the `tile-art` folder.
-    case picture(NSImage)
+    case picture(NSImage, backdrop: PictureBackdrop)
     /// Built-in destinations, `.url` tiles and apps without an icon.
     case gradient(top: Color, bottom: Color, symbol: String)
     /// Apps: the icon on a blurred backdrop of itself.
     case icon(NSImage)
     /// M7 L24: apps' designed art: a brand (or icon-derived) gradient with the app icon, else a symbol.
     case designed(top: Color, bottom: Color, accent: Color?, icon: NSImage?, symbol: String)
+    /// M7c L33: the app icon's glyph on its own background, which fills the tile (tvOS's flat brand tiles).
+    /// `top`/`bottom`: the icon's background just inside its shape's top and bottom edges.
+    case glyph(top: Color, bottom: Color, icon: NSImage)
+}
+
+/// M7c L33: what is behind a custom picture.
+enum PictureBackdrop: Equatable {
+    /// A photo: shown whole over a blurred copy of itself (step 16).
+    case blurred
+    /// A logo (transparent or plain edges): inset by `Theme.tileLogoInset` on this color.
+    case solid(Color)
 }
 
 /// Custom tile pictures: `<tile id>.png|.jpg|.jpeg|.heic` in `~/Library/Application Support/MMTVL/tile-art/` (L3).
@@ -26,13 +37,16 @@ final class TileArtStore {
     nonisolated static let extensions = ["png", "jpg", "jpeg", "heic"]
 
     let directory: URL
-    /// Loaded pictures by file name.
-    private var pictures: [String: NSImage] = [:]
+    /// Loaded pictures by file name, as art.
+    private var pictures: [String: TileArt] = [:]
     /// The last listing: file name → modification date.
     @ObservationIgnored private var scanned: [String: Date]?
     /// L24: colors derived from icons, by bundle id (nil = the icon had no usable color).
     @ObservationIgnored private var paletteCache: [String: ArtStyle?] = [:]
+    /// L33: glyph art's background and sharp icon, by bundle id (nil = the icon has no plain background).
+    @ObservationIgnored private var glyphCache: [String: (background: ArtStyle, icon: NSImage)?] = [:]
     @ObservationIgnored private var previews: [URL: NSImage?] = [:]
+    @ObservationIgnored private var previewArts: [URL: TileArt?] = [:]
     @ObservationIgnored private let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "TileArt")
 
     init(directory: URL = TileArtStore.defaultDirectory) {
@@ -48,7 +62,7 @@ final class TileArtStore {
     /// L3/L24: the custom picture, else the tile's art style. `bundleID` is the app's (the default browser's for that tile).
     func art(for item: LaunchItem, icon: NSImage?, bundleID: String? = nil) -> TileArt {
         if let name = customFileName(for: item.id), let picture = pictures[name] {
-            return .picture(picture)
+            return picture
         }
         return styledArt(for: item, icon: icon, bundleID: bundleID, style: item.tileArtStyle)
     }
@@ -69,6 +83,10 @@ final class TileArtStore {
                              symbol: item.iconSymbol ?? "rectangle.portrait.and.arrow.right")
         case .application, .defaultBrowser, .url:
             if style == .icon, let icon { return .icon(icon) }
+            // L33: the icon's glyph on its own background when it has a plain one, else L24's designed art.
+            if let icon, let glyph = glyph(of: icon, key: bundleID ?? item.id) {
+                return .glyph(top: glyph.background.top.color, bottom: glyph.background.bottom.color, icon: glyph.icon)
+            }
             let symbol = item.iconSymbol ?? "globe"
             guard let artStyle = bundleID.flatMap(AppArtCatalog.style(forBundleID:)) ?? palette(icon, key: bundleID ?? item.id)
             else {
@@ -85,27 +103,64 @@ final class TileArtStore {
     private func palette(_ icon: NSImage?, key: String) -> ArtStyle? {
         if let cached = paletteCache[key] { return cached }
         guard let icon else { return nil }
-        let style = Self.sample(icon).flatMap { IconPalette.style(fromRGBA: $0, width: IconPalette.sampleSize,
-                                                                   height: IconPalette.sampleSize) }
+        let side = IconPalette.sampleSize
+        let style = Self.sample(icon, side: side).flatMap { IconPalette.style(fromRGBA: $0, width: side, height: side) }
         paletteCache[key] = style
         return style
     }
 
-    /// The icon drawn into a small RGBA buffer.
-    private static func sample(_ icon: NSImage) -> [UInt8]? {
-        let side = IconPalette.sampleSize
+    /// L33: the icon's plain background and the icon rasterized at `Theme.glyphArtIconPixels` (SwiftUI draws
+    /// NSWorkspace's multi-size icons from a small representation, which looks soft at glyph art's size); cached.
+    private func glyph(of icon: NSImage, key: String) -> (background: ArtStyle, icon: NSImage)? {
+        if let cached = glyphCache[key] { return cached }
+        let pixels = Theme.glyphArtIconPixels
+        var rect = CGRect(x: 0, y: 0, width: pixels, height: pixels)
+        let side = IconBackground.sampleSize
+        let glyph = icon.cgImage(forProposedRect: &rect, context: nil, hints: nil).flatMap { image in
+            Self.sample(image, width: side, height: side)
+                .flatMap { IconBackground.style(fromRGBA: $0, width: side, height: side) }
+                .map { (background: $0, icon: NSImage(cgImage: image, size: CGSize(width: image.width, height: image.height))) }
+        }
+        glyphCache[key] = glyph
+        return glyph
+    }
+
+    /// The icon drawn into a small square RGBA buffer, top row first.
+    private static func sample(_ icon: NSImage, side: Int) -> [UInt8]? {
         guard let cgImage = icon.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
-        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        return sample(cgImage, width: side, height: side)
+    }
+
+    /// An image drawn into a `width` × `height` RGBA buffer, top row first.
+    private static func sample(_ image: CGImage, width: Int, height: Int) -> [UInt8]? {
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
         let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
-            guard let context = CGContext(data: buffer.baseAddress, width: side, height: side, bitsPerComponent: 8,
-                                          bytesPerRow: side * 4, space: CGColorSpaceCreateDeviceRGB(),
+            guard let context = CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                                          bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
                                           bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
             else { return false }
             context.interpolationQuality = .medium
-            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: side, height: side))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
             return true
         }
         return drawn ? pixels : nil
+    }
+
+    /// L33: a picture as tile art: a logo (transparent or plain edges) gets a solid backdrop and padding,
+    /// anything else the blurred fill.
+    static func pictureArt(_ image: NSImage) -> TileArt {
+        let side = PictureEdges.sampleSize
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let rgba = sample(cgImage, width: side, height: side)
+        else { return .picture(image, backdrop: .blurred) }
+        switch PictureEdges.classify(rgba: rgba, width: side, height: side) {
+        case .transparent(let lightContent):
+            return .picture(image, backdrop: .solid(lightContent ? Theme.tileLogoDarkBackdrop : Theme.tileLogoLightBackdrop))
+        case .solid(let color):
+            return .picture(image, backdrop: .solid(color.color))
+        case .busy:
+            return .picture(image, backdrop: .blurred)
+        }
     }
 
     /// L3: one directory listing; reloads only added or changed pictures. Creates the folder if missing.
@@ -130,7 +185,7 @@ final class TileArtStore {
         var updated = pictures.filter { listing[$0.key] != nil }
         for (name, date) in listing where previous[name] != date || updated[name] == nil {
             if let image = Self.loadPicture(directory.appending(path: name), maxPixels: Theme.tileArtMaxPixels) {
-                updated[name] = image
+                updated[name] = Self.pictureArt(image)
             } else {
                 updated[name] = nil
                 logger.error("Can't read tile picture \(name, privacy: .public)")
@@ -146,6 +201,8 @@ final class TileArtStore {
         let destination = directory.appending(path: "\(itemID).\(source.pathExtension.lowercased())")
         try FileManager.default.copyItem(at: source, to: destination)
         logger.info("Tile art for \(itemID, privacy: .public) set from a picture")
+        // L33: the copy keeps the source's modification date, which may match the replaced file's; read it regardless.
+        scanned?[destination.lastPathComponent] = nil
         reloadIfChanged()
     }
 
@@ -155,14 +212,18 @@ final class TileArtStore {
         reloadIfChanged()
     }
 
+    /// L33: lists URLs, not `directory.path()`, which is percent-encoded ("Application%20Support") and listed nothing.
     private func removePictureFiles(for itemID: String) {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path())) ?? []
-        for name in names {
-            let url = directory.appending(path: name)
+        let urls = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        for url in urls {
             guard Self.extensions.contains(url.pathExtension.lowercased()),
                   url.deletingPathExtension().lastPathComponent.lowercased() == itemID.lowercased()
             else { continue }
-            try? FileManager.default.removeItem(at: url)
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                logger.error("Can't remove tile picture \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
@@ -172,6 +233,14 @@ final class TileArtStore {
         let image = Self.loadPicture(url, maxPixels: Theme.tileArtPreviewPixels)
         previews[url] = image
         return image
+    }
+
+    /// L33: the preview as tile art (Settings' side column), cached by URL.
+    func previewArt(of url: URL) -> TileArt? {
+        if let cached = previewArts[url] { return cached }
+        let art = preview(of: url).map(Self.pictureArt)
+        previewArts[url] = art
+        return art
     }
 
     /// Pure, for tests: the file chosen for an id among names in the folder. Case-insensitive; png, jpg, jpeg, heic in that order.

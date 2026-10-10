@@ -133,6 +133,12 @@ nonisolated enum SettingKey: String, CaseIterable, Sendable {
     case youtubeCastEnabled
     /// M7b L18.
     case reflectorAutoStart
+    /// M7c L6.
+    case kioskLock
+    /// M7c L15.
+    case homeLivePreview
+    /// M7c L28.
+    case showVersionOnHome
 
     var keyPath: WritableKeyPath<AppSettings, Bool> {
         switch self {
@@ -144,6 +150,9 @@ nonisolated enum SettingKey: String, CaseIterable, Sendable {
         case .channelUpMovesUpList: \.channelUpMovesUpList
         case .youtubeCastEnabled: \.youtubeCastEnabled
         case .reflectorAutoStart: \.reflectorAutoStart
+        case .kioskLock: \.kioskLock
+        case .homeLivePreview: \.homeLivePreview
+        case .showVersionOnHome: \.showVersionOnHome
         }
     }
 }
@@ -194,6 +203,8 @@ nonisolated enum SettingsAction: Hashable, Sendable {
     case removeTileArtPicture(id: String)
     /// M7b L14: System Settings → General → AirDrop & Handoff.
     case openAirPlaySettings
+    /// M7c L32: the tile MMTVL opens on (`settings.json` `homeStartTile`).
+    case setStartTile(id: String)
 }
 
 nonisolated enum RowImage: Hashable, Sendable {
