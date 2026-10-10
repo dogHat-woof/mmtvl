@@ -416,38 +416,38 @@ struct ShelfCard { …; var backdrop: Image?; var logo: Image?; var minutesLeft:
 On the Mac mini, kiosk mode, Accessibility granted, a PIN set:
 
 - [x] Home returns from FaceTime, App Store, a Brave web app, the browser tile, Plex HTPC and Prime Video with the phone's Home, the keyboard Home key and the Siri Remote's TV button (Remote Buddy → Home key).
-- [ ] **Plex HTPC:** Home (phone, keyboard Home key, Siri Remote TV button) from Plex's home screen and from a playing video returns to MMTVL with Plex **still running**. The Plex tile resumes it at once, with no cold start. Record whether Remote Buddy lent the remote to Plex (Q21) and the setting that stops it.
-- [ ] After quitting Plex with the phone remote (5 times), the phone's arrows move focus on the home screen at once, with no mouse wiggle.
-- [ ] Esc in Plex still goes back inside Plex (L4).
-- [ ] ⌘Tab: no switcher in MMTVL. In Plex, no switcher, or the switch snaps back to MMTVL within about a second (record which, Q19).
-- [ ] ⌘Q, ⌘H, ⌥⌘Esc in MMTVL: ⌘Q asks for the PIN; the other two do nothing.
-- [ ] Moving the pointer to the bottom while Plex is in front and clicking Finder in the Dock (if the Dock shows) brings MMTVL back.
-- [ ] Exit to Desktop (PIN) → ⌘Tab and Finder work normally; Home brings MMTVL back and the lock is on again.
-- [ ] Settings → Keep Other Apps Out off → ⌘Tab works everywhere; on again → locked.
-- [ ] Settings → Accessibility grant and Settings → Casting → AirPlay still open System Settings without being snapped back.
-- [ ] A YouTube cast and a Reflector mirroring session still take over (they aren't fought by the guard).
-- [ ] The browser tile opens full screen with tabs and the address bar, cold and warm.
-- [ ] Live TV: Back with nothing on screen → guide; Back in the guide → home; Select on the playing channel in the guide → full screen without a spinner; Select in the video → info banner.
-- [ ] Multiview 1 + 4 and 2 × 2: no gaps; the highlight is visible.
-- [ ] Home backdrop: no big app icon for designed, app-icon and built-in tiles.
-- [ ] Plex focused: art fills the screen, crossfades every 8 s with a slow zoom; Up enters; Left/Right wrap; Select opens Plex HTPC; a PIN-protected Plex tile shows only a banner.
-- [ ] Live TV focused: the last channel plays muted behind the tiles; focusing an On Now card switches channel; Select → full screen with sound, no reconnect; moving off stops the stream; 10 minutes idle stops it; the display still sleeps.
-- [ ] Live TV preview with Multiview left active: the preview shows the highlighted window's channel; Select restores Multiview, and that window doesn't reconnect.
+- [x] **Plex HTPC:** Home (phone, keyboard Home key, Siri Remote TV button) from Plex's home screen and from a playing video returns to MMTVL with Plex **still running**. The Plex tile resumes it at once, with no cold start. Record whether Remote Buddy lent the remote to Plex (Q21) and the setting that stops it. *(user 2026-10-10, build 17)*
+- [x] After quitting Plex with the phone remote (5 times), the phone's arrows move focus on the home screen at once, with no mouse wiggle. *(user 2026-10-10, build 17)*
+- [x] Esc in Plex still goes back inside Plex (L4). *(user 2026-10-10, build 17)*
+- [ ] ⌘Tab: no switcher in MMTVL. In Plex, no switcher, or the switch snaps back to MMTVL within about a second (record which, Q19). *(to test later)*
+- [ ] ⌘Q, ⌘H, ⌥⌘Esc in MMTVL: ⌘Q asks for the PIN; the other two do nothing. *(to test later)*
+- [x] Moving the pointer to the bottom while Plex is in front and clicking Finder in the Dock (if the Dock shows) brings MMTVL back. *(closed by the user 2026-10-10 as not needed; not tested)*
+- [x] Exit to Desktop (PIN) → ⌘Tab and Finder work normally; Home brings MMTVL back and the lock is on again. *(user 2026-10-10, build 17)*
+- [ ] Settings → Keep Other Apps Out off → ⌘Tab works everywhere; on again → locked. *(to test later)*
+- [ ] Settings → Accessibility grant and Settings → Casting → AirPlay still open System Settings without being snapped back. *(to test later)*
+- [ ] A YouTube cast and a Reflector mirroring session still take over (they aren't fought by the guard). *(to test later)*
+- [x] The browser tile opens full screen with tabs and the address bar, cold and warm. *(user 2026-10-10, build 17)*
+- [x] Live TV: Back with nothing on screen → guide; Back in the guide → home; Select on the playing channel in the guide → full screen without a spinner; Select in the video → info banner. *(user 2026-10-10, build 17)*
+- [x] Multiview 1 + 4 and 2 × 2: no gaps; the highlight is visible. *(user 2026-10-10, build 17: 1 + 4 works; 2 × 2 closed untested, the user hadn't found it: it's "2 × 2" in Multiview's layout choices)*
+- [x] Home backdrop: no big app icon for designed, app-icon and built-in tiles. *(user 2026-10-10, build 17)*
+- [x] Plex focused: art fills the screen, crossfades every 8 s with a slow zoom; Up enters; Left/Right wrap; Select opens Plex HTPC; a PIN-protected Plex tile shows only a banner. *(user 2026-10-10, build 17)*
+- [x] Live TV focused: the last channel plays muted behind the tiles; focusing an On Now card switches channel; Select → full screen with sound, no reconnect; moving off stops the stream; 10 minutes idle stops it; the display still sleeps. *(user 2026-10-10, build 17)*
+- [x] Live TV preview with Multiview left active: the preview shows the highlighted window's channel; Select restores Multiview, and that window doesn't reconnect. *(user 2026-10-10, build 17)*
 - [x] Siri Remote (step 15): one Select = one PIN digit and one letter in YouTube search, with Game Controllers on. *(build 17, user 2026-10-10)*
-- [ ] Custom tile pictures (step 16): square, tall and wide pictures show whole, with a blurred fill and no clipped edges.
-- [ ] Tile art (step 34): Settings → FaceTime → Tile Art → Remove Picture (or Designed) shows the default art again at once; the YouTube logo picture is padded on dark; Plex, FaceTime, Prime Video and the web apps show their glyph on a full-bleed color with no visible icon outline.
+- [x] Custom tile pictures (step 16): square, tall and wide pictures show whole, with a blurred fill and no clipped edges. *(user 2026-10-10, build 17)*
+- [x] Tile art (step 34): Settings → FaceTime → Tile Art → Remove Picture (or Designed) shows the default art again at once; the YouTube logo picture is padded on dark; Plex, FaceTime, Prime Video and the web apps show their glyph on a full-bleed color with no visible icon outline. *(user 2026-10-10, build 17)*
 - [x] Prime Video (step 17) *(closed by the user 2026-10-10)*: Back on its home screen returns to MMTVL with Prime still running; Back inside Prime stays Prime's Back.
-- [ ] tvOS 26 layout (step 20): one row of six tiles in a glass dock, the next row peeking, the title only under the focused tile; Down scrolls into a grid with the hero dimmed.
-- [ ] Hero info (step 21): Plex and Live TV show their logo/title top-left; Live TV Up then Left/Right switch channels and the video follows; Plex keeps crossfading.
-- [ ] Transitions (step 22): Select on Live TV slides the tiles away into full screen with sound, no spinner, no flicker; Select on Plex fades to the art first (record what macOS's switch to Plex looks like).
-- [ ] Channel logos (step 23): the second time the guide or a Live page shows a channel, its logo is there at once; after a relaunch too.
-- [ ] Preview preload (steps 24, 25): a few seconds after the home screen appears, focusing Live TV shows the video at once; Back from Live TV lands on the home screen with the channel still playing; the stream stops while the screen saver runs and after 10 minutes idle.
-- [ ] Stream timing (step 26): compare "Playing after … ms" for zapping in Live TV with the provider's website; record typical numbers in *Research & findings*.
+- [x] tvOS 26 layout (step 20): one row of six tiles in a glass dock, the next row peeking, the title only under the focused tile; Down scrolls into a grid with the hero dimmed. *(user 2026-10-10, build 17)*
+- [x] Hero info (step 21): Plex and Live TV show their logo/title top-left; Live TV Up then Left/Right switch channels and the video follows; Plex keeps crossfading. *(user 2026-10-10, build 17)*
+- [ ] Transitions (step 22): Select on Live TV slides the tiles away into full screen with sound, no spinner, no flicker; Select on Plex fades to the art first (record what macOS's switch to Plex looks like). *(user 2026-10-10, build 17: a slight flicker on Select into Live TV; still open)*
+- [x] Channel logos (step 23): the second time the guide or a Live page shows a channel, its logo is there at once; after a relaunch too. *(user 2026-10-10, build 17)*
+- [x] Preview preload (steps 24, 25): a few seconds after the home screen appears, focusing Live TV shows the video at once; Back from Live TV lands on the home screen with the channel still playing; the stream stops while the screen saver runs and after 10 minutes idle. *(user 2026-10-10, build 17; Back from Live TV now lands on the start tile, L32)*
+- [x] Stream timing (step 26): compare "Playing after … ms" for zapping in Live TV with the provider's website; record typical numbers in *Research & findings*. *(user 2026-10-10, build 17: zapping is fast enough; no numbers recorded)*
 - [x] Back to the start tile (L32, build 17): Back out of Settings, Live TV and YouTube lands on the start tile; Back on a lower row of tiles jumps to it. *(user 2026-10-10)*
-- [ ] Start tile (step 31): a fresh launch (and Settings → Relaunch MMTVL) shows the dock with Plex focused and the next row peeking; Settings → a tile → Start Here changes it.
-- [ ] Plex exit (step 32): watch something in Plex HTPC, stop it, exit Plex: MMTVL's home screen comes back. If the screen goes black again, try the phone's Home and the keyboard Home key (fn+←), then run the `log show` line for categories AppLauncher/Foreground/KioskGuard.
-- [ ] Stranded Space (step 33): exit Plex HTPC 3 times and close a web app: MMTVL's home screen shows each time (within about a second). If the log shows "joined the active Space", check that Home from Plex still works and Plex keeps running.
-- [ ] **Alerts (Q18, record only):** with FaceTime full screen, an incoming FaceTime call banner: can the phone trackpad click Accept? With MMTVL in front: does the banner show over it? In Google Meet (Brave web app): does the camera/microphone prompt appear, and can it be accepted with the phone trackpad or Return?
+- [x] Start tile (step 31): a fresh launch (and Settings → Relaunch MMTVL) shows the dock with Plex focused and the next row peeking; Settings → a tile → Start Here changes it. *(user 2026-10-10, build 17)*
+- [x] Plex exit (step 32): watch something in Plex HTPC, stop it, exit Plex: MMTVL's home screen comes back. If the screen goes black again, try the phone's Home and the keyboard Home key (fn+←), then run the `log show` line for categories AppLauncher/Foreground/KioskGuard. *(user 2026-10-10, build 17: worked once. The user prefers Home over exiting Plex: with the Siri Remote's TV button mapped, Home leaves Plex HTPC running in the background, quick to open and to leave)*
+- [x] Stranded Space (step 33): exit Plex HTPC 3 times and close a web app: MMTVL's home screen shows each time (within about a second). If the log shows "joined the active Space", check that Home from Plex still works and Plex keeps running. *(user 2026-10-10, build 17)*
+- [ ] **Alerts (Q18, record only):** with FaceTime full screen, an incoming FaceTime call banner: can the phone trackpad click Accept? With MMTVL in front: does the banner show over it? In Google Meet (Brave web app): does the camera/microphone prompt appear, and can it be accepted with the phone trackpad or Return? *(to test later)*
 
 ## Risks & fallbacks
 
@@ -487,4 +487,5 @@ Executors append here when the plan is wrong or ambiguous: the date, the step, w
 - **2026-10-10, step 33 (small, no stop):** the mini's log showed MMTVL frontmost and working behind a dead Plex full-screen Space, so step 2's fallback (`[.canJoinAllSpaces, .fullScreenAuxiliary]`) is used, but only after a show finds the window off screen, not from launch, so Home from a running full-screen app keeps today's Space switch until it's checked on the TV. Once used, it stays for the session (switching back could strand the window again). **Same day:** with MMTVL killed the screen stayed black with only the cursor; `killall Dock` brought the desktop back. So the Dock (which owns Spaces) had left the dead Space up, and restarting it is added as the recovery's second rung.
 - **2026-10-10, steps 2, 17, 18 (user):** step 2 works on the mini (Home brings MMTVL back). Steps 17 and 18 closed by the user without separate checks (17: complete based on the other verification; 18: closed).
 - **2026-10-10, step 15 (plan wrong, fixed differently):** on build 16 one Select on YouTube's on-screen keyboard still types twice. The plan's cause can't be it: the mini's TV button was learned as **controller A** for Home, which moved A off Select, so the clickpad isn't A (it would go Home). The event tap acts only on global bindings, so it doesn't double Return either. Likely cause: the local monitor consumed Return's **key-down** (MMTVL then sends the page its own Enter key-down + key-up) but matched no key-ups, so the real **key-up** of Return reached the YouTube web view, and leanback's keyboard counted it as a second press (a video opened once, because the second press landed while the player loaded). Fix: `InputRouter`'s monitor now also matches key-ups and consumes the key-up of any key whose key-down it consumed (`ConsumedKeys`, tests in `ConsumedKeysTests`). The planned Siri Remote skip in `ControllerInput` was not built; it would also break the TV button as Home. Not reproduced on the dev Mac. **Confirmed by the user on build 16:** a keyboard's Return also types twice in YouTube search, so the double comes from the key-up, not the Siri Remote.
+- **2026-10-10, step 13 (user, build 17):** the on-TV pass. Working: Home and Esc in Plex HTPC, the phone after quitting Plex, Exit to Desktop, the browser tile, Live TV keys, Multiview 1 + 4, the home backdrop, the Plex carousel, the Live TV preview (also with Multiview), custom pictures and tile art, the tvOS 26 layout, hero info, channel logos, the preview preload, zap speed, the start tile, Plex exit and the stranded Space. Closed untested: the Dock's Finder (not needed) and Multiview 2 × 2. **Open:** a slight flicker on Select into Live TV (transitions, step 22). **To test later:** ⌘Tab, ⌘Q/⌘H/⌥⌘Esc, Keep Other Apps Out off/on, System Settings from Settings, a YouTube cast and Reflector with the guard, and alerts (Q18).
 
