@@ -869,9 +869,10 @@ struct LauncherRootView: View {
         }
     }
 
-    /// The backdrop's dim as the home rows scroll (M7c L19); the preview video follows it.
+    /// The backdrop's dim as the home rows scroll (M7c L19); the preview video follows it. Leaving home, the video
+    /// comes up to full strength with the exit animation, as Live TV shows it (M7c step 35).
     private var homeFade: Double {
-        HomeLayout.heroOpacity(focusedRow: router.focus.position.row)
+        router.isLeavingHome ? 1 : HomeLayout.heroOpacity(focusedRow: router.focus.position.row)
     }
 
     @ViewBuilder

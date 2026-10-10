@@ -405,6 +405,11 @@ struct ShelfCard { …; var backdrop: Image?; var logo: Image?; var minutesLeft:
   - Remove Picture deletes the file (folders with a space), a style removes the picture, logo pictures are padded on a matching color, apps get glyph art when their icon has a plain background.
   - Done when: tests pass; on the mini, Remove Picture (or Designed) brings FaceTime's art back, the YouTube logo picture has padding, and app tiles look like tvOS's flat brand tiles.
 
+- [x] **35. No flicker on Select into Live TV** (item 22, user report on build 17) *(tests pass; checked with screen captures on the dev Mac; closed by the user 2026-10-10, build 18)*: files: `Launcher/HomeView.swift`, `Launcher/AppRouter.swift`, `IPTV/Player/MPVVideoView.swift`
+  - Cause: while the Live TV preview plays, the home backdrop's art is hidden but its scrims (the bottom gradient to 75 % black, the clock's and the hero info's corner gradients) stay over the video. Select faded the tiles, clock and hero text (L22) but not the backdrop, so the scrims vanished in one frame when Live TV opened and the video jumped in brightness. From a lower row, the video was also dimmed (`homeGridHeroOpacity`) and jumped to full strength. Ruled out first with logs: the video view moves straight into Live TV's view tree and player 0's GL context survives (no new context on Select).
+  - Fix: with the preview showing, the backdrop fades with the exit animation (`isLeaving && revealsLivePreview`), and the video's opacity goes to 1 while leaving home. The MPV log now says "Video GL context created/released" (notice), so a black flash from a new context would show in `log show`.
+  - Done when: Select on Live TV (tile or a Live page) slides the tiles away and the video brightens smoothly into full screen, with no flash.
+
 ## Tests
 
 - New: `ForegrounderTests`, `KioskLockTests` (shortcuts + guard).
@@ -439,7 +444,7 @@ On the Mac mini, kiosk mode, Accessibility granted, a PIN set:
 - [x] Prime Video (step 17) *(closed by the user 2026-10-10)*: Back on its home screen returns to MMTVL with Prime still running; Back inside Prime stays Prime's Back.
 - [x] tvOS 26 layout (step 20): one row of six tiles in a glass dock, the next row peeking, the title only under the focused tile; Down scrolls into a grid with the hero dimmed. *(user 2026-10-10, build 17)*
 - [x] Hero info (step 21): Plex and Live TV show their logo/title top-left; Live TV Up then Left/Right switch channels and the video follows; Plex keeps crossfading. *(user 2026-10-10, build 17)*
-- [ ] Transitions (step 22): Select on Live TV slides the tiles away into full screen with sound, no spinner, no flicker; Select on Plex fades to the art first (record what macOS's switch to Plex looks like). *(user 2026-10-10, build 17: a slight flicker on Select into Live TV; still open)*
+- [x] Transitions (step 22): Select on Live TV slides the tiles away into full screen with sound, no spinner, no flicker; Select on Plex fades to the art first (record what macOS's switch to Plex looks like). *(user 2026-10-10, build 17: a slight flicker on Select into Live TV; fixed in step 35, closed by the user with build 18)*
 - [x] Channel logos (step 23): the second time the guide or a Live page shows a channel, its logo is there at once; after a relaunch too. *(user 2026-10-10, build 17)*
 - [x] Preview preload (steps 24, 25): a few seconds after the home screen appears, focusing Live TV shows the video at once; Back from Live TV lands on the home screen with the channel still playing; the stream stops while the screen saver runs and after 10 minutes idle. *(user 2026-10-10, build 17; Back from Live TV now lands on the start tile, L32)*
 - [x] Stream timing (step 26): compare "Playing after … ms" for zapping in Live TV with the provider's website; record typical numbers in *Research & findings*. *(user 2026-10-10, build 17: zapping is fast enough; no numbers recorded)*
