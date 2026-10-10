@@ -319,7 +319,7 @@ struct ShelfCard { …; var backdrop: Image?; var logo: Image?; var minutesLeft:
   - Run the full test suite.
   - Done when: all tests pass and the docs match the code.
 
-- [ ] **15. Siri Remote: one Select, not two** *(2026-10-10: still doubled in YouTube search on build 16, a keyboard's Return too; the planned cause is ruled out, see Deviations; key-up fix in build 17, pending on the mini)* (needs the user's confirmation first): files: `Input/ControllerInput.swift`, `MMTVLTests/` (if a pure helper is added)
+- [x] **15. Siri Remote: one Select, not two** *(2026-10-10: doubled in YouTube search on build 16, a keyboard's Return too; the planned cause was ruled out, see Deviations; the key-up fix in build 17 was confirmed by the user)* (needs the user's confirmation first): files: `Input/ControllerInput.swift`, `MMTVLTests/` (if a pure helper is added)
   - First the user confirms the cause (*Follow-ups*): with Game Controllers off, PIN entry and YouTube search take one Select per press. If it doesn't help, record what the logs show in *Deviations* and stop.
   - Then: `ControllerInput.configure` skips controllers whose `productCategory` is `GCProductCategorySiriRemote` while Remote Buddy drives the remote (log once: "Siri Remote ignored; Remote Buddy drives it"). Real gamepads stay as they are. Revisit if step 19 leads to an own driver.
   - Done when: with Game Controllers on, one Select is one PIN digit and one letter in YouTube search, and a gamepad still works.
@@ -433,7 +433,7 @@ On the Mac mini, kiosk mode, Accessibility granted, a PIN set:
 - [ ] Plex focused: art fills the screen, crossfades every 8 s with a slow zoom; Up enters; Left/Right wrap; Select opens Plex HTPC; a PIN-protected Plex tile shows only a banner.
 - [ ] Live TV focused: the last channel plays muted behind the tiles; focusing an On Now card switches channel; Select → full screen with sound, no reconnect; moving off stops the stream; 10 minutes idle stops it; the display still sleeps.
 - [ ] Live TV preview with Multiview left active: the preview shows the highlighted window's channel; Select restores Multiview, and that window doesn't reconnect.
-- [ ] Siri Remote (step 15): one Select = one PIN digit and one letter in YouTube search, with Game Controllers on.
+- [x] Siri Remote (step 15): one Select = one PIN digit and one letter in YouTube search, with Game Controllers on. *(build 17, user 2026-10-10)*
 - [ ] Custom tile pictures (step 16): square, tall and wide pictures show whole, with a blurred fill and no clipped edges.
 - [ ] Tile art (step 34): Settings → FaceTime → Tile Art → Remove Picture (or Designed) shows the default art again at once; the YouTube logo picture is padded on dark; Plex, FaceTime, Prime Video and the web apps show their glyph on a full-bleed color with no visible icon outline.
 - [x] Prime Video (step 17) *(closed by the user 2026-10-10)*: Back on its home screen returns to MMTVL with Prime still running; Back inside Prime stays Prime's Back.
@@ -443,6 +443,7 @@ On the Mac mini, kiosk mode, Accessibility granted, a PIN set:
 - [ ] Channel logos (step 23): the second time the guide or a Live page shows a channel, its logo is there at once; after a relaunch too.
 - [ ] Preview preload (steps 24, 25): a few seconds after the home screen appears, focusing Live TV shows the video at once; Back from Live TV lands on the home screen with the channel still playing; the stream stops while the screen saver runs and after 10 minutes idle.
 - [ ] Stream timing (step 26): compare "Playing after … ms" for zapping in Live TV with the provider's website; record typical numbers in *Research & findings*.
+- [x] Back to the start tile (L32, build 17): Back out of Settings, Live TV and YouTube lands on the start tile; Back on a lower row of tiles jumps to it. *(user 2026-10-10)*
 - [ ] Start tile (step 31): a fresh launch (and Settings → Relaunch MMTVL) shows the dock with Plex focused and the next row peeking; Settings → a tile → Start Here changes it.
 - [ ] Plex exit (step 32): watch something in Plex HTPC, stop it, exit Plex: MMTVL's home screen comes back. If the screen goes black again, try the phone's Home and the keyboard Home key (fn+←), then run the `log show` line for categories AppLauncher/Foreground/KioskGuard.
 - [ ] Stranded Space (step 33): exit Plex HTPC 3 times and close a web app: MMTVL's home screen shows each time (within about a second). If the log shows "joined the active Space", check that Home from Plex still works and Plex keeps running.
