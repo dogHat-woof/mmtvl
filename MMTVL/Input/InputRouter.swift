@@ -21,6 +21,8 @@ final class InputRouter {
     @ObservationIgnored var captureHandler: ((InputBinding.Trigger) -> Void)?
 
     @ObservationIgnored private var monitor: Any?
+    /// M7c step 15: key-ups that belong to consumed key-downs.
+    @ObservationIgnored private var consumedKeys = ConsumedKeys()
 
     init(bindings: KeyBindings) {
         self.bindings = bindings
@@ -28,12 +30,19 @@ final class InputRouter {
 
     func start() {
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .systemDefined, .scrollWheel]) { [weak self] event in
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .systemDefined, .scrollWheel]) { [weak self] event in
             // L6: our own synthetic events (phone text, keys for other apps) pass through untouched.
             if let cg = event.cgEvent, SyntheticInput.isOwn(cg) { return event }
             guard let self else { return event }
             switch event.type {
-            case .keyDown: return self.handleKeyDown(event) ? nil : event
+            case .keyDown:
+                let consumed = self.handleKeyDown(event)
+                self.consumedKeys.keyDown(event.keyCode, consumed: consumed)
+                return consumed ? nil : event
+            case .keyUp:
+                // M7c step 15: a consumed key's key-up is consumed too. YouTube's page got Return's key-up after
+                // MMTVL's own Enter, and its on-screen keyboard typed the letter twice.
+                return self.consumedKeys.keyUp(event.keyCode) ? nil : event
             case .systemDefined: return self.handleSystemDefined(event) ? nil : event
             case .scrollWheel:
                 self.onScrollWheel?(event.scrollingDeltaY, event.hasPreciseScrollingDeltas)
@@ -106,5 +115,20 @@ final class InputRouter {
             dispatch(binding.command, isGlobal: binding.isGlobal)
         }
         return true
+    }
+}
+
+/// M7c step 15: which keys' key-downs the router consumed, so their key-ups are consumed as well
+/// (a view, e.g. YouTube's web page, would otherwise see a lone key-up).
+nonisolated struct ConsumedKeys {
+    private var codes: Set<UInt16> = []
+
+    mutating func keyDown(_ code: UInt16, consumed: Bool) {
+        if consumed { codes.insert(code) } else { codes.remove(code) }
+    }
+
+    /// True when the key-up should be consumed.
+    mutating func keyUp(_ code: UInt16) -> Bool {
+        codes.remove(code) != nil
     }
 }

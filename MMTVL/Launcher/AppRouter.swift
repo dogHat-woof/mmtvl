@@ -159,7 +159,7 @@ final class AppRouter {
     @ObservationIgnored var startTileID = "plex"
 
     /// M7c L32: Home (any remote, the keyboard, the phone, from any screen or app) shows the home screen on the
-    /// start tile.
+    /// start tile; so does Back when it reaches the home screen (user request 2026-10-10).
     func goHomeToStartTile() {
         goHome()
         withAnimation(Theme.focusAnimation) { focusStartTile(id: startTileID) }
@@ -523,7 +523,11 @@ final class AppRouter {
                     activate(index)
                 }
                 return true
-            case .back, .home:
+            case .back:
+                // M7c L32: Back on the tiles goes to the start tile, like Home.
+                withAnimation(Theme.focusAnimation) { focusStartTile(id: startTileID) }
+                return true
+            case .home:
                 return true
             case .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown:
                 return false
@@ -535,7 +539,7 @@ final class AppRouter {
                 onRequestAccessibility?()
                 return true
             case .back, .home:
-                goHome()
+                goHomeToStartTile()
                 return true
             case .up, .down, .left, .right, .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown:
                 return false
@@ -548,8 +552,8 @@ final class AppRouter {
             }
             if settings.handle(command) { return true }
             if command == .back {
-                // Back on the root page.
-                goHome()
+                // Back on the root page; M7c L32: on the start tile.
+                goHomeToStartTile()
                 return true
             }
             return false
@@ -572,7 +576,8 @@ final class AppRouter {
             case .handled:
                 break
             case .leave:
-                goHome()
+                // M7c L32: Back out of Live TV lands on the start tile, like Home.
+                goHomeToStartTile()
             case .openSettings:
                 // Live TV isn't set up: Select opens Settings (PIN-guarded like the tile).
                 liveTV.leave()

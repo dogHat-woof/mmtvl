@@ -123,9 +123,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         router.onRequestAccessibility = { [weak self] in self?.requestAccessibility() }
         launcher.onReturnToLauncher = { [weak windowController] in windowController?.show(reason: "appQuit") }
         launcher.onOpened = { [weak self] in self?.kioskGuard.opened(bundleIDs: $0) }
-        // Leanback's own exit; it may fire several times, going home is idempotent.
+        // Leanback's own exit (Back at its top level); it may fire several times, going home is idempotent.
+        // M7c L32: on the start tile, like Home.
         youtube.onExit = { [weak router] in
-            if router?.screen == .youtube { router?.goHome() }
+            if router?.screen == .youtube { router?.goHomeToStartTile() }
         }
         iptvLibrary.onStatusChange = { [weak router] in router?.settings.refreshStatus() }
         plex.onChange = { [weak router] in
