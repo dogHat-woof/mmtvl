@@ -51,6 +51,8 @@ nonisolated final class MPVVideoLayer: CAOpenGLLayer, @unchecked Sendable {
 
     override func copyCGLContext(forPixelFormat pixelFormat: CGLPixelFormatObj) -> CGLContextObj {
         let context = super.copyCGLContext(forPixelFormat: pixelFormat)
+        // M7c: a new context means a new render context, i.e. black until mpv draws again (the flicker on Select).
+        Self.logger.notice("Video GL context created")
         CGLSetCurrentContext(context)
         // Only one render context can exist per mpv core.
         if let renderContext {
@@ -62,6 +64,7 @@ nonisolated final class MPVVideoLayer: CAOpenGLLayer, @unchecked Sendable {
     }
 
     override func releaseCGLContext(_ context: CGLContextObj) {
+        Self.logger.notice("Video GL context released")
         CGLSetCurrentContext(context)
         if let renderContext {
             mpv_render_context_free(renderContext)

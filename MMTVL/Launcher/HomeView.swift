@@ -43,6 +43,9 @@ struct HomeView: View {
             )
             .opacity(HomeLayout.heroOpacity(focusedRow: focus.position.row))
             .animation(Theme.focusAnimation, value: focus.position.row)
+            // M7c step 35: over the Live TV preview the backdrop is only scrims; they fade with the rest of the home
+            // UI, or they'd vanish in one frame when Live TV opens and the video would jump in brightness.
+            .opacity(isLeaving && revealsLivePreview ? 0 : 1)
 
             TopShelfView(
                 item: focusedItem,

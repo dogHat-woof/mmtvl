@@ -23,7 +23,7 @@ From the couch, the home screen feels like tvOS and the remote is fully configur
 
 ## Out of scope
 
-- **M7b (planned after M7):** phone remote home-screen icon, phone trackpad mode, YouTube DIAL discovery, the casting setup checklist (AirPlay/Plex/YouTube), and the **on-TV QA pass** for M7 + M7b. Research already done for M7b is in [M7b-notes.md](M7b-notes.md).
+- **M7b (planned after M7):** phone remote home-screen icon, phone trackpad mode, YouTube DIAL discovery, the casting setup checklist (AirPlay/Plex/YouTube), and the **on-TV QA pass** for M7 + M7b. Research already done for M7b is in [M7b-notes.md](../M7b-notes.md).
 - Jumping Plex HTPC to a specific item (`plex://` deep link; unverified, Q11). Plex shelf cards only open Plex.
 - Plex's newer JWT sign-in (the PIN flow is "legacy" but works; see *Research*).
 - YouTube top shelf content (there is no API without an account integration). YouTube gets a banner.

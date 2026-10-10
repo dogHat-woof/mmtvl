@@ -696,7 +696,7 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
   - Done when: docs match the code.
 
 - [ ] **12. On-TV QA pass, M7 + M7b (with the user)**: no files except plan checkboxes and *Deviations*
-  - On the Mac mini over HDMI, kiosk mode, Release-like Debug build: walk M7's *Manual verification* list (in `M7-launcher-polish.md`) and this plan's, ticking each item the user confirms in its own plan. Include Q9 (does "Add to Home Screen" open the remote without browser chrome on iOS 26 / Android) and Q14 (Plex mobile app → Plex HTPC).
+  - On the Mac mini over HDMI, kiosk mode, Release-like Debug build: walk M7's *Manual verification* list (in `archive/M7-launcher-polish.md`) and this plan's, ticking each item the user confirms in its own plan. Include Q9 (does "Add to Home Screen" open the remote without browser chrome on iOS 26 / Android) and Q14 (Plex mobile app → Plex HTPC).
   - Record every problem under *Deviations & questions* of the plan it belongs to, as a follow-up, with what was seen. Fix only small, obvious issues the user asks to fix now, each built and tested.
   - Done when: the user has gone through both lists and decided which follow-ups remain.
 

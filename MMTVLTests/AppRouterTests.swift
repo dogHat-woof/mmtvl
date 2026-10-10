@@ -76,7 +76,7 @@ struct AppRouterTests {
         #expect(router.focusedItem?.id == "plex")
     }
 
-    /// M7c L32: Home lands on the start tile, from the home screen and from another screen; Back keeps the place.
+    /// M7c L32: Home lands on the start tile, from the home screen and from another screen.
     @Test func homeGoesToTheStartTile() {
         let router = makeRouter()
         router.startTileID = "iptv"
@@ -99,6 +99,38 @@ struct AppRouterTests {
         #expect(router.focusedItem?.id == "iptv")
     }
 
+    /// M7c L32 (2026-10-10): Back that reaches the home screen lands on the start tile too.
+    @Test func backToHomeGoesToTheStartTile() {
+        let liveTV = FakeLiveTV()
+        let router = makeRouter(liveTV: liveTV)
+        router.startTileID = "iptv"
+
+        // Back on the tiles, from another row.
+        _ = router.handle(.down)
+        #expect(router.focus.position.row == 1)
+        _ = router.handle(.back)
+        #expect(router.focusedItem?.id == "iptv")
+        #expect(router.focus.position.row == 0)
+
+        // Back on Settings' root page.
+        let settingsIndex = router.visibleItems.firstIndex { $0.isSettingsTile }!
+        router.hover(settingsIndex)
+        router.activate(settingsIndex)
+        #expect(router.screen == .settings)
+        _ = router.handle(.back)
+        #expect(router.screen == .home)
+        #expect(router.focusedItem?.id == "iptv")
+
+        // Back out of Live TV's guide (opened from its tile, now focused), with another start tile.
+        router.startTileID = "plex"
+        _ = router.handle(.select)
+        #expect(router.screen == .liveTV)
+        liveTV.outcome = .leave
+        _ = router.handle(.back)
+        #expect(router.screen == .home)
+        #expect(router.focusedItem?.id == "plex")
+    }
+
     /// M7c L32: the pointer resting over the home screen at launch (no move yet) doesn't take the focus.
     @Test func aRestingPointerDoesntMoveTheStartFocus() {
         let router = makeRouter()
@@ -115,13 +147,14 @@ struct AppRouterTests {
         #expect(router.screen == .settings)
     }
 
-    @Test func backOnSettingsRootGoesHomeKeepingFocus() {
+    /// M7c L32 (2026-10-10): onto the start tile, not the Settings tile.
+    @Test func backOnSettingsRootGoesHomeToTheStartTile() {
         let router = makeRouter()
         openSettingsFromTile(router)
         let handled = router.handle(.back)
         #expect(handled)
         #expect(router.screen == .home)
-        #expect(router.visibleItems[router.focus.index!].isSettingsTile)
+        #expect(router.focusedItem?.id == "plex")
     }
 
     @Test func homeInSettingsGoesHome() {
