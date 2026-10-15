@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Status | Planned |
-| Depends on | M7b (code complete; its hardware checks can run in parallel) |
+| Depends on | M7b (code complete; its hardware checks, now M7d, can run in parallel) |
 | Master plan decisions used | D4, D9, D10, D13, D15, D19, D22, D24, D28; new **D33** (Developer ID + notarized releases on GitHub, no Homebrew, no App Store), **D34** (open source: MIT, notices, scrubbed public history) |
 | Planned | 2026-10-06 |
 
@@ -19,7 +19,7 @@ Anyone can download MMTVL from the repo's GitHub Releases page (a zip). It opens
 - CI release builds (GitHub Actions with signing secrets). Releases are built on the user's Mac with `scripts/release.sh`.
 - DMG packaging. The release asset is a zip (L6).
 - Changing app behavior or defaults for new users (first-run wizard, casting off by default). Possible later.
-- M7b's hardware checks (steps 5, 7, 8, 10, 12 of that plan) stay in M7b.
+- M7b's hardware checks (steps 5, 7, 8, 10, 12 of that plan) moved to M7d (2026-10-14) and stay there.
 
 ## Research & findings
 

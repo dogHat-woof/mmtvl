@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | In progress |
+| Status | Done |
 | Depends on | M7b (code complete; this fixes what its on-TV QA found) |
 | Master plan decisions used | D1, D2, D4, D14, D15, D17, D18, D20, D22, D24, D28, D29; new **D35** (reliable foregrounding), **D36** (kiosk lock), **D37** (home hero: Plex carousel, Live TV preview), **D38** (tvOS 26 dock layout, Live TV pages, transitions) |
 | Planned | 2026-10-09 |
@@ -309,11 +309,11 @@ struct ShelfCard { …; var backdrop: Image?; var logo: Image?; var minutesLeft:
   - Tests: focusing Live TV starts a preview of `defaultPreviewChannelID` on the fake; focusing a card switches to its channel; moving to another tile stops it; a PIN-locked Live TV tile, the setting off, inactive, or idle → no preview; opening Settings stops it; `openLiveTV` doesn't call `stopPreview` before `open`.
   - Done when: tests pass, and on the Mac focusing Live TV shows the last channel muted behind the tiles within about 2 s, Select goes full screen with sound and no reconnect (no loading spinner), moving off the tile stops the stream (mpv log shows the stop), and the Mac's display can still sleep with the preview showing (`pmset -g assertions` shows no MMTVL assertion while previewing).
 
-- [ ] **13. On-TV verification (with the user)**: no files except checkboxes, *Manual verification* and *Deviations*
+- [x] **13. On-TV verification (with the user)** *(closed by the user 2026-10-14; the casting, AirPlay and Reflector checks moved to [M7d](../M7d-casting-checks.md))*: no files except checkboxes, *Manual verification* and *Deviations*
   - Run the *Manual verification* list on the Mac mini, including the Remote Buddy mapping (L5) and the alerts checks (Q18). Record the alert results in *Research & findings* for a later decision.
   - Done when: every item is ticked or recorded.
 
-- [x] **14. Docs, full test run and status** *(CLAUDE.md updated; full suite 767 tests / 94 suites passed 2026-10-09. The status stays `In progress` here and in the master plan until steps 2 and 13 are done on the TV; D35's rung order and Q18–Q21 are recorded then)*: files: `CLAUDE.md`, `docs/plans/MASTER_PLAN.md`, this plan
+- [x] **14. Docs, full test run and status** *(CLAUDE.md updated; full suite 767 tests / 94 suites passed 2026-10-09. 2026-10-14: steps 2 and 13 done, M7c `Done` here and in the master plan; Q18–Q20 closed without recorded results, Q21 moved to [M7e](../M7e-siri-remote-spike.md); D35's rung order wasn't recorded per app)*: files: `CLAUDE.md`, `docs/plans/MASTER_PLAN.md`, this plan
   - CLAUDE.md: `settings.json` `kioskLock` and `homeLivePreview`; the kiosk lock (what's blocked, how to get out: Exit to Desktop, or set `kioskLock` false with MMTVL quit, or quit it from Activity Monitor after Exit to Desktop); ⌘Q needs the PIN in kiosk mode (update the "⌘Q quits" note in *Commands*); the `Foreground` and `KioskGuard` log categories with `log stream` lines; the Remote Buddy mapping (L5); the browser toolbar behavior; the Plex carousel and Live TV preview in the home screen bullet.
   - Master plan: M7c `Done`, D35–D37 as built, Q18–Q20 resolved or updated.
   - Run the full test suite.
@@ -336,7 +336,7 @@ struct ShelfCard { …; var backdrop: Image?; var logo: Image?; var minutesLeft:
 
 - [x] **18. Browser tile on the mini** *(closed by the user 2026-10-10)* (user, no code): check the mini's `launch-items.json` `browser` tile is `{"defaultBrowser": {"fullScreen": true}}`, not a browser app tile (*Follow-ups*). Fix by hand with MMTVL quit if not. Done when: the tile opens the default browser full screen with tabs and the address bar (L10).
 
-- [ ] **19. Spike: an own Siri Remote driver** (investigate only, no app code; decision for the user afterwards): files: `scripts/siri-remote-probe.swift` (new, a command-line probe, not part of the app), findings in *Follow-ups*
+- [x] **19. Spike: an own Siri Remote driver** *(not done here: moved to [M7e](../M7e-siri-remote-spike.md) 2026-10-14)* (investigate only, no app code; decision for the user afterwards): files: `scripts/siri-remote-probe.swift` (new, a command-line probe, not part of the app), findings in *Follow-ups*
   - On the mini with Remote Buddy quit: the probe logs (a) GameController: the Siri Remote's profile, product category and every element that changes on each button (TV, Back, Play/Pause, Siri, volume, power, clickpad ring and centre, touch-surface swipes), in front and with `shouldMonitorBackgroundEvents` while another app is in front; (b) `IOHIDManager` matching the remote: the usage page/usage of every input report per button (grant Input Monitoring to Terminal). Also note what macOS does by itself for each button (volume, Play/Pause → Music, TV).
   - Done when: a table of buttons × (GameController element, HID usage, readable in the background, what macOS does by itself) is in *Follow-ups*, with a recommendation: build it (a new milestone), or stay on Remote Buddy.
 
@@ -424,13 +424,13 @@ On the Mac mini, kiosk mode, Accessibility granted, a PIN set:
 - [x] **Plex HTPC:** Home (phone, keyboard Home key, Siri Remote TV button) from Plex's home screen and from a playing video returns to MMTVL with Plex **still running**. The Plex tile resumes it at once, with no cold start. Record whether Remote Buddy lent the remote to Plex (Q21) and the setting that stops it. *(user 2026-10-10, build 17)*
 - [x] After quitting Plex with the phone remote (5 times), the phone's arrows move focus on the home screen at once, with no mouse wiggle. *(user 2026-10-10, build 17)*
 - [x] Esc in Plex still goes back inside Plex (L4). *(user 2026-10-10, build 17)*
-- [ ] ⌘Tab: no switcher in MMTVL. In Plex, no switcher, or the switch snaps back to MMTVL within about a second (record which, Q19). *(to test later)*
-- [ ] ⌘Q, ⌘H, ⌥⌘Esc in MMTVL: ⌘Q asks for the PIN; the other two do nothing. *(to test later)*
+- [x] ⌘Tab: no switcher in MMTVL. In Plex, no switcher, or the switch snaps back to MMTVL within about a second (record which, Q19). *(closed by the user 2026-10-14; which one wasn't recorded)*
+- [x] ⌘Q, ⌘H, ⌥⌘Esc in MMTVL: ⌘Q asks for the PIN; the other two do nothing. *(closed by the user 2026-10-14)*
 - [x] Moving the pointer to the bottom while Plex is in front and clicking Finder in the Dock (if the Dock shows) brings MMTVL back. *(closed by the user 2026-10-10 as not needed; not tested)*
 - [x] Exit to Desktop (PIN) → ⌘Tab and Finder work normally; Home brings MMTVL back and the lock is on again. *(user 2026-10-10, build 17)*
-- [ ] Settings → Keep Other Apps Out off → ⌘Tab works everywhere; on again → locked. *(to test later)*
-- [ ] Settings → Accessibility grant and Settings → Casting → AirPlay still open System Settings without being snapped back. *(to test later)*
-- [ ] A YouTube cast and a Reflector mirroring session still take over (they aren't fought by the guard). *(to test later)*
+- [x] Settings → Keep Other Apps Out off → ⌘Tab works everywhere; on again → locked. *(closed by the user 2026-10-14)*
+- [x] Settings → Accessibility grant and Settings → Casting → AirPlay still open System Settings without being snapped back. *(closed by the user 2026-10-14 for the Accessibility grant; the Casting → AirPlay half moved to [M7d](../M7d-casting-checks.md))*
+- [x] A YouTube cast and a Reflector mirroring session still take over (they aren't fought by the guard). *(moved to [M7d](../M7d-casting-checks.md) 2026-10-14)*
 - [x] The browser tile opens full screen with tabs and the address bar, cold and warm. *(user 2026-10-10, build 17)*
 - [x] Live TV: Back with nothing on screen → guide; Back in the guide → home; Select on the playing channel in the guide → full screen without a spinner; Select in the video → info banner. *(user 2026-10-10, build 17)*
 - [x] Multiview 1 + 4 and 2 × 2: no gaps; the highlight is visible. *(user 2026-10-10, build 17: 1 + 4 works; 2 × 2 closed untested, the user hadn't found it: it's "2 × 2" in Multiview's layout choices)*
@@ -452,7 +452,7 @@ On the Mac mini, kiosk mode, Accessibility granted, a PIN set:
 - [x] Start tile (step 31): a fresh launch (and Settings → Relaunch MMTVL) shows the dock with Plex focused and the next row peeking; Settings → a tile → Start Here changes it. *(user 2026-10-10, build 17)*
 - [x] Plex exit (step 32): watch something in Plex HTPC, stop it, exit Plex: MMTVL's home screen comes back. If the screen goes black again, try the phone's Home and the keyboard Home key (fn+←), then run the `log show` line for categories AppLauncher/Foreground/KioskGuard. *(user 2026-10-10, build 17: worked once. The user prefers Home over exiting Plex: with the Siri Remote's TV button mapped, Home leaves Plex HTPC running in the background, quick to open and to leave)*
 - [x] Stranded Space (step 33): exit Plex HTPC 3 times and close a web app: MMTVL's home screen shows each time (within about a second). If the log shows "joined the active Space", check that Home from Plex still works and Plex keeps running. *(user 2026-10-10, build 17)*
-- [ ] **Alerts (Q18, record only):** with FaceTime full screen, an incoming FaceTime call banner: can the phone trackpad click Accept? With MMTVL in front: does the banner show over it? In Google Meet (Brave web app): does the camera/microphone prompt appear, and can it be accepted with the phone trackpad or Return? *(to test later)*
+- [ ] **Alerts (Q18, record only):** with FaceTime full screen, an incoming FaceTime call banner: can the phone trackpad click Accept? With MMTVL in front: does the banner show over it? In Google Meet (Brave web app): does the camera/microphone prompt appear, and can it be accepted with the phone trackpad or Return? *(closed by the user 2026-10-14; no results recorded)*
 
 ## Risks & fallbacks
 
@@ -493,4 +493,4 @@ Executors append here when the plan is wrong or ambiguous: the date, the step, w
 - **2026-10-10, steps 2, 17, 18 (user):** step 2 works on the mini (Home brings MMTVL back). Steps 17 and 18 closed by the user without separate checks (17: complete based on the other verification; 18: closed).
 - **2026-10-10, step 15 (plan wrong, fixed differently):** on build 16 one Select on YouTube's on-screen keyboard still types twice. The plan's cause can't be it: the mini's TV button was learned as **controller A** for Home, which moved A off Select, so the clickpad isn't A (it would go Home). The event tap acts only on global bindings, so it doesn't double Return either. Likely cause: the local monitor consumed Return's **key-down** (MMTVL then sends the page its own Enter key-down + key-up) but matched no key-ups, so the real **key-up** of Return reached the YouTube web view, and leanback's keyboard counted it as a second press (a video opened once, because the second press landed while the player loaded). Fix: `InputRouter`'s monitor now also matches key-ups and consumes the key-up of any key whose key-down it consumed (`ConsumedKeys`, tests in `ConsumedKeysTests`). The planned Siri Remote skip in `ControllerInput` was not built; it would also break the TV button as Home. Not reproduced on the dev Mac. **Confirmed by the user on build 16:** a keyboard's Return also types twice in YouTube search, so the double comes from the key-up, not the Siri Remote.
 - **2026-10-10, step 13 (user, build 17):** the on-TV pass. Working: Home and Esc in Plex HTPC, the phone after quitting Plex, Exit to Desktop, the browser tile, Live TV keys, Multiview 1 + 4, the home backdrop, the Plex carousel, the Live TV preview (also with Multiview), custom pictures and tile art, the tvOS 26 layout, hero info, channel logos, the preview preload, zap speed, the start tile, Plex exit and the stranded Space. Closed untested: the Dock's Finder (not needed) and Multiview 2 × 2. **Open:** a slight flicker on Select into Live TV (transitions, step 22). **To test later:** ⌘Tab, ⌘Q/⌘H/⌥⌘Esc, Keep Other Apps Out off/on, System Settings from Settings, a YouTube cast and Reflector with the guard, and alerts (Q18).
-
+- **2026-10-14, steps 13, 14, 19 (user):** step 13 closed by the user. ⌘Tab (Q19), ⌘Q/⌘H/⌥⌘Esc, Keep Other Apps Out, the Accessibility grant and alerts (Q18) were closed without recorded results. The casting checks (Casting → AirPlay opening System Settings, a YouTube cast and Reflector mirroring with the kiosk guard) moved to [M7d](../M7d-casting-checks.md), together with M7b's open casting steps. Step 19 (Siri Remote driver spike) and Q21 moved to [M7e](../M7e-siri-remote-spike.md). M7c is `Done` and archived.

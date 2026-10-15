@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | In progress |
+| Status | Done |
 | Depends on | M7 (and M3 YouTube, M5 phone remote) |
 | Master plan decisions used | D1, D3, D4, D5, D9, D10, D11, D12, D15, D17, D18, D19, D20, D21, D24, D28; new **D30** (YouTube DIAL receiver), **D31** (phone trackpad and home-screen icon), **D32** (Android screen mirroring through Reflector) |
 | Planned | 2026-10-06 |
@@ -594,7 +594,7 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
   - Tests: `response(fromJavaScript:)` with a full dictionary, `found: false`, missing fields (defaults), `NSNumber` status, bad header entries skipped, `nil`/`NSNull`/a string → nil; `shimScript` contains `h5vcc`, `DialServer` and `mmtvlDial`, and doesn't contain `system` or `runtime`.
   - Done when: tests pass; with MMTVL running and YouTube opened once (Debug build), Safari → Develop → this Mac → the YouTube page console shows `typeof window.h5vcc.dial.DialServer === "function"`; the log (`… AND category == "YouTube"`) shows "Leanback registered its DIAL handlers" (if it never appears, record it under *Deviations*: leanback may create the server lazily, and step 5 tells whether the cold path is enough); `curl -s http://localhost:8770/apps/YouTube` then returns leanback's XML (with `<additionalData>`), also after going Home.
 
-- [ ] **5. Cast from real phones (with the user)**: no files (results go in *Deviations & questions* and *Manual verification*)
+- [x] **5. Cast from real phones (with the user)** *(not done here: moved to [M7d](../M7d-casting-checks.md) 2026-10-14)*: no files (results go in *Deviations & questions* and *Manual verification*)
   - Ask the user to run, on the dev Mac (or the mini), with an iPhone and, if available, an Android phone on the same Wi-Fi, each with the YouTube app signed in:
     1. MMTVL on the home screen, YouTube never opened since launch: Cast button → "MMTVL" listed? Pick it → MMTVL switches to YouTube and the phone says connected; play a video from the phone; pause/seek/volume from the phone.
     2. Same with YouTube already opened once and the user back on the home screen (warm path).
@@ -619,7 +619,7 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
   - Tests: root row pushes `.casting` and refreshes; each status renders the expected value/detail; toggling applies `youtubeCastEnabled` false; the AirPlay row opens settings; the Plex row has no action. `isAirPlayResponse` for the verified 403 head (`Server: AirTunes/980.77.5`), a lowercase `server:` header, another server, garbage.
   - Done when: tests pass; on the Mac, Settings → Casting shows AirPlay "On" (then "Off" after switching the receiver off in System Settings; if it still says On, record it: the off state is unverified), Plex HTPC Running/Not Running as it is, and toggling YouTube off makes the step 3 M-SEARCH script time out.
 
-- [ ] **7. Reflector spike (with the user)**: no app code; results go into *Research & findings* (a "Reflector spike results" list) and, if a constant changes, into L19/L21/`MirroringDetector`
+- [x] **7. Reflector spike (with the user)** *(not done here: moved to [M7d](../M7d-casting-checks.md) 2026-10-14)*: no app code; results go into *Research & findings* (a "Reflector spike results" list) and, if a constant changes, into L19/L21/`MirroringDetector`
   - The user installs Reflector 4 on the Mac that will run MMTVL (license or trial) and sets it up per L23 (AirPlay off, Google Cast on, Always on Top off, Display Fullscreen on, Show Client Name off, no connection prompt, receiver name "MMTVL Screen Mirroring", Local Network allowed). macOS's AirPlay Receiver stays on.
   - Record, with an Android phone mirroring through Quick Settings → Cast:
     1. The bundle id: `mdls -name kMDItemCFBundleIdentifier "/Applications/Reflector 4.app"` (update `ReflectorMonitor.bundleID` if it differs).
@@ -644,7 +644,7 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
   - Stop and ask the user if: no Reflector window is distinguishable from idle windows (L19 can't work), both close button and ⌘W fail to disconnect (L21 can't work), or port 1900 can't be shared (one of YouTube casting / Android mirroring must go; the user decides).
   - Done when: all ten answers are recorded and the user has confirmed any change to L19–L22.
 
-- [ ] **8. Reflector monitor and the mirroring workflow**: `Cast/MirroringDetector.swift`, `Cast/ReflectorMonitor.swift` (new), `Launcher/WindowFullScreener.swift`, `Input/SyntheticInput.swift`, `App/AppSettings.swift`, `App/AppDelegate.swift`, `Settings/SettingsTypes.swift`, `Settings/SettingsModel+Pages.swift`, `Settings/SettingsModel.swift`, `MMTVLTests/MirroringDetectorTests.swift` (new), `MMTVLTests/AppSettingsTests.swift`, `MMTVLTests/SettingsCastingTests.swift`, `MMTVLTests/SettingsTestSupport.swift`
+- [x] **8. Reflector monitor and the mirroring workflow** *(code and tests done; the on-Mac checks moved to [M7d](../M7d-casting-checks.md) 2026-10-14)*: `Cast/MirroringDetector.swift`, `Cast/ReflectorMonitor.swift` (new), `Launcher/WindowFullScreener.swift`, `Input/SyntheticInput.swift`, `App/AppSettings.swift`, `App/AppDelegate.swift`, `Settings/SettingsTypes.swift`, `Settings/SettingsModel+Pages.swift`, `Settings/SettingsModel.swift`, `MMTVLTests/MirroringDetectorTests.swift` (new), `MMTVLTests/AppSettingsTests.swift`, `MMTVLTests/SettingsCastingTests.swift`, `MMTVLTests/SettingsTestSupport.swift`
   - `AppSettings.reflectorAutoStart = true` (`decodeIfPresent`). `SettingKey.reflectorAutoStart`.
   - `MirroringDetector` and `RestartLimiter` per *Key types* and L19 (with step 7's constants).
   - `WindowFullScreener`: `closeWindows(pid:minimumSize:) -> Int` (every AX window of the pid at least that size: `kAXCloseButtonAttribute` → `AXUIElementPerformAction(button, kAXPressAction)`; returns how many it pressed).
@@ -684,7 +684,7 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
   - Tests: decoding (valid move/scroll/click, NaN-free JSON can't carry NaN so test a missing `dy`, `dx: 5000`, `button: "middle"`); `PhoneRemote` routes pointer actions when authenticated and allowed, ignores them unauthenticated, toasts once within 5 s and again after; `accelerated` (zero stays zero, slow ×1.5, fast ×3, direction kept); `clamp` (inside, outside to the right of a single display, a gap between two displays of different heights, no displays); `scrollWheels` signs; `ClickCounter` (single, double within 0.5 s and 6 pt, reset after time, distance or button change, caps at 3).
   - Done when: tests pass (the phone UI comes next).
 
-- [ ] **10. Trackpad: phone page**: `RemoteServer/Web/remote.html`, `remote.css`, `remote.js`
+- [x] **10. Trackpad: phone page** *(built; the phone checks moved to [M7d](../M7d-casting-checks.md) 2026-10-14)*: `RemoteServer/Web/remote.html`, `remote.css`, `remote.js`
   - Header: after `#front-app`, a button `<button type="button" id="mode-toggle" class="mode-toggle" aria-label="Switch to trackpad">Trackpad</button>` (pushed to the right; label "D-pad" while in trackpad mode).
   - After the `.dpad` div: `<div id="trackpad" class="trackpad" hidden aria-label="Trackpad"><span class="trackpad-hint">Tap to click · two fingers to scroll · two-finger tap to right-click</span></div>`. CSS: same width as `.dpad`, `aspect-ratio: 1`, `border-radius: 32px`, `background: var(--button)`, `touch-action: none`, centered muted 14px hint, `user-select: none`.
   - JS (per L11): `setMode('dpad'|'trackpad')` toggles `.dpad`/`#trackpad` `hidden`, the button label and `aria-label`, and stores `mmtvl.mode` (try/catch like the token). Pointer events on `#trackpad` with `setPointerCapture`; a `Map` of active pointers; one active pointer adds to a move accumulator, two or more add `delta / count` to a scroll accumulator; `requestAnimationFrame` flushes non-zero accumulators as one `pointer` and one `scroll` message (rounded to 0.1). Tap detection on the last pointer up: total time < 250 ms and total movement < 10 px → `click` with `right` if two or more pointers were down during the gesture, else `left`; `navigator.vibrate(5)` if available. Reset on `pointercancel`.
@@ -695,12 +695,12 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
   - Master plan: tick nothing new in §4 (D30/D31 are added at planning time); fix anything the build changed; set M7b to `In progress` (it becomes `Done` after step 13).
   - Done when: docs match the code.
 
-- [ ] **12. On-TV QA pass, M7 + M7b (with the user)**: no files except plan checkboxes and *Deviations*
+- [x] **12. On-TV QA pass, M7 + M7b (with the user)** *(the on-TV pass happened as M7c; this plan's Manual verification list moved to [M7d](../M7d-casting-checks.md) 2026-10-14)*: no files except plan checkboxes and *Deviations*
   - On the Mac mini over HDMI, kiosk mode, Release-like Debug build: walk M7's *Manual verification* list (in `archive/M7-launcher-polish.md`) and this plan's, ticking each item the user confirms in its own plan. Include Q9 (does "Add to Home Screen" open the remote without browser chrome on iOS 26 / Android) and Q14 (Plex mobile app → Plex HTPC).
   - Record every problem under *Deviations & questions* of the plan it belongs to, as a follow-up, with what was seen. Fix only small, obvious issues the user asks to fix now, each built and tested.
   - Done when: the user has gone through both lists and decided which follow-ups remain.
 
-- [ ] **13. Full test run and status**: no files except docs
+- [x] **13. Full test run and status** *(2026-10-14: M7b `Done` with its checks moved to [M7d](../M7d-casting-checks.md); Q9, Q13–Q15 now point there. M7c's runs cover the test suite)*: no files except docs
   - Run all tests; all pass. Set M7b to `Done` in the master plan and here; resolve Q13/Q14 and Q9 with what step 12 found.
   - Done when: tests pass and the master plan is current.
 
@@ -712,21 +712,23 @@ Branch first: `git switch -c m7b-phone-casting`. Build after every step (`xcodeb
 
 ## Manual verification
 
-- [ ] The Mac app icon (the "tv" logo) shows in the Dock, Finder and the app switcher, not inside a gray tile.
-- [ ] Phone icon: Add to Home Screen on iPhone shows the "tv" logo and the name "MMTVL"; on Android Chrome, the shortcut's icon (record which icon it used, or none).
-- [ ] YouTube cast, cold: from the home screen with YouTube not opened since launch, the phone lists "MMTVL", the cast opens YouTube and plays.
-- [ ] YouTube cast, warm: after YouTube was opened and left, the same works and the phone controls play/pause/seek/volume.
-- [ ] A cast from Live TV leaves Live TV and shows YouTube; from Plex HTPC in front, MMTVL comes forward and Plex keeps running; from Settings, Settings closes.
-- [ ] A YouTube tile with Require PIN still accepts casts without the PIN (user choice).
-- [ ] Settings → Casting → Cast from the YouTube App off: the phone no longer lists MMTVL (may take a minute to drop from the phone's list); on again: listed.
-- [ ] After sleep/wake and after switching Wi-Fi/Ethernet, the phone still finds MMTVL.
-- [ ] YouTube's own Link with TV Code still pairs.
-- [ ] Settings → Casting: AirPlay On/Off follows the System Settings switch; Select opens AirDrop & Handoff; an iPhone's Screen Mirroring lists the Mac after "Anyone on the Same Network".
-- [ ] Android mirroring (Reflector): Quick Settings → Cast lists "MMTVL Screen Mirroring"; mirroring from the home screen, from Live TV and from YouTube takes over full screen with sound on the TV; stopping on the phone returns to the home screen; Home ends it; a YouTube cast ends it; after a restart of the Mac, Reflector is running hidden and MMTVL is in front; no watermark (licensed).
-- [ ] Android YouTube app: picking "MMTVL" casts YouTube (D30); record what picking "MMTVL Screen Mirroring" does.
-- [ ] iPhone AirPlay still goes to macOS's receiver with Reflector running.
-- [ ] Plex: with Plex HTPC running, the phone's Plex app casts to it (record the Plex app version; Q14).
-- [ ] Trackpad: move, click, double-click, right-click, scroll in Brave and in MMTVL (hovering tiles moves focus; clicking a tile opens it); pointer stays on screen at the edges; the D-pad still works after switching back.
+Moved to [M7d](../M7d-casting-checks.md) on 2026-10-14; the items below are kept as they were planned and are checked there.
+
+- The Mac app icon (the "tv" logo) shows in the Dock, Finder and the app switcher, not inside a gray tile.
+- Phone icon: Add to Home Screen on iPhone shows the "tv" logo and the name "MMTVL"; on Android Chrome, the shortcut's icon (record which icon it used, or none).
+- YouTube cast, cold: from the home screen with YouTube not opened since launch, the phone lists "MMTVL", the cast opens YouTube and plays.
+- YouTube cast, warm: after YouTube was opened and left, the same works and the phone controls play/pause/seek/volume.
+- A cast from Live TV leaves Live TV and shows YouTube; from Plex HTPC in front, MMTVL comes forward and Plex keeps running; from Settings, Settings closes.
+- A YouTube tile with Require PIN still accepts casts without the PIN (user choice).
+- Settings → Casting → Cast from the YouTube App off: the phone no longer lists MMTVL (may take a minute to drop from the phone's list); on again: listed.
+- After sleep/wake and after switching Wi-Fi/Ethernet, the phone still finds MMTVL.
+- YouTube's own Link with TV Code still pairs.
+- Settings → Casting: AirPlay On/Off follows the System Settings switch; Select opens AirDrop & Handoff; an iPhone's Screen Mirroring lists the Mac after "Anyone on the Same Network".
+- Android mirroring (Reflector): Quick Settings → Cast lists "MMTVL Screen Mirroring"; mirroring from the home screen, from Live TV and from YouTube takes over full screen with sound on the TV; stopping on the phone returns to the home screen; Home ends it; a YouTube cast ends it; after a restart of the Mac, Reflector is running hidden and MMTVL is in front; no watermark (licensed).
+- Android YouTube app: picking "MMTVL" casts YouTube (D30); record what picking "MMTVL Screen Mirroring" does.
+- iPhone AirPlay still goes to macOS's receiver with Reflector running.
+- Plex: with Plex HTPC running, the phone's Plex app casts to it (record the Plex app version; Q14).
+- Trackpad: move, click, double-click, right-click, scroll in Brave and in MMTVL (hovering tiles moves focus; clicking a tile opens it); pointer stays on screen at the edges; the D-pad still works after switching back.
 
 ## Risks & fallbacks
 
@@ -759,3 +761,4 @@ Executors append here when the plan is wrong or ambiguous: the date, the step, w
 - **2026-10-06, step 4:** the warm path works on the dev Mac: after a cold cast opened YouTube, the log showed "Leanback registered its DIAL handlers" about 1 s after load, and `GET /apps/YouTube` returned leanback's XML with `<additionalData>`. Not checked by the executor: the Safari console check and the same request after going Home (left for the user, with step 5).
 - **2026-10-06, step 6 (test):** `SettingsPlexTests.rootRow` expected the Plex row right after `youtube.clear`; the new Casting section sits between them, so the test now expects Plex right after `casting`.
 - **2026-10-06, step 10:** the phone page's trackpad is built (`node --check` passes; a headless render at phone width shows the toggle and the trackpad in place of the D-pad). Its checkbox stays open: the done-when checks need a phone (iPhone/Android, Brave, the scroll direction and the Accessibility toast).
+- **2026-10-14 (user):** M7b and M7c are archived and their leftovers get dedicated plans. Steps 5, 7, 12 and the phone checks of steps 8 and 10 (Reflector on the TV, casts from real phones, AirPlay, Plex casting, the trackpad page and the icons) moved to [M7d](../M7d-casting-checks.md), with Q9 and Q13–Q15. The code in steps 1–4, 6, 8, 9 and 10 is built and tested.
