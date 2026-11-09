@@ -6,7 +6,7 @@ import os
 struct PhoneRemoteEnvironment {
     /// NSApp.isActive.
     var isLauncherActive: () -> Bool
-    /// InputRouter.dispatch(_:isGlobal:).
+    /// InputRouter.dispatchFromRemote(_:isGlobal:) (keeps a command while MMTVL is brought forward).
     var dispatch: (RemoteCommand, Bool) -> Void
     /// SyntheticInput.canPost.
     var canPostEvents: () -> Bool
@@ -20,8 +20,8 @@ struct PhoneRemoteEnvironment {
     var launcherAcceptsText: () -> Bool
     /// frontmostApplication?.localizedName ?? "Mac".
     var frontAppName: () -> String
-    /// VolumeController.perform.
-    var volume: (VolumeAction) -> VolumeFeedback
+    /// VolumeController.perform: calls back with the feedback (at once, or after the receiver's reply, D44).
+    var volume: (VolumeAction, @escaping (VolumeFeedback) -> Void) -> Void
     var now: () -> Date
     /// PairingCode.random.
     var makeCode: () -> String
@@ -95,6 +95,12 @@ final class PhoneRemote {
             pair(code, name: name, state: &state, session: session)
         case .command(let command):
             guard state.phoneID != nil else { return }
+            // M7h step 12 (step 4 security low): the phone has no Power button; a raw `power` or `powerMenu` never
+            // turns the TV off, opens the power menu or reaches MMTVL's screens.
+            guard command != .power, command != .powerMenu else {
+                Self.logger.info("Ignored a phone \(command.rawValue, privacy: .public) command")
+                return
+            }
             route(command, session: session)
         case .textBegin:
             guard state.phoneID != nil else { return }
@@ -112,10 +118,12 @@ final class PhoneRemote {
             environment.postReturn()
         case .volume(let action):
             guard state.phoneID != nil else { return }
-            switch environment.volume(action) {
-            case .level(let level, let muted): transport.send(.volume(level: level, muted: muted), to: session)
-            case .sentKeys: transport.send(.volume(level: nil, muted: nil), to: session)
-            case .unavailable(let message): transport.send(.toast(message), to: session)
+            environment.volume(action) { [transport] feedback in
+                switch feedback {
+                case .level(let level, let muted): transport.send(.volume(level: level, muted: muted), to: session)
+                case .sentKeys: transport.send(.volume(level: nil, muted: nil), to: session)
+                case .unavailable(let message): transport.send(.toast(message), to: session)
+                }
             }
         case .pointer(let action):
             guard state.phoneID != nil else { return }
@@ -231,15 +239,16 @@ final class PhoneRemote {
         }
     }
 
-    /// L5.
+    /// L5; M7h L3: the shared `ExternalRouter` (volume commands map to no key, so they do nothing here; power commands
+    /// never get here).
     private func route(_ command: RemoteCommand, session: RemoteSessionID) {
-        if launcherInFront() {
-            environment.dispatch(command, false)
-        } else if command == .home {
-            environment.dispatch(.home, true)
-        } else if environment.canPostEvents() {
-            ExternalKeyMap.key(for: command).map(environment.postExternal)
-        } else {
+        let router = ExternalRouter(
+            isLauncherInFront: { [self] in launcherInFront() },
+            dispatch: { [environment] command, isGlobal, _ in environment.dispatch(command, isGlobal) },
+            canPostEvents: environment.canPostEvents,
+            postExternal: environment.postExternal
+        )
+        if router.route(command) == .needsAccessibility {
             transport.send(.toast(Self.accessibilityMessage), to: session)
         }
     }

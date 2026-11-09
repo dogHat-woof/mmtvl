@@ -14,7 +14,8 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
     var phoneRemoteEnabled = true
     /// Hand-edited. HTTP port; the WebSocket uses port + 1. Values outside 1024…65534 fall back to 8765.
     var phoneRemotePort = 8765
-    /// Hand-edited "auto" | "keys" | "system" | "app" (M5 L8). A String, so a typo can't fail the whole file.
+    /// Hand-edited "auto" | "receiver" | "tv" | "keys" | "system" | "app" (M5 L8; M7h D44 adds "receiver", step 9c
+    /// "tv"). A String, so a typo can't fail the whole file.
     var phoneRemoteVolume = "auto"
     /// M7 L7: which default bindings `key-bindings.json` has seen. A file without the key is revision 1.
     var keyBindingsRevision = KeyBindings.currentRevision
@@ -38,9 +39,58 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
     /// M7f L4: use the guide the playlist names instead of the pasted guides (kept in the Keychain).
     /// Settings → Live TV → Guide Source; only offered when the playlist names a guide.
     var usePlaylistGuide = false
+    /// M7h D43: read the Siri Remote directly (seized; Settings → Remote & Input → Siri Remote), in kiosk and
+    /// -windowed mode alike.
+    var siriRemoteEnabled = true
+    /// M7h step 13e (user decision 2026-11-08): swipes on the Siri Remote's touch surface move focus, like an Apple TV
+    /// (Settings → Remote & Input → Siri Remote → Swipes). Off: touches do nothing outside trackpad mode.
+    var siriRemoteSwipes = false
+    /// M7h D44, L11: the receiver's brand; `none` = no receiver control (no port is opened). Unknown values read as
+    /// `none`.
+    var receiverBrand = ReceiverBrand.none
+    /// M7h D44: `serial` | `network` | (step 9c) `cec`, a receiver over HDMI-CEC. Unknown values read as `serial`.
+    var receiverConnection = ReceiverConnection.serial
+    /// M7h L11: a `/dev/cu.*` path; nil = the first USB serial port found.
+    var receiverSerialPort: String?
+    /// M7h L17: the receiver's IP address or host name (network connection). It must be, or resolve to, a LAN
+    /// address (`LANAddress`).
+    var receiverHost: String?
+    /// M7h L17: overrides the brand's control port; outside 1…65535, or not a number, it's ignored.
+    var receiverNetworkPort: Int?
+    /// M7h step 10 (user decision): the loudest MMTVL's volume buttons set the receiver, in dB. A value that isn't a
+    /// number within `ReceiverLine.plausibleDB` reads as the default.
+    var receiverMaxDB = 0.0
+    /// M7h L18: the TV's brand; `none` = no TV control, `cec` = HDMI-CEC through the Mac's HDMI (step 9, reopened).
+    /// Unknown values read as `none`.
+    var tvBrand = TVBrand.none
+    /// M7h L18: the TV's IP address or host name; like `receiverHost`, it must be, or resolve to, a LAN address.
+    /// Never committed or logged beyond the host.
+    var tvHost: String?
+    /// M7h L18: the TV's wired MAC for Wake-on-LAN (from Find TV). Never committed or logged.
+    var tvMAC: String?
+    /// M7h step 13b (user request): the volume toast for the Siri Remote's and the keyboard's volume presses
+    /// (Settings → Audio & TV → Show Volume). Off hides the level and Muted toasts; the
+    /// `.unavailable` error toasts still show.
+    var volumeToast = true
+    /// M7h step 9c (user decision 2026-11-08): with no receiver ready, the volume buttons change the TV's own volume
+    /// (HDMI-CEC or a network VIERA; Settings → Audio & TV → TV → Volume Buttons Change TV Volume).
+    var tvVolumeEnabled = false
 
     var volumeMode: VolumeMode { VolumeMode(rawValue: phoneRemoteVolume) ?? .auto }
+    /// Step 9c (build 25 security L2): a receiver is set up in Settings (a brand, or HDMI-CEC), whether or not its
+    /// connection is usable (a network receiver without a usable `receiverHost` counts). The TV gets the volume
+    /// buttons only when this is false (`VolumeController.receiverSetUp`).
+    var receiverIsSetUp: Bool { receiverBrand != .none || receiverConnection == .cec }
     var validatedPhoneRemotePort: Int { (1024...65534).contains(phoneRemotePort) ? phoneRemotePort : 8765 }
+    /// `receiverNetworkPort` when it's a TCP port, else nil (the brand's ports).
+    var validatedReceiverNetworkPort: UInt16? {
+        receiverNetworkPort.flatMap { (1...65535).contains($0) ? UInt16($0) : nil }
+    }
+
+    /// `receiverMaxDB` when it's within `ReceiverLine.plausibleDB`, else the default (0 dB).
+    var validatedReceiverMaxDB: Double {
+        ReceiverLine.plausibleDB.contains(receiverMaxDB) ? receiverMaxDB : AppSettings().receiverMaxDB
+    }
 
     init() {}
 
@@ -69,5 +119,32 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
             ?? defaults.showVersionOnHome
         homeStartTile = try container.decodeIfPresent(String.self, forKey: .homeStartTile) ?? defaults.homeStartTile
         usePlaylistGuide = try container.decodeIfPresent(Bool.self, forKey: .usePlaylistGuide) ?? defaults.usePlaylistGuide
+        siriRemoteEnabled = try container.decodeIfPresent(Bool.self, forKey: .siriRemoteEnabled) ?? defaults.siriRemoteEnabled
+        // Strings, so an unknown or misspelled brand can't fail the whole file; read with `try?`, so a value of
+        // another type (`"receiverHost": 12`) reads as the default instead of sending the file to `.bak` (step 9b S6).
+        receiverBrand = ((try? container.decodeIfPresent(String.self, forKey: .receiverBrand)) ?? nil)
+            .flatMap(ReceiverBrand.init(rawValue:)) ?? defaults.receiverBrand
+        receiverConnection = ((try? container.decodeIfPresent(String.self, forKey: .receiverConnection)) ?? nil)
+            .flatMap(ReceiverConnection.init(rawValue:)) ?? defaults.receiverConnection
+        receiverSerialPort = (try? container.decodeIfPresent(String.self, forKey: .receiverSerialPort)) ?? nil
+        receiverHost = (try? container.decodeIfPresent(String.self, forKey: .receiverHost)) ?? nil
+        // Hand-edited: a string or a fraction reads as nil instead of failing the whole file.
+        receiverNetworkPort = (try? container.decodeIfPresent(Int.self, forKey: .receiverNetworkPort)) ?? nil
+        // Hand-edited: another type, or a value out of range, reads as the default (S6).
+        receiverMaxDB = ((try? container.decodeIfPresent(Double.self, forKey: .receiverMaxDB)) ?? nil)
+            .flatMap { ReceiverLine.plausibleDB.contains($0) ? $0 : nil } ?? defaults.receiverMaxDB
+        // Hand-edited: a value of another type reads as the default instead of failing the whole file (S6).
+        tvBrand = ((try? container.decodeIfPresent(String.self, forKey: .tvBrand)) ?? nil)
+            .flatMap(TVBrand.init(rawValue:)) ?? defaults.tvBrand
+        tvHost = (try? container.decodeIfPresent(String.self, forKey: .tvHost)) ?? nil
+        tvMAC = (try? container.decodeIfPresent(String.self, forKey: .tvMAC)) ?? nil
+        // Step 13b: a value of another type reads as the default instead of failing the whole file (S6).
+        volumeToast = ((try? container.decodeIfPresent(Bool.self, forKey: .volumeToast)) ?? nil) ?? defaults.volumeToast
+        // Step 9c: likewise.
+        tvVolumeEnabled = ((try? container.decodeIfPresent(Bool.self, forKey: .tvVolumeEnabled)) ?? nil)
+            ?? defaults.tvVolumeEnabled
+        // Step 13e: likewise.
+        siriRemoteSwipes = ((try? container.decodeIfPresent(Bool.self, forKey: .siriRemoteSwipes)) ?? nil)
+            ?? defaults.siriRemoteSwipes
     }
 }

@@ -21,6 +21,13 @@ final class InputRouter {
     /// M7 L8: set while Settings learns a button; the next trigger is captured instead of dispatched.
     @ObservationIgnored var captureHandler: ((InputBinding.Trigger) -> Void)?
 
+    /// NSApp.isActive; tests replace it.
+    @ObservationIgnored var isActive: () -> Bool = { NSApp.isActive }
+    /// M7h: MMTVL's window shows but it isn't active, and it is being brought forward (M7c L3, `repairForeground`).
+    @ObservationIgnored private(set) var isRepairingForeground = false
+    /// The latest remote command that arrived during the repair; delivered once MMTVL is in front.
+    @ObservationIgnored private var commandAfterRepair: RemoteCommand?
+
     @ObservationIgnored private var monitor: Any?
     /// M7c step 15: key-ups that belong to consumed key-downs.
     @ObservationIgnored private var consumedKeys = ConsumedKeys()
@@ -73,7 +80,7 @@ final class InputRouter {
     /// controller button's auto-repeat (sources without repeats, like the phone, leave it false).
     @discardableResult
     func dispatch(_ command: RemoteCommand, isGlobal: Bool, isRepeat: Bool = false) -> Bool {
-        if NSApp.isActive {
+        if isActive() {
             onCommandDispatched?()
             return handler?(command, isRepeat) ?? false
         }
@@ -82,6 +89,48 @@ final class InputRouter {
             return true
         }
         return false
+    }
+
+    /// M7h: the phone's and the Siri Remote's way in (`ExternalRouter`). Like `dispatch`, except that while MMTVL is
+    /// being brought forward a non-global command is kept (the latest press; repeats are dropped) and delivered once
+    /// MMTVL is in front, instead of being lost. Keys from the event tap and the local monitor keep using `dispatch`.
+    @discardableResult
+    func dispatchFromRemote(_ command: RemoteCommand, isGlobal: Bool, isRepeat: Bool = false) -> Bool {
+        if isRepairingForeground {
+            if isActive() {
+                // MMTVL came forward before the repair's check finished: the kept press goes first, in order.
+                deliverCommandAfterRepair()
+            } else if !isGlobal {
+                if !isRepeat { commandAfterRepair = command }
+                return true
+            }
+        }
+        return dispatch(command, isGlobal: isGlobal, isRepeat: isRepeat)
+    }
+
+    /// M7h: `repairForeground` started bringing MMTVL forward.
+    func foregroundRepairStarted() {
+        isRepairingForeground = true
+        commandAfterRepair = nil
+    }
+
+    /// M7h: the repair ended. When MMTVL came forward, the kept command goes to the active screen (once);
+    /// otherwise it is dropped.
+    func foregroundRepairFinished(succeeded: Bool) {
+        isRepairingForeground = false
+        if succeeded {
+            deliverCommandAfterRepair()
+        } else {
+            commandAfterRepair = nil
+        }
+    }
+
+    /// The kept command to the active screen, at most once.
+    private func deliverCommandAfterRepair() {
+        guard let command = commandAfterRepair else { return }
+        commandAfterRepair = nil
+        onCommandDispatched?()
+        _ = handler?(command, false)
     }
 
     private func handleKeyDown(_ event: NSEvent) -> Bool {

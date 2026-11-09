@@ -15,27 +15,16 @@ nonisolated enum CanvasGeometry {
     }
 }
 
-/// Live TV: the video views placed in window coordinates (M4 L16, M6 L15), with overlays on the scaled canvas above them.
+/// Live TV's overlays on the scaled canvas, above the video views `LauncherRootView` places in window coordinates
+/// (M4 L16, M6 L15, M7h step 13h).
 struct LiveTVRootView: View {
     let model: LiveTVModel
 
     var body: some View {
         GeometryReader { geometry in
             let size = geometry.size
+            // M7h step 13h: the video (and the black behind it) is `LauncherRootView`'s, under this view.
             ZStack {
-                Color.black
-                // Keyed by player identity, so a window that moves keeps its view and GL context.
-                ForEach(model.videoPlacements) { placement in
-                    if let view = (placement.player as? MPVPlayerController)?.videoView {
-                        let rect = placement.canvasRect.map { CanvasGeometry.windowRect(forCanvasRect: $0, in: size) }
-                            ?? CGRect(origin: .zero, size: size)
-                        MPVVideoRepresentable(view: view)
-                            .frame(width: rect.width, height: rect.height)
-                            .position(x: rect.midX, y: rect.midY)
-                            .opacity(placement.isVisible ? 1 : 0)
-                            .transaction { $0.animation = nil }
-                    }
-                }
                 ZStack {
                     overlay
                     // M7f L12: search over the guide, the player or Multiview.

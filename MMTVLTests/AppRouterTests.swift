@@ -8,10 +8,11 @@ struct AppRouterTests {
         youtube: FakeYouTube = FakeYouTube(),
         liveTV: FakeLiveTV = FakeLiveTV(),
         pin: String? = nil,
-        topShelf: any TopShelfProviding = NoTopShelf()
+        topShelf: any TopShelfProviding = NoTopShelf(),
+        launcher: AppLauncher = AppLauncher()
     ) -> AppRouter {
         let (settings, _) = makeSettingsModel(items: items)
-        return AppRouter(items: items, launcher: AppLauncher(), settings: settings, youtube: youtube, liveTV: liveTV,
+        return AppRouter(items: items, launcher: launcher, settings: settings, youtube: youtube, liveTV: liveTV,
                          pinStore: .inMemory(pin), tileArt: makeTestTileArt(), topShelf: topShelf)
     }
 
@@ -171,6 +172,16 @@ struct AppRouterTests {
         #expect(handled)
         #expect(router.screen == .home)
         #expect(router.focusedItem?.id == "plex")
+    }
+
+    /// M7h step 13e: Settings' status refreshes run only while the Settings screen shows.
+    @Test func settingsIsShowingFollowsTheScreen() {
+        let router = makeRouter()
+        #expect(!router.settings.isShowing())
+        router.openSettings()
+        #expect(router.settings.isShowing())
+        _ = router.handle(.home)
+        #expect(!router.settings.isShowing())
     }
 
     @Test func homeInSettingsGoesHome() {
@@ -384,6 +395,62 @@ struct AppRouterTests {
         enterPIN("1357", router)
         #expect(router.screen == .settings)
         #expect(!router.hasPIN)
+    }
+
+    /// Settings with a PIN, on the Home Screen page, and its recorder (pre-build 26 QA/security: status after a PIN).
+    private func makeSettingsRouterWithPIN() -> (AppRouter, SettingsRecorder) {
+        let items = LaunchItem.defaults
+        let (settings, recorder) = makeSettingsModel(items: items)
+        let router = AppRouter(items: items, launcher: AppLauncher(), settings: settings, youtube: FakeYouTube(),
+                               liveTV: FakeLiveTV(), pinStore: .inMemory("1357"), tileArt: makeTestTileArt())
+        router.openSettings()
+        router.settings.perform(.push(.homeScreen))
+        return (router, recorder)
+    }
+
+    /// M7h step 13e regression: part refreshes during PIN entry are dropped (Settings isn't showing), so cancelling
+    /// back to Settings re-reads every status, on the same page.
+    @Test func cancellingAPINBackToSettingsRereadsStatus() {
+        let (router, recorder) = makeSettingsRouterWithPIN()
+        router.requestPIN(.turnOff)
+        recorder.receiver.isConnected = true
+        recorder.siriRemote.isConnected = true
+        router.settings.refreshStatus([.receiver, .siriRemote])
+        #expect(!router.settings.receiver.isConnected)
+        _ = router.handle(.back)
+        #expect(router.screen == .settings)
+        #expect(router.settings.page == .homeScreen)
+        #expect(router.settings.receiver.isConnected)
+        #expect(router.settings.siriRemote.isConnected)
+    }
+
+    /// The same for a verified PIN that returns to Settings (the power menu's Relaunch over Settings).
+    @Test func aVerifiedPINBackToSettingsRereadsStatus() {
+        let (router, recorder) = makeSettingsRouterWithPIN()
+        var actions: [PowerMenuAction] = []
+        router.onPowerAction = { actions.append($0) }
+        router.requestPIN(.relaunch)
+        recorder.receiver.isConnected = true
+        router.settings.refreshStatus(.receiver)
+        #expect(!router.settings.receiver.isConnected)
+        enterPIN("1357", router)
+        #expect(actions == [.relaunch])
+        #expect(router.screen == .settings)
+        #expect(router.settings.page == .homeScreen)
+        #expect(router.settings.receiver.isConnected)
+    }
+
+    /// A PIN from home goes back home without reading Settings' status.
+    @Test func cancellingAPINBackHomeDoesntReadSettingsStatus() {
+        let items = LaunchItem.defaults
+        let (settings, recorder) = makeSettingsModel(items: items)
+        let router = AppRouter(items: items, launcher: AppLauncher(), settings: settings, youtube: FakeYouTube(),
+                               liveTV: FakeLiveTV(), pinStore: .inMemory("1357"), tileArt: makeTestTileArt())
+        router.requestPIN(.exitToDesktop)
+        let loginReads = recorder.loginItemReads
+        _ = router.handle(.back)
+        #expect(router.screen == .home)
+        #expect(recorder.loginItemReads == loginReads)
     }
     // MARK: Focus motion (M7 L2)
 
@@ -701,6 +768,42 @@ struct AppRouterTests {
         #expect(!router.isLeavingHome)
     }
 
+    /// M7h L16, QA minor 2: while Select on the Plex tile restarts Plex (after a hot-plug), the home UI stays away;
+    /// its fallback starts only once the new process has opened. Fakes only: nothing real is quit or opened.
+    @Test func aPlexRestartHoldsTheHomeExit() async throws {
+        let fake = FakeLauncherWorkspace()
+        let old = fake.start("tv.plex.htpc")
+        old.quitsWhenAsked = false
+        let base = fake.workspace
+        // The restart's polls wait (real time) until the test lets the old Plex quit.
+        let workspace = LauncherWorkspace(appURL: base.appURL, runningApps: base.runningApps,
+                                          openApplication: base.openApplication) { duration in
+            await base.sleep(duration)
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        let launcher = AppLauncher(workspace: workspace)
+        launcher.noteDisplayChange(frontmostBundleID: "dev.mmtvl.launcher")
+        let router = carouselRouter(launcher: launcher)
+        router.homeExitDelay = .milliseconds(20)
+        router.homeExitAppFallback = .milliseconds(10)
+        #expect(router.focusedItem?.id == "plex")
+        _ = router.handle(.select)
+        #expect(router.isLeavingHome)
+
+        // The restart is waiting for the old Plex; well past the exit delay and the fallback, the UI is still away.
+        for _ in 0..<200 where fake.sleeps.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(!fake.sleeps.isEmpty)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(router.isLeavingHome)
+        #expect(fake.events == ["terminate 100001"])
+
+        old.isTerminated = true
+        await router.homeExitTask?.value
+        #expect(fake.events == ["terminate 100001", "open tv.plex.htpc 100002"])
+        // MMTVL stayed active in the test (no app took the screen): the fallback brought the UI back after the open.
+        #expect(!router.isLeavingHome)
+    }
+
     @Test func noAnimationWithoutADelay() {
         let (router, liveTV) = previewRouter()
         focusLiveTV(router)
@@ -712,12 +815,12 @@ struct AppRouterTests {
     // MARK: Carousel (M7c L14)
 
     /// Plex (the first tile) shows a carousel of three pages; the last opens YouTube.
-    private func carouselRouter() -> AppRouter {
+    private func carouselRouter(launcher: AppLauncher = AppLauncher()) -> AppRouter {
         let shelf = FakeTopShelf()
         shelf.contents["plex"] = .carousel(title: "Continue Watching", [
             card("a", .openTile(id: "plex")), card("b", .openTile(id: "plex")), card("c", .openTile(id: "youtube")),
         ], autoAdvances: true)
-        let router = makeRouter(topShelf: shelf)
+        let router = makeRouter(topShelf: shelf, launcher: launcher)
         router.carouselInterval = .seconds(3600)
         return router
     }
@@ -1061,6 +1164,231 @@ struct AppRouterLiveTVTests {
         #expect(liveTV.leaves == 1)
         // Cancelling returns home.
         _ = router.handle(.back)
+        #expect(router.screen == .home)
+    }
+}
+
+/// M7h L14, L15: Power and the power menu on every screen; Relaunch and Restart behind the PIN.
+struct AppRouterPowerTests {
+    private let youtube = FakeYouTube()
+    private let liveTV = FakeLiveTV()
+
+    private func makeRouter(pin: String? = nil) -> (AppRouter, Recorder) {
+        let (settings, _) = makeSettingsModel()
+        let router = AppRouter(items: LaunchItem.defaults, launcher: AppLauncher(), settings: settings, youtube: youtube,
+                               liveTV: liveTV, pinStore: .inMemory(pin), tileArt: makeTestTileArt())
+        let recorder = Recorder()
+        router.onPowerButton = { recorder.powerPresses += 1 }
+        router.onPowerAction = { recorder.actions.append($0) }
+        return (router, recorder)
+    }
+
+    final class Recorder {
+        var powerPresses = 0
+        var actions: [PowerMenuAction] = []
+    }
+
+    private func enterPIN(_ code: String, _ router: AppRouter) {
+        for command in pinCommands(for: code, startRow: router.pinEntry?.pad.row ?? 0) {
+            _ = router.handle(command)
+        }
+    }
+
+    /// Opens the menu and selects `action`.
+    private func choose(_ action: PowerMenuAction, _ router: AppRouter) {
+        #expect(router.handle(.powerMenu))
+        let index = PowerMenu.allItems.firstIndex { $0.action == action }!
+        for _ in 0..<index { _ = router.handle(.down) }
+        #expect(router.powerMenu?.focusedItem.action == action)
+        #expect(router.handle(.select))
+    }
+
+    @Test func menuOpensOverSettingsAndBackCloses() {
+        let (router, recorder) = makeRouter()
+        router.openSettings()
+        #expect(router.handle(.powerMenu))
+        #expect(router.powerMenu != nil)
+        #expect(router.screen == .settings)
+        // Commands go to the menu, not to Settings.
+        _ = router.handle(.down)
+        #expect(router.powerMenu?.focusedItem.action == .sleepMac)
+        #expect(router.settings.page == .root)
+        #expect(router.handle(.back))
+        #expect(router.powerMenu == nil)
+        #expect(router.screen == .settings)
+        #expect(recorder.actions.isEmpty)
+    }
+
+    @Test func menuOpensOverLiveTVAndYouTubeAndTakesTheirCommands() {
+        let (router, recorder) = makeRouter()
+        router.openLiveTV()
+        #expect(router.handle(.powerMenu))
+        _ = router.handle(.down)
+        _ = router.handle(.select)   // Sleep Mac mini
+        #expect(liveTV.handled.isEmpty)
+        #expect(router.screen == .liveTV)
+        #expect(recorder.actions == [.sleepMac])
+
+        router.openYouTube()
+        #expect(router.handle(.powerMenu))
+        _ = router.handle(.down)
+        _ = router.handle(.back)
+        #expect(youtube.sent.isEmpty)
+        #expect(router.powerMenu == nil)
+        #expect(router.screen == .youtube)
+    }
+
+    @Test func cancelCloses() {
+        let (router, recorder) = makeRouter()
+        choose(.cancel, router)
+        #expect(router.powerMenu == nil)
+        #expect(recorder.actions.isEmpty)
+    }
+
+    @Test func homeClosesTheMenuAndGoesHome() {
+        let (router, _) = makeRouter()
+        router.openLiveTV()
+        _ = router.handle(.powerMenu)
+        #expect(router.handle(.home))
+        #expect(router.powerMenu == nil)
+        #expect(router.screen == .home)
+    }
+
+    @Test func powerPressWorksEverywhereAndClosesTheMenu() {
+        let (router, recorder) = makeRouter()
+        #expect(router.handle(.power))
+        router.openSettings()
+        #expect(router.handle(.power))
+        _ = router.handle(.powerMenu)
+        #expect(router.handle(.power))
+        #expect(router.powerMenu == nil)
+        #expect(recorder.powerPresses == 3)
+        #expect(router.screen == .settings)
+    }
+
+    @Test func turnOffAndSleepNeedNoPIN() {
+        let (router, recorder) = makeRouter(pin: "1357")
+        choose(.turnOff, router)
+        choose(.sleepMac, router)
+        #expect(recorder.actions == [.turnOff, .sleepMac])
+        #expect(router.screen == .home)
+        #expect(router.pinEntry == nil)
+    }
+
+    @Test func restartWithoutAPINRunsAtOnce() {
+        let (router, recorder) = makeRouter()
+        choose(.restartMac, router)
+        choose(.relaunch, router)
+        #expect(recorder.actions == [.restartMac, .relaunch])
+        #expect(router.screen == .home)
+    }
+
+    @Test func restartWithAPINAsksForItAndAWrongPINDoesntRestart() {
+        let (router, recorder) = makeRouter(pin: "1357")
+        #expect(router.handle(.powerMenu))
+        #expect(router.powerMenuShowsPINLock)
+        _ = router.handle(.back)
+        choose(.restartMac, router)
+        #expect(router.screen == .pin(.restartMac))
+        #expect(router.pinEntry?.title == "Enter PIN to restart the Mac mini")
+        #expect(router.powerMenu == nil)
+        enterPIN("2468", router)
+        #expect(recorder.actions.isEmpty)
+        #expect(router.screen == .pin(.restartMac))
+        enterPIN("1357", router)
+        #expect(recorder.actions == [.restartMac])
+        #expect(router.screen == .home)
+    }
+
+    @Test func relaunchPINOverSettingsCancelsBackToSettings() {
+        let (router, recorder) = makeRouter(pin: "1357")
+        router.openSettings()
+        choose(.relaunch, router)
+        #expect(router.screen == .pin(.relaunch))
+        #expect(router.pinEntry?.title == "Enter PIN to relaunch MMTVL")
+        _ = router.handle(.back)
+        #expect(router.screen == .settings)
+        #expect(router.powerMenu == nil)
+        #expect(recorder.actions.isEmpty)
+    }
+
+    /// Security S3: a held key's repeats neither press Power again nor reopen the menu.
+    @Test func repeatsOfPowerAndPowerMenuDoNothing() {
+        let (router, recorder) = makeRouter()
+        #expect(router.handle(.power))
+        #expect(router.handle(.power, isRepeat: true))
+        #expect(router.handle(.power, isRepeat: true))
+        #expect(recorder.powerPresses == 1)
+        #expect(router.handle(.powerMenu, isRepeat: true))
+        #expect(router.powerMenu == nil)
+        #expect(router.handle(.powerMenu))
+        #expect(router.powerMenu != nil)
+        // Repeats in the open menu are the menu's (a held Down still moves).
+        _ = router.handle(.down, isRepeat: true)
+        #expect(router.powerMenu?.focusedItem.action == .sleepMac)
+    }
+
+    /// Security S4: the menu over the quit PIN; Relaunch asks for its own PIN, a wrong one doesn't relaunch.
+    @Test func relaunchOverTheQuitPIN() {
+        let (router, recorder) = makeRouter(pin: "1357")
+        var quits = 0
+        router.onQuit = { quits += 1 }
+        router.requestQuit()
+        #expect(router.screen == .pin(.quit))
+        choose(.relaunch, router)
+        #expect(router.screen == .pin(.relaunch))
+        #expect(recorder.actions.isEmpty)
+        enterPIN("2468", router)
+        #expect(recorder.actions.isEmpty)
+        #expect(router.screen == .pin(.relaunch))
+        enterPIN("1357", router)
+        #expect(recorder.actions == [.relaunch])
+        #expect(quits == 0)
+    }
+
+    /// U1 and the Exit to Desktop re-review: why the menu closed. An item is reported after it ran (Relaunch's PIN
+    /// screen is up by then).
+    @Test func closeReasons() {
+        let (router, _) = makeRouter(pin: "1357")
+        var closes: [PowerMenuCloseReason] = []
+        var screensAtClose: [AppRouter.Screen] = []
+        router.onPowerMenuClose = {
+            closes.append($0)
+            screensAtClose.append(router.screen)
+        }
+        choose(.cancel, router)
+        _ = router.handle(.powerMenu)
+        _ = router.handle(.back)
+        _ = router.handle(.powerMenu)
+        _ = router.handle(.menu)
+        #expect(closes == [.cancelled, .cancelled, .cancelled])
+        closes = []
+        choose(.turnOff, router)
+        _ = router.handle(.powerMenu)
+        _ = router.handle(.home)
+        _ = router.handle(.powerMenu)
+        _ = router.handle(.power)
+        _ = router.handle(.powerMenu)
+        router.openLiveTV()
+        router.goHome()
+        #expect(closes == [.other, .home, .other, .other])
+        closes = []
+        screensAtClose = []
+        router.openLiveTV()
+        choose(.relaunch, router)
+        #expect(closes == [.other])
+        #expect(screensAtClose == [.pin(.relaunch)])
+    }
+
+    /// Like Quit: the PIN screen can't sit over Live TV, so it goes home first; cancelling stays home.
+    @Test func relaunchPINOverLiveTVGoesHomeFirst() {
+        let (router, recorder) = makeRouter(pin: "1357")
+        router.openLiveTV()
+        choose(.relaunch, router)
+        #expect(liveTV.leaves == 1)
+        #expect(router.screen == .pin(.relaunch))
+        enterPIN("1357", router)
+        #expect(recorder.actions == [.relaunch])
         #expect(router.screen == .home)
     }
 }

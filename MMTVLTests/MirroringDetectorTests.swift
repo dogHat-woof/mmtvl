@@ -88,3 +88,23 @@ struct MirroringDetectorTests {
         do { let allowed = limiter.allowRestart(at: start.addingTimeInterval(603)); #expect(allowed) }
     }
 }
+
+/// L22, M7h QA Q1: whether a session end shows MMTVL's home screen.
+struct MirroringSessionEndTests {
+    @Test func homeUnlessAnotherAppOrThePowerMenu() {
+        let reflector = ReflectorMonitor.bundleID
+        #expect(ReflectorMonitor.showsHomeAfterSession(frontBundleID: reflector, frontIsSelf: false, hasFrontApp: true,
+                                                       isPowerMenuOpen: false))
+        #expect(ReflectorMonitor.showsHomeAfterSession(frontBundleID: nil, frontIsSelf: false, hasFrontApp: false,
+                                                       isPowerMenuOpen: false))
+        #expect(ReflectorMonitor.showsHomeAfterSession(frontBundleID: "dev.mmtvl.launcher", frontIsSelf: true,
+                                                       hasFrontApp: true, isPowerMenuOpen: false))
+        #expect(!ReflectorMonitor.showsHomeAfterSession(frontBundleID: "tv.plex.htpc", frontIsSelf: false,
+                                                        hasFrontApp: true, isPowerMenuOpen: false))
+        // The power menu brought MMTVL over the mirrored window: the menu stays open.
+        #expect(!ReflectorMonitor.showsHomeAfterSession(frontBundleID: "dev.mmtvl.launcher", frontIsSelf: true,
+                                                        hasFrontApp: true, isPowerMenuOpen: true))
+        #expect(!ReflectorMonitor.showsHomeAfterSession(frontBundleID: reflector, frontIsSelf: false, hasFrontApp: true,
+                                                        isPowerMenuOpen: true))
+    }
+}

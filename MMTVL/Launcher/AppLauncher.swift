@@ -75,6 +75,37 @@ nonisolated struct WebAppHandoff {
     }
 }
 
+/// A running app as `AppLauncher` restarts it (M7h L16): `NSRunningApplication` in the app, fakes in tests.
+protocol LauncherRunningApp: AnyObject {
+    var processIdentifier: pid_t { get }
+    var isTerminated: Bool { get }
+    @discardableResult func terminate() -> Bool
+    @discardableResult func forceTerminate() -> Bool
+}
+
+extension NSRunningApplication: LauncherRunningApp {}
+
+/// The workspace calls `AppLauncher` makes to open, find and restart apps (M7h step 13). `system` is the real
+/// `NSWorkspace`; tests inject fakes so they never open or quit a real app.
+struct LauncherWorkspace {
+    var appURL: (_ bundleID: String) -> URL?
+    var runningApps: (_ bundleID: String) -> [any LauncherRunningApp]
+    /// Opens the app at the URL; returns its pid.
+    var openApplication: (URL, NSWorkspace.OpenConfiguration) async throws -> pid_t
+    var sleep: (Duration) async -> Void
+
+    static var system: LauncherWorkspace {
+        LauncherWorkspace(
+            appURL: { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) },
+            runningApps: { NSRunningApplication.runningApplications(withBundleIdentifier: $0) },
+            openApplication: { url, configuration in
+                try await NSWorkspace.shared.openApplication(at: url, configuration: configuration).processIdentifier
+            },
+            sleep: { try? await Task.sleep(for: $0) }
+        )
+    }
+}
+
 /// Launches external apps and URLs (D13) and brings the launcher back when an app it launched quits,
 /// or when an app comes forward after Home cancelled its launch.
 final class AppLauncher {
@@ -118,8 +149,26 @@ final class AppLauncher {
         return ["--start-fullscreen"]
     }
 
+    /// M7h L16 (D45): apps restarted on their next open after an HDMI hot-plug while they ran in the background
+    /// (Plex HTPC showed a black screen after every one, M7f §1). Never any other app.
+    static let restartAfterHotplug: Set<String> = ["tv.plex.htpc"]
+    /// L16: how long a restart waits for the app to quit before force-quitting it, and how often it checks.
+    static let restartQuitWait: Duration = .seconds(5)
+    static let restartForceWait: Duration = .seconds(1)
+    static let restartPoll: Duration = .milliseconds(100)
+
+    private let workspace: LauncherWorkspace
     private let fullScreener = WindowFullScreener()
-    private var launchedPIDs: Set<pid_t> = []
+    /// Apps MMTVL opened; one quitting brings the launcher back (L5).
+    private(set) var launchedPIDs: Set<pid_t> = []
+    /// L16: bundle ids (only from `restartAfterHotplug`) to restart when a tile next opens them, with the pids that
+    /// were running at the display change: a later instance (the marked one quit and Plex started again) is healthy
+    /// and isn't restarted (security low 2).
+    private var markedPIDs: [String: Set<pid_t>] = [:]
+    var restartOnNextOpen: Set<String> { Set(markedPIDs.keys) }
+    /// L16: bundle ids being restarted. Another open of one (a double Select) opens nothing; the running restart
+    /// opens the app (QA major).
+    private(set) var restarting: Set<String> = []
     /// L18: launched web app shims, to tell a hand-off (a quick quit) from the app closing.
     private var webAppLaunches: [pid_t: (item: LaunchItem, info: WebAppInfo, launchedAt: Date)] = [:]
     private var iconCache: [URL: NSImage] = [:]
@@ -127,7 +176,8 @@ final class AppLauncher {
     private var activationObserver: NSObjectProtocol?
     private var cancellation = LaunchCancellation()
 
-    init() {
+    init(workspace: LauncherWorkspace = .system) {
+        self.workspace = workspace
         terminationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didTerminateApplicationNotification,
             object: nil,
@@ -220,6 +270,10 @@ final class AppLauncher {
 
         switch item.kind {
         case .application(let bundleID):
+            if restarting.contains(bundleID) {
+                Self.logger.debug("\(bundleID, privacy: .public) is restarting; it opens when that's done")
+                return
+            }
             guard let url = appURL(for: bundleID) else {
                 throw LaunchError.notInstalled(bundleID: bundleID)
             }
@@ -231,21 +285,29 @@ final class AppLauncher {
             }
             Self.logger.notice("Launching \(bundleID, privacy: .public)")
             cancellation.began(bundleID, at: Date())
-            let wasRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
-            let app = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
-            launchedPIDs.insert(app.processIdentifier)
+            // L16: after a hot-plug, quit the app first; then it opens as a fresh launch.
+            let restartedPIDs = await restartIfMarked(bundleID)
+            defer { if !restartedPIDs.isEmpty { restarting.remove(bundleID) } }
+            let wasRunning = !workspace.runningApps(bundleID).isEmpty
+            let pid = try await workspace.openApplication(url, configuration)
+            if restartedPIDs.contains(pid) {
+                // Still the old process (it outlived the force quit): not tracked, so its eventual quit doesn't bring
+                // the launcher back over the app (QA minor 1).
+                Self.logger.error("\(bundleID, privacy: .public) opened its old process; not tracking it")
+            } else {
+                launchedPIDs.insert(pid)
+            }
             if webApp == nil {
-                let pid = app.processIdentifier
                 Task {
                     try? await Task.sleep(for: .seconds(2))
                     logWindows(bundleID: bundleID, pid: pid, wasRunning: wasRunning)
                 }
             }
             if let webApp {
-                webAppLaunches[app.processIdentifier] = (item, webApp, Date())
+                webAppLaunches[pid] = (item, webApp, Date())
                 if wasRunning { reloadWebAppWhenFront(bundleID: bundleID, info: webApp) }
             }
-            makeFullScreenIfWanted(item, pid: app.processIdentifier)
+            makeFullScreenIfWanted(item, pid: pid)
 
         case .defaultBrowser(let fullScreen):
             guard let browserURL = defaultBrowserURL() else {
@@ -281,6 +343,86 @@ final class AppLauncher {
         case .internalDestination, .system:
             throw LaunchError.unsupportedKind
         }
+    }
+
+    // MARK: Restart after a hot-plug (M7h L16, D45)
+
+    /// A display was added or removed: marks each running app in
+    /// `restartAfterHotplug` that isn't frontmost, with its pids. Idempotent, so a burst of display changes is fine.
+    func noteDisplayChange(frontmostBundleID: String?) {
+        mark(excluding: frontmostBundleID, reason: "display change")
+    }
+
+    private func mark(excluding frontmostBundleID: String?, reason: String) {
+        for bundleID in Self.restartAfterHotplug.sorted() where bundleID != frontmostBundleID {
+            let pids = Set(workspace.runningApps(bundleID).filter { !$0.isTerminated }.map(\.processIdentifier))
+            let known = markedPIDs[bundleID] ?? []
+            guard !pids.isEmpty, !pids.isSubset(of: known) else { continue }
+            markedPIDs[bundleID] = known.union(pids)
+            if known.isEmpty {
+                Self.logger.notice("\(bundleID, privacy: .public) will restart on its next open (\(reason, privacy: .public))")
+            }
+        }
+    }
+
+    /// M7h user decision (2026-11-06): MMTVL turned the TV on and is about to show its home screen over whatever was in
+    /// front, so each running app in `restartAfterHotplug` is marked, frontmost or not (a display change keeps L16's
+    /// not-frontmost rule).
+    func notePowerOn() {
+        mark(excluding: nil, reason: "power on")
+    }
+
+    /// True when opening the tile restarts its app first (`AppRouter` holds the home exit until it has opened).
+    func willRestart(_ item: LaunchItem) -> Bool {
+        guard case .application(let bundleID) = item.kind, !restarting.contains(bundleID) else { return false }
+        return !markedApps(bundleID).isEmpty
+    }
+
+    /// The marked app's processes still running (only those running at a display change).
+    private func markedApps(_ bundleID: String) -> [any LauncherRunningApp] {
+        guard Self.restartAfterHotplug.contains(bundleID), let pids = markedPIDs[bundleID] else { return [] }
+        return workspace.runningApps(bundleID).filter { !$0.isTerminated && pids.contains($0.processIdentifier) }
+    }
+
+    /// L16: a marked app quits before it opens: its pids leave `launchedPIDs` first (so its quitting doesn't bring
+    /// the launcher back), `terminate()`, up to 5 s, then `forceTerminate()`. Waits without blocking the main actor.
+    /// Returns the pids it quit (empty: no restart); while it runs, `restarting` holds the bundle id (the caller
+    /// removes it after opening).
+    private func restartIfMarked(_ bundleID: String) async -> Set<pid_t> {
+        let apps = markedApps(bundleID)
+        guard markedPIDs.removeValue(forKey: bundleID) != nil else { return [] }
+        guard !apps.isEmpty else {
+            Self.logger.debug("\(bundleID, privacy: .public): the marked process quit already; no restart")
+            return []
+        }
+        restarting.insert(bundleID)
+        Self.logger.notice("Restarting \(bundleID, privacy: .public) after a display change")
+        for app in apps {
+            launchedPIDs.remove(app.processIdentifier)
+            webAppLaunches.removeValue(forKey: app.processIdentifier)
+            app.terminate()
+        }
+        let pids = Set(apps.map(\.processIdentifier))
+        if await waitUntilTerminated(apps, for: Self.restartQuitWait) { return pids }
+        for app in apps where !app.isTerminated {
+            Self.logger.notice("\(bundleID, privacy: .public) didn't quit in 5 s; force quitting")
+            app.forceTerminate()
+        }
+        if await !waitUntilTerminated(apps, for: Self.restartForceWait) {
+            Self.logger.error("\(bundleID, privacy: .public) is still running after a force quit; opening it anyway")
+        }
+        return pids
+    }
+
+    /// True once every app has quit, false after `limit`.
+    private func waitUntilTerminated(_ apps: [any LauncherRunningApp], for limit: Duration) async -> Bool {
+        var waited: Duration = .zero
+        while apps.contains(where: { !$0.isTerminated }) {
+            guard waited < limit else { return false }
+            await workspace.sleep(Self.restartPoll)
+            waited += Self.restartPoll
+        }
+        return true
     }
 
     /// M7f L1: what an opened app shows 2 s later (Q22). Sizes only, never window titles.
@@ -379,7 +521,7 @@ final class AppLauncher {
     }
 
     private func appURL(for bundleID: String) -> URL? {
-        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        workspace.appURL(bundleID)
     }
 
     private func defaultBrowserURL() -> URL? {
@@ -392,7 +534,8 @@ final class AppLauncher {
         onReturnToLauncher?()
     }
 
-    private func applicationDidTerminate(pid: pid_t) {
+    /// Internal for tests (M7h L16: a restarted app's quit is ignored).
+    func applicationDidTerminate(pid: pid_t) {
         if let webApp = webAppLaunches.removeValue(forKey: pid),
            WebAppHandoff.isHandoff(launchedAt: webApp.launchedAt, quitAt: Date()),
            case .application(let bundleID) = webApp.item.kind {

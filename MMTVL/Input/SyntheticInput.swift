@@ -108,11 +108,13 @@ nonisolated enum SyntheticInput {
     }
 
     static func movePointer(to point: CGPoint, delta: CGVector) {
-        guard let event = CGEvent(mouseEventSource: makeSource(), mouseType: .mouseMoved,
+        // M7h security: never post (or convert) a non-finite position.
+        guard point.x.isFinite, point.y.isFinite,
+              let event = CGEvent(mouseEventSource: makeSource(), mouseType: .mouseMoved,
                                   mouseCursorPosition: point, mouseButton: .left)
         else { return }
-        event.setIntegerValueField(.mouseEventDeltaX, value: Int64(delta.dx.rounded()))
-        event.setIntegerValueField(.mouseEventDeltaY, value: Int64(delta.dy.rounded()))
+        event.setIntegerValueField(.mouseEventDeltaX, value: PointerMath.eventDelta(delta.dx))
+        event.setIntegerValueField(.mouseEventDeltaY, value: PointerMath.eventDelta(delta.dy))
         post(event)
     }
 

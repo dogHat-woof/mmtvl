@@ -188,6 +188,14 @@ final class ReflectorMonitor {
         }
     }
 
+    /// L22: after a session ends, MMTVL shows its home screen unless the user switched to another app on purpose, or
+    /// (M7h QA Q1) the power menu is open: opening it brought MMTVL forward over the mirrored window. Pure.
+    nonisolated static func showsHomeAfterSession(frontBundleID: String?, frontIsSelf: Bool, hasFrontApp: Bool,
+                                                  isPowerMenuOpen: Bool) -> Bool {
+        guard !isPowerMenuOpen else { return false }
+        return !hasFrontApp || frontBundleID == bundleID || frontIsSelf
+    }
+
     private func sessionEnded() {
         isMirroring = false
         lastFullScreenAttempt = nil

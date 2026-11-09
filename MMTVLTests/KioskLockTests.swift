@@ -112,4 +112,51 @@ struct KioskGuardTests {
         kioskGuard.isEnabled = false
         #expect(activate(kioskGuard, "com.apple.finder") == .ignore)
     }
+
+    // M7h security M1: the Siri Remote's trackpad pointer follows the guard's rule while the lock is in force.
+
+    private func gate(_ kioskGuard: KioskGuard, _ bundleID: String?, isSelf: Bool = false,
+                      lock: Bool = true) -> KioskGuard.PointerGate {
+        kioskGuard.pointerGate(isLockInForce: lock, frontBundleID: bundleID, isSelf: isSelf)
+    }
+
+    @Test func pointerBlockedInAppsTheGuardDoesNotAllow() {
+        let kioskGuard = makeGuard()
+        kioskGuard.opened(bundleIDs: ["tv.plex.htpc"])
+        #expect(gate(kioskGuard, "com.apple.mail") == .blocked(bundleID: "com.apple.mail"))
+        #expect(gate(kioskGuard, KioskGuard.systemSettingsBundleID) == .blocked(bundleID: KioskGuard.systemSettingsBundleID))
+        #expect(gate(kioskGuard, nil) == .blocked(bundleID: "?"))
+    }
+
+    @Test func pointerBlockedWhileTheGuardIsSuspended() {
+        let clock = Clock()
+        let kioskGuard = makeGuard(clock)
+        kioskGuard.opened(bundleIDs: ["tv.plex.htpc"])
+        for _ in 0..<4 { _ = activate(kioskGuard, "com.apple.mail") }
+        #expect(kioskGuard.isSuspended)
+        #expect(gate(kioskGuard, "com.apple.mail") == .blocked(bundleID: "com.apple.mail"))
+        // The session app still works.
+        #expect(gate(kioskGuard, "tv.plex.htpc") == .allowed)
+    }
+
+    @Test func pointerAllowedInMMTVLSessionAppsAndReflector() {
+        let kioskGuard = makeGuard()
+        kioskGuard.opened(bundleIDs: ["com.brave.Browser.app.meet", "com.brave.Browser"])
+        #expect(gate(kioskGuard, "dev.mmtvl.launcher", isSelf: true) == .allowed)
+        #expect(gate(kioskGuard, "com.brave.Browser.app.meet") == .allowed)
+        #expect(gate(kioskGuard, "com.brave.Browser") == .allowed)
+        #expect(gate(kioskGuard, ReflectorMonitor.bundleID) == .allowed)
+        kioskGuard.openedSystemSettings()
+        #expect(gate(kioskGuard, KioskGuard.systemSettingsBundleID) == .allowed)
+        // Home ends the session: the tile's app is no longer allowed.
+        kioskGuard.homePressed()
+        #expect(gate(kioskGuard, "com.brave.Browser") == .blocked(bundleID: "com.brave.Browser"))
+    }
+
+    @Test func pointerAllowedAnywhereWithoutTheLock() {
+        let kioskGuard = makeGuard()
+        kioskGuard.isEnabled = false
+        #expect(gate(kioskGuard, "com.apple.mail", lock: false) == .allowed)
+        #expect(gate(kioskGuard, nil, lock: false) == .allowed)
+    }
 }

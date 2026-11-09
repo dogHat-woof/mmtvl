@@ -25,7 +25,8 @@ nonisolated struct PINPad: Equatable, Sendable {
         case .right: enterColumn(2)
         case .back:
             if digits.isEmpty { .cancelled } else { deleteLast() }
-        case .home, .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown: .ignored
+        case .home, .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown,
+             .volumeUp, .volumeDown, .mute, .power, .powerMenu: .ignored
         }
     }
 

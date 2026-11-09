@@ -132,3 +132,315 @@ struct WebAppTests {
         #expect(!WebAppHandoff.isHandoff(launchedAt: launch, quitAt: launch - 1))
     }
 }
+
+// MARK: M7h L16: restart after a hot-plug
+
+/// A fake running app. Pids start above 99 998 (macOS's highest), so none is ever a real process.
+final class FakeRunningApp: LauncherRunningApp {
+    let processIdentifier: pid_t
+    var isTerminated = false
+    /// False: `terminate()` is ignored, only a force quit ends it.
+    var quitsWhenAsked = true
+    /// True: a force quit is ignored too (a stuck process).
+    var ignoresForceQuit = false
+    /// Runs inside `terminate()`, before it quits (tests look at the launcher there).
+    var onTerminate: () -> Void = {}
+    private let log: (String) -> Void
+
+    init(pid: pid_t, log: @escaping (String) -> Void) {
+        processIdentifier = pid
+        self.log = log
+    }
+
+    func terminate() -> Bool {
+        log("terminate \(processIdentifier)")
+        onTerminate()
+        if quitsWhenAsked { isTerminated = true }
+        return true
+    }
+
+    func forceTerminate() -> Bool {
+        log("forceTerminate \(processIdentifier)")
+        if !ignoresForceQuit { isTerminated = true }
+        return true
+    }
+}
+
+/// Fakes `LauncherWorkspace`: nothing real is opened, found or quit, and sleeping returns at once (a fake clock).
+final class FakeLauncherWorkspace {
+    var events: [String] = []
+    var running: [String: [FakeRunningApp]] = [:]
+    var sleeps: [Duration] = []
+    private var nextPID: pid_t = 100_001
+
+    var slept: Duration { sleeps.reduce(.zero, +) }
+
+    var workspace: LauncherWorkspace {
+        LauncherWorkspace(
+            appURL: { URL(filePath: "/nonexistent/\($0).app") },
+            runningApps: { self.running[$0, default: []].filter { !$0.isTerminated } },
+            openApplication: { url, _ in
+                let bundleID = url.deletingPathExtension().lastPathComponent
+                // Like NSWorkspace: a running app is brought forward, else a new process starts.
+                let app = self.running[bundleID, default: []].first { !$0.isTerminated } ?? self.start(bundleID)
+                self.events.append("open \(bundleID) \(app.processIdentifier)")
+                return app.processIdentifier
+            },
+            sleep: { self.sleeps.append($0) }
+        )
+    }
+
+    /// An app already running (started outside MMTVL, or by an earlier open).
+    @discardableResult
+    func start(_ bundleID: String) -> FakeRunningApp {
+        let app = FakeRunningApp(pid: nextPID) { [weak self] in self?.events.append($0) }
+        nextPID += 1
+        running[bundleID, default: []].append(app)
+        return app
+    }
+}
+
+struct AppLauncherRestartTests {
+    static let plex = LaunchItem(id: "plex", title: "Plex", kind: .application(bundleID: "tv.plex.htpc"))
+    static let other = LaunchItem(id: "other", title: "Other", kind: .application(bundleID: "com.example.app"))
+    static let mmtvl = "dev.mmtvl.launcher"
+
+    let fake = FakeLauncherWorkspace()
+
+    @Test func onlyPlexIsListed() {
+        #expect(AppLauncher.restartAfterHotplug == ["tv.plex.htpc"])
+    }
+
+    @Test func aDisplayChangeMarksPlexRunningInTheBackground() {
+        fake.start("tv.plex.htpc")
+        let launcher = AppLauncher(workspace: fake.workspace)
+        launcher.noteDisplayChange(frontmostBundleID: Self.mmtvl)
+        #expect(launcher.restartOnNextOpen == ["tv.plex.htpc"])
+        // A burst of changes (a TV power cycle) marks it once.
+        launcher.noteDisplayChange(frontmostBundleID: Self.mmtvl)
+        launcher.noteDisplayChange(frontmostBundleID: nil)
+        #expect(launcher.restartOnNextOpen == ["tv.plex.htpc"])
+    }
+
+    @Test func plexInFrontIsNotMarked() {
+        fake.start("tv.plex.htpc")
+        let launcher = AppLauncher(workspace: fake.workspace)
+        launcher.noteDisplayChange(frontmostBundleID: "tv.plex.htpc")
+        #expect(launcher.restartOnNextOpen.isEmpty)
+    }
+
+    /// M7h user decision (2026-11-06): a power-on marks Plex even when it's in front (MMTVL's home screen is about to
+    /// cover it); a display change still doesn't (L16).
+    @Test func powerOnMarksPlexEvenInFront() {
+        fake.start("tv.plex.htpc")
+        let launcher = AppLauncher(workspace: fake.workspace)
+        launcher.noteDisplayChange(frontmostBundleID: "tv.plex.htpc")
+        #expect(launcher.restartOnNextOpen.isEmpty)
+        launcher.notePowerOn()
+        #expect(launcher.restartOnNextOpen == ["tv.plex.htpc"])
+        #expect(launcher.willRestart(Self.plex))
+        // Not running: nothing to mark.
+        let empty = AppLauncher(workspace: FakeLauncherWorkspace().workspace)
+        empty.notePowerOn()
+        #expect(empty.restartOnNextOpen.isEmpty)
+    }
+
+    /// The app's power-on: Plex marked first (while it may still be in front), then home like a global Home.
+    @Test func powerOnHandlerMarksThenGoesHome() {
+        fake.start("tv.plex.htpc")
+        let launcher = AppLauncher(workspace: fake.workspace)
+        var marksAtHome: [Set<String>] = []
+        let handler = PowerController.powerOnHandler(launcher: launcher, goHome: {
+            marksAtHome.append(launcher.restartOnNextOpen)
+        })
+        handler()
+        #expect(marksAtHome == [["tv.plex.htpc"]])
+    }
+
+    @Test func plexNotRunningIsNotMarked() {
+        let launcher = AppLauncher(workspace: fake.workspace)
+        launcher.noteDisplayChange(frontmostBundleID: Self.mmtvl)
+        #expect(launcher.restartOnNextOpen.isEmpty)
+    }
+
+    @Test func anAppNotListedIsNeverMarkedOrQuit() async throws {
+        fake.start("com.example.app")
+        fake.start("com.apple.Safari")
+        let launcher = AppLauncher(workspace: fake.workspace)
+        launcher.noteDisplayChange(frontmostBundleID: Self.mmtvl)
+        #expect(launcher.restartOnNextOpen.isEmpty)
+        try await launcher.launch(Self.other)
+        #expect(fake.events == ["open com.example.app 100001"])
+    }
+
+    @Test func openingAMarkedPlexQuitsItThenLaunchesItAgain() async throws {
+        let launcher = AppLauncher(workspace: fake.workspace)
+        // Opened from its tile earlier: MMTVL goes Home when that pid quits.
+        try await launcher.launch(Self.plex)
+        let old = try #require(fake.running["tv.plex.htpc"]?.first)
+        #expect(launcher.launchedPIDs == [old.processIdentifier])
+
+        var trackedWhenQuitting: Bool?
+        old.onTerminate = { trackedWhenQuitting = launcher.launchedPIDs.contains(old.processIdentifier) }
+        launcher.noteDisplayChange(frontmostBundleID: Self.mmtvl)
+        fake.events = []
+        try await launcher.launch(Self.plex)
+
+        // The pid left launchedPIDs before terminate(), so its quit doesn't bring the launcher back.
+        #expect(trackedWhenQuitting == false)
+        #expect(fake.events == ["terminate 100001", "open tv.plex.htpc 100002"])
+        #expect(launcher.launchedPIDs == [100_002])
+        #expect(launcher.restartOnNextOpen.isEmpty)
+        #expect(fake.sleeps.isEmpty)
+
+        // The old process's quit notification is ignored (not a launched pid any more).
+        launcher.applicationDidTerminate(pid: old.processIdentifier)
+        #expect(launcher.launchedPIDs == [100_002])
+    }
+
+    @Test func aPlexThatDoesNotQuitIsForceQuitAfterFiveSeconds() async throws {
+        let old = fake.start("tv.plex.htpc")
+        old.quitsWhenAsked = false
+        let launcher = AppLauncher(workspace: fake.workspace)
+        launcher.noteDisplayChange(frontmostBundleID: Self.mmtvl)
+        try await launcher.launch(Self.plex)
+        #expect(fake.events == ["terminate 100001", "forceTerminate 100001", "open tv.plex.htpc 100002"])
+        #expect(fake.slept == .seconds(5))
+        #expect(fake.sleeps.allSatisfy { $0 == AppLauncher.restartPoll })
+    }
+
+    @Test func aPlexThatQuitsSlowlyIsNotForceQuit() async throws {
+        let old = fake.start("tv.plex.htpc")
+        old.quitsWhenAsked = false
+        // It quits on its own after 1 s of the fake clock.
+        let base = fake.workspace
+        let fake = fake
+        let workspace = LauncherWorkspace(appURL: base.appURL, runningApps: base.runningApps,
+                                          openApplication: base.openApplication) { duration in
+            await base.sleep(duration)
+            if fake.slept >= .seconds(1) { old.isTerminated = true }
+        }
+        let launcher = AppLauncher(workspace: workspace)
+        launcher.noteDisplayChange(frontmostBundleID: Self.mmtvl)
+        try await launcher.launch(Self.plex)
+        #expect(fake.events == ["terminate 100001", "open tv.plex.htpc 100002"])
+        #expect(fake.slept == .seconds(1))
+    }
+
+    @Test func anUnmarkedPlexOpensAsBefore() async throws {
+        let running = fake.start("tv.plex.htpc")
+        let launcher = AppLauncher(workspace: fake.workspace)
+        try await launcher.launch(Self.plex)
+        #expect(fake.events == ["open tv.plex.htpc 100001"])
+        #expect(!running.isTerminated)
+        #expect(launcher.launchedPIDs == [100_001])
+    }
+
+    @Test func aMarkIsUsedOnce() async throws {
+        fake.start("tv.plex.htpc")
+        let launcher = AppLauncher(workspace: fake.workspace)
+        launcher.noteDisplayChange(frontmostBundleID: Self.mmtvl)
+        try await launcher.launch(Self.plex)
+        fake.events = []
+        try await launcher.launch(Self.plex)
+        #expect(fake.events == ["open tv.plex.htpc 100002"])
+    }
+
+    @Test func aMarkedPlexThatQuitMeanwhileJustOpens() async throws {
+        let old = fake.start("tv.plex.htpc")
+        let launcher = AppLauncher(workspace: fake.workspace)
+        launcher.noteDisplayChange(frontmostBundleID: Self.mmtvl)
+        old.isTerminated = true
+        try await launcher.launch(Self.plex)
+        #expect(fake.events == ["open tv.plex.htpc 100002"])
+        #expect(launcher.restartOnNextOpen.isEmpty)
+    }
+
+    @Test func theRestartedPlexIsStillAnOpenedApp() async throws {
+        fake.start("tv.plex.htpc")
+        let launcher = AppLauncher(workspace: fake.workspace)
+        var opened: [[String]] = []
+        launcher.onOpened = { opened.append($0) }
+        launcher.noteDisplayChange(frontmostBundleID: Self.mmtvl)
+        try await launcher.launch(Self.plex)
+        // The kiosk guard is told before the restart, so the new process is allowed (D36).
+        #expect(opened == [["tv.plex.htpc"]])
+    }
+
+    // MARK: Review fixes
+
+    /// QA major (security low 1): a second open while the first waits for the old Plex to quit opens nothing; the
+    /// running restart opens the new process, and the old pid is never tracked again.
+    @Test func overlappingOpensOfAMarkedPlexQuitAndOpenItOnce() async throws {
+        let old = fake.start("tv.plex.htpc")
+        old.quitsWhenAsked = false
+        let base = fake.workspace
+        var launcher: AppLauncher?
+        var trackedDuringRestart: [Bool] = []
+        var secondOpened = false
+        // The first poll of the restart: the second Select arrives, then the old Plex quits.
+        let workspace = LauncherWorkspace(appURL: base.appURL, runningApps: base.runningApps,
+                                          openApplication: base.openApplication) { duration in
+            await base.sleep(duration)
+            guard let launcher, !secondOpened else { return }
+            secondOpened = true
+            #expect(launcher.restarting == ["tv.plex.htpc"])
+            try? await launcher.launch(Self.plex)
+            trackedDuringRestart.append(launcher.launchedPIDs.contains(old.processIdentifier))
+            old.isTerminated = true
+        }
+        let restartingLauncher = AppLauncher(workspace: workspace)
+        launcher = restartingLauncher
+        restartingLauncher.noteDisplayChange(frontmostBundleID: Self.mmtvl)
+        #expect(restartingLauncher.willRestart(Self.plex))
+        try await restartingLauncher.launch(Self.plex)
+
+        #expect(secondOpened)
+        #expect(fake.events == ["terminate 100001", "open tv.plex.htpc 100002"])
+        #expect(trackedDuringRestart == [false])
+        #expect(restartingLauncher.launchedPIDs == [100_002])
+        #expect(restartingLauncher.restarting.isEmpty)
+        #expect(!restartingLauncher.willRestart(Self.plex))
+    }
+
+    /// Security low 2: the marked Plex quit and Plex started again; the new one is healthy and isn't quit.
+    @Test func aStaleMarkDoesNotQuitALaterInstance() async throws {
+        let old = fake.start("tv.plex.htpc")
+        let launcher = AppLauncher(workspace: fake.workspace)
+        launcher.noteDisplayChange(frontmostBundleID: Self.mmtvl)
+        old.isTerminated = true
+        let later = fake.start("tv.plex.htpc")
+        #expect(!launcher.willRestart(Self.plex))
+        try await launcher.launch(Self.plex)
+        #expect(fake.events == ["open tv.plex.htpc 100002"])
+        #expect(!later.isTerminated)
+        #expect(launcher.restartOnNextOpen.isEmpty)
+    }
+
+    /// The later instance is marked too when another display change happens while it runs.
+    @Test func aLaterDisplayChangeMarksTheNewInstance() async throws {
+        let old = fake.start("tv.plex.htpc")
+        let launcher = AppLauncher(workspace: fake.workspace)
+        launcher.noteDisplayChange(frontmostBundleID: Self.mmtvl)
+        old.isTerminated = true
+        fake.start("tv.plex.htpc")
+        launcher.noteDisplayChange(frontmostBundleID: Self.mmtvl)
+        try await launcher.launch(Self.plex)
+        #expect(fake.events == ["terminate 100002", "open tv.plex.htpc 100003"])
+    }
+
+    /// QA minor 1: a process that outlives the force quit is opened (it's what's there) but never tracked, so its
+    /// eventual quit doesn't bring the launcher back over the app.
+    @Test func aStuckProcessIsNotTracked() async throws {
+        let old = fake.start("tv.plex.htpc")
+        old.quitsWhenAsked = false
+        old.ignoresForceQuit = true
+        let launcher = AppLauncher(workspace: fake.workspace)
+        launcher.noteDisplayChange(frontmostBundleID: Self.mmtvl)
+        try await launcher.launch(Self.plex)
+        #expect(fake.events == ["terminate 100001", "forceTerminate 100001", "open tv.plex.htpc 100001"])
+        #expect(fake.slept == .seconds(6))
+        #expect(launcher.launchedPIDs.isEmpty)
+        #expect(launcher.restarting.isEmpty)
+    }
+}

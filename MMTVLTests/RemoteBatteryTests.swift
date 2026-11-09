@@ -21,6 +21,12 @@ struct RemoteBatteryTests {
         #expect(RemoteBattery.level(from: [source(product: 804, current: 85), source(current: 60)]) == 60)
     }
 
+    /// M7h security review: AppleBluetoothRemote.kext's Siri Remote driver also lists product 790.
+    @Test func everySiriRemoteProductCounts() {
+        #expect(RemoteBattery.productIDs == [614, 621, 788, 789, 790])
+        #expect(RemoteBattery.level(from: [source(product: 790, current: 40)]) == 40)
+    }
+
     @Test func twoRemotesGiveTheLowerLevel() {
         #expect(RemoteBattery.level(from: [source(product: 789, current: 88), source(product: 614, current: 12)]) == 12)
     }

@@ -44,6 +44,17 @@ extension SettingsModel {
         case .restrictions: restrictionsSections
         case .system: systemSections
         case .about: aboutSections
+        case .siriRemote: siriRemoteSections
+        case .audioTV: audioTVSections
+        case .receiver: receiverSections
+        case .tv: tvSections
+        case .receiverBrand: receiverBrandSections
+        case .receiverPort: receiverPortSections
+        case .receiverMaxVolume: receiverMaxVolumeSections
+        case .receiverFound: receiverFoundSections
+        case .tvBrand: tvBrandSections
+        case .receiverConnection: receiverConnectionSections
+        case .addressEntry(let field): addressEntrySections(field)
         }
     }
 
@@ -82,6 +93,18 @@ extension SettingsModel {
         case .restrictions: "Restrictions"
         case .system: "System"
         case .about: "About"
+        case .siriRemote: "Siri Remote"
+        case .audioTV: "Audio & TV"
+        case .receiver: "Receiver"
+        case .tv: "TV"
+        case .receiverBrand: "Brand"
+        case .receiverPort: "Serial Port"
+        case .receiverMaxVolume: "Maximum Volume"
+        case .receiverFound: "Receivers Found"
+        case .tvBrand: "Brand"
+        case .receiverConnection: "Connection"
+        case .addressEntry(.receiver): "Receiver Address"
+        case .addressEntry(.tv): "TV Address"
         }
     }
 
@@ -101,6 +124,11 @@ extension SettingsModel {
     var bandText: String? {
         if movingTileID != nil { return "Up/Down: move · Select or Back: done" }
         if case .learnButton = page { return "Waiting for a button…" }
+        if case .addressEntry(let field) = page, isKeyboardFocused {
+            let example = field == .tv ? "192.168.1.40 or tv.local" : "192.168.1.50 or receiver.local"
+            let modeKey = keyboard.mode == .letters ? "123 switches to numbers" : "abc switches to letters"
+            return "Type an address like \(example). \(modeKey), Play/Pause deletes, Down goes to Save."
+        }
         return focusedRowID.flatMap { row(id: $0)?.description }
     }
 
@@ -125,9 +153,11 @@ extension SettingsModel {
                             description: "Reload YouTube, or sign every account out of it."),
                 SettingsRow(id: "casting", title: "Casting", showsDisclosure: true, action: .push(.casting),
                             description: "Casting from the YouTube app, AirPlay from iPhones, Android mirroring through Reflector, and Plex HTPC."),
+                SettingsRow(id: "audioTV", title: "Audio & TV", showsDisclosure: true, action: .push(.audioTV),
+                            description: "The AV receiver for volume and power, the TV's power, and the volume display."),
                 SettingsRow(id: "remoteInput", title: "Remote & Input", showsDisclosure: true,
                             action: .push(.remoteInput),
-                            description: "Remote buttons, game controllers, the pointer and the phone remote."),
+                            description: "The Siri Remote, remote buttons, game controllers, the pointer and the phone remote."),
                 SettingsRow(id: "restrictions", title: "Restrictions", value: hasPIN ? "PIN On" : "PIN Off",
                             showsDisclosure: true, action: .push(.restrictions),
                             description: "The PIN, and keeping other apps from taking over the TV."),
@@ -154,7 +184,10 @@ extension SettingsModel {
                             description: "Home and the media keys also work while another app is in front. Needs Accessibility access."),
                 SettingsRow(id: "controllers", title: "Game Controllers",
                             value: Self.onOff(settings.controllersEnabled), action: .toggle(.controllersEnabled),
-                            description: "Use game controllers as remotes. The Siri Remote's TV button works through this too."),
+                            description: "Use game controllers as remotes."),
+                SettingsRow(id: "siriRemote", title: "Siri Remote", value: siriRemoteValue, showsDisclosure: true,
+                            action: .push(.siriRemote),
+                            description: "MMTVL reads the Siri Remote itself: its buttons, swipes and trackpad mode."),
                 SettingsRow(id: "remoteButtons", title: "Remote Buttons", showsDisclosure: true,
                             action: .push(.remoteButtons),
                             description: "See which buttons do what, and teach MMTVL the buttons of a new remote."),
@@ -710,7 +743,9 @@ extension SettingsModel {
     // MARK: - Remote Buttons (M7, D27)
 
     private var remoteButtonsSections: [SettingsSection] {
-        let rows = RemoteCommand.allCases.map { command in
+        // M7h (user decision U2, 2026-11-06): Power Menu can have buttons too; holding the Siri Remote's Power button
+        // opens it whatever they are.
+        let rows = Self.listedCommands.map { command in
             let names = bindings.bindings(for: command).map { TriggerName.describe($0.trigger) }
             var value = names.prefix(2).joined(separator: " · ")
             if names.count > 2 { value += " +\(names.count - 2)" }
@@ -718,13 +753,17 @@ extension SettingsModel {
                                showsDisclosure: true, action: .push(.remoteCommand(command)))
         }
         return [
-            SettingsSection(id: "commands", title: "Commands", rows: rows),
+            SettingsSection(id: "commands", title: "Commands", rows: rows,
+                            footer: "Holding the Siri Remote's Power button also opens the power menu, and holding its centre opens the menu (a right click in trackpad mode)."),
             SettingsSection(id: "manage", rows: [
                 SettingsRow(id: "restoreButtons", title: "Restore Default Buttons", showsDisclosure: true,
                             action: .push(.confirmRestoreButtons)),
             ], footer: "Buttons apply at once. Phone remote buttons can't be changed."),
         ]
     }
+
+    /// The Remote Buttons rows: every command (M7h U2: Power Menu again, step 11 had left it out).
+    static let listedCommands = RemoteCommand.allCases
 
     private func remoteCommandSections(_ command: RemoteCommand) -> [SettingsSection] {
         var rows = bindings.bindings(for: command).enumerated().map { index, binding in
@@ -742,18 +781,30 @@ extension SettingsModel {
             footer = "Home buttons can work in other apps too (needs Accessibility)."
         } else if KeyBindings.essentialCommands.contains(command) {
             footer = "Keep at least one button for \(command.title)."
+        } else if command == .power {
+            footer = "Power buttons can work in other apps too (needs Accessibility)."
+        } else if command == .powerMenu {
+            footer = "Power Menu buttons can work in other apps too (needs Accessibility). Holding the Siri Remote's Power button opens the power menu too, whatever buttons are here."
         }
         return [SettingsSection(id: "buttons", title: "Buttons", rows: rows, footer: footer)]
     }
 
     private func remoteBindingSections(_ command: RemoteCommand, _ trigger: InputBinding.Trigger) -> [SettingsSection] {
         var rows: [SettingsRow] = []
-        if command == .home {
-            let isGlobal = bindings.binding(matching: trigger)?.isGlobal == true
-            rows.append(SettingsRow(id: "binding.global", title: "Works in Other Apps", value: Self.onOff(isGlobal),
-                                    detail: isAccessibilityTrusted ? nil : "Needs Accessibility access",
-                                    action: .toggleBindingGlobal(trigger),
-                                    description: "This button also brings MMTVL back while another app is in front. Needs Accessibility access."))
+        // M7h L2: Siri Remote buttons always work in other apps, so they have no row. M7h step 12 (follow-up to U2):
+        // Power and Power Menu buttons can work in other apps too, so the power menu opens over Plex.
+        if let description = Self.globalDescription(command), !trigger.isSiriRemote {
+            if KeyBindings.canSetGlobal(trigger) {
+                let isGlobal = bindings.binding(matching: trigger)?.isGlobal == true
+                rows.append(SettingsRow(id: "binding.global", title: "Works in Other Apps", value: Self.onOff(isGlobal),
+                                        detail: isAccessibilityTrusted ? nil : "Needs Accessibility access",
+                                        action: .toggleBindingGlobal(trigger),
+                                        description: description))
+            } else {
+                // M7h L9: a plain letter or digit typed in other apps would bring MMTVL back.
+                rows.append(SettingsRow(id: "binding.global", title: "Works in Other Apps", value: "Off",
+                                        detail: "Letter and number keys only work in MMTVL"))
+            }
         }
         if bindings.canRemove(trigger) {
             rows.append(SettingsRow(id: "binding.remove", title: "Remove Button", action: .removeBinding(trigger)))
@@ -761,6 +812,17 @@ extension SettingsModel {
             rows.append(SettingsRow(id: "binding.cantRemove", title: "The last button for \(command.title) can't be removed"))
         }
         return [SettingsSection(id: "binding", rows: rows)]
+    }
+
+    /// The Works in Other Apps row's description, for the commands that may be global (Home, Power, Power Menu);
+    /// nil for the others.
+    static func globalDescription(_ command: RemoteCommand) -> String? {
+        switch command {
+        case .home: "This button also brings MMTVL back while another app is in front. Needs Accessibility access."
+        case .power: "This button also turns the TV and receiver off or on while another app is in front. Needs Accessibility access."
+        case .powerMenu: "This button also opens the power menu over another app. Needs Accessibility access."
+        default: nil
+        }
     }
 
     private func learnButtonSections(_ command: RemoteCommand) -> [SettingsSection] {
@@ -895,5 +957,407 @@ extension SettingsModel {
                 SettingsRow(id: "cast.plex.htpc", title: "Plex HTPC", value: plexValue),
             ], footer: "In the Plex app on a phone, tap Cast and choose Plex HTPC; it must be running, so open it once after a restart."),
         ]
+    }
+
+    // MARK: - Siri Remote (M7h D43)
+
+    /// "Connected · 78 %", "Connected", "Not Connected", "Off".
+    private var siriRemoteValue: String {
+        guard settings.siriRemoteEnabled else { return "Off" }
+        guard siriRemote.isConnected else { return "Not Connected" }
+        return siriRemote.batteryLevel.map { "Connected · \($0) %" } ?? "Connected"
+    }
+
+    private var siriRemoteSections: [SettingsSection] {
+        var rows = [
+            SettingsRow(id: "siri.enabled", title: "Use Siri Remote", value: Self.onOff(settings.siriRemoteEnabled),
+                        action: .toggle(.siriRemoteEnabled),
+                        description: "Read the Siri Remote directly. Double-press Siri for trackpad mode."),
+        ]
+        if settings.siriRemoteEnabled {
+            // Step 13e: off by default; trackpad mode is the same either way.
+            rows.append(SettingsRow(id: "siri.swipes", title: "Swipes", value: Self.onOff(settings.siriRemoteSwipes),
+                                    action: .toggle(.siriRemoteSwipes),
+                                    description: "Swipe on the remote's touch surface to move around, like an Apple TV. Off: only the clickpad's clicks move."))
+            #if DEBUG
+            // Step 6: a way to see the toast without the remote.
+            let demo: (action: SettingsAction?, description: String?) =
+                (.showToastDemo, "Debug builds: Select shows the Trackpad On toast.")
+            #else
+            let demo: (action: SettingsAction?, description: String?) = (nil, nil)
+            #endif
+            rows.append(SettingsRow(id: "siri.status", title: "Status", value: siriRemoteValue,
+                                    detail: siriRemote.isTouchAvailable ? (siriRemote.isConnected ? "Touch available" : nil)
+                                        : "Touch not available",
+                                    action: demo.action, description: demo.description))
+        }
+        return [
+            SettingsSection(id: "siri", rows: rows,
+                            footer: "How it works: TV goes Home. Press the clickpad's edges to move (or swipe, with Swipes on), press its centre to select. "
+                                + "Double-press Siri for trackpad mode: touch moves the pointer and a press clicks. "
+                                + "Holding the centre opens the menu (a right click in trackpad mode) and holding Power opens the power menu, "
+                                + "even if those buttons are changed in Remote Buttons."),
+        ]
+    }
+
+    // MARK: - Audio & TV: Receiver and TV (M7h D44, L12, L17, L18; step 13c)
+
+    /// Step 13c: Receiver and TV as their own pages, then the volume display (it applies to every volume route).
+    private var audioTVSections: [SettingsSection] {
+        [
+            SettingsSection(id: "devices", rows: [
+                SettingsRow(id: "audioTV.receiver", title: "Receiver", value: audioTVReceiverValue,
+                            showsDisclosure: true, action: .push(.receiver),
+                            description: "Volume, mute and power through the AV receiver, over a serial cable, the network or HDMI-CEC."),
+                SettingsRow(id: "audioTV.tv", title: "TV",
+                            value: settings.tvBrand == .none ? "Not Set Up" : settings.tvBrand.shortTitle,
+                            showsDisclosure: true, action: .push(.tv),
+                            description: "Turning the TV on and off with the remote's Power button, and optionally its volume."),
+            ]),
+            SettingsSection(id: "volume", title: "Volume", rows: [showVolumeRow]),
+        ]
+    }
+
+    /// "cu.usbserial-A1B2" for a configured path, "Automatic" for none.
+    private static func portTitle(_ path: String?) -> String {
+        guard let path else { return "Automatic" }
+        return path.hasPrefix("/dev/") ? String(path.dropFirst(5)) : path
+    }
+
+    /// Step 9c: Audio & TV's Receiver row: the brand, or over HDMI-CEC the receiver's name ("HDMI-CEC" before it
+    /// gave one).
+    private var audioTVReceiverValue: String {
+        if settings.receiverConnection == .cec { return cecReceiver.name ?? "HDMI-CEC" }
+        return settings.receiverBrand == .none ? "Not Set Up" : settings.receiverBrand.shortTitle
+    }
+
+    private var connectionRow: SettingsRow {
+        SettingsRow(id: "receiver.connection", title: "Connection", value: settings.receiverConnection.settingsTitle,
+                    showsDisclosure: true, action: .push(.receiverConnection),
+                    description: "Serial: an RS-232 cable from a USB serial adapter. Network: the receiver's address on this network. HDMI-CEC: through the Mac's HDMI, for any receiver that follows HDMI-CEC.")
+    }
+
+    private var receiverSections: [SettingsSection] {
+        if settings.receiverConnection == .cec { return cecReceiverSections }
+        let brand = settings.receiverBrand
+        let isNetwork = settings.receiverConnection == .network
+        var rows = [
+            SettingsRow(id: "receiver.brand", title: "Brand", value: brand.settingsTitle, showsDisclosure: true,
+                        action: .push(.receiverBrand),
+                        description: "The receiver's maker. MMTVL speaks each brand's own control commands."),
+            connectionRow,
+        ]
+        if isNetwork {
+            rows.append(SettingsRow(id: "receiver.address", title: "Address", value: settings.receiverHost ?? "Not Set",
+                                    showsDisclosure: true, action: .push(.addressEntry(.receiver)),
+                                    description: "The receiver's IP address or name on this network."))
+        } else {
+            rows.append(SettingsRow(id: "receiver.port", title: "Serial Port", value: Self.portTitle(settings.receiverSerialPort),
+                                    showsDisclosure: true, action: .push(.receiverPort),
+                                    description: "The USB serial adapter the receiver's cable is on. Automatic uses the first one."))
+        }
+        if brand != .none {
+            rows.append(SettingsRow(id: "receiver.test", title: "Test Connection", detail: probeLines[.testReceiver],
+                                    action: .testReceiver,
+                                    description: "Asks the receiver for its power, volume and mute. Nothing on the receiver changes."))
+        }
+        rows.append(SettingsRow(id: "receiver.find", title: isNetwork ? "Find on Network" : "Find Receiver",
+                                detail: probeLines[.findReceiver], action: .findReceiver,
+                                description: isNetwork
+                                    ? "Looks for receivers on this network and lists the ones that answer. Nothing on the receiver changes."
+                                    : "Tries each brand on the serial port and picks the one that answers. Nothing on the receiver changes."))
+        // QA minor 1: Find on Network's answers stay reachable after leaving the page they opened on.
+        if isNetwork, !foundReceivers.isEmpty {
+            rows.append(SettingsRow(id: "receiver.found", title: "Receivers Found", value: "\(foundReceivers.count)",
+                                    showsDisclosure: true, action: .push(.receiverFound),
+                                    description: "The receivers Find on Network found. Choose the one MMTVL controls."))
+        }
+        if brand != .none {
+            rows.append(SettingsRow(id: "receiver.maxVolume", title: "Maximum Volume",
+                                    value: VolumeToast.format(dB: settings.validatedReceiverMaxDB),
+                                    detail: brand.reportsDB ? nil : "\(brand.shortTitle) receivers don't report dB, so there's no limit",
+                                    showsDisclosure: true, action: .push(.receiverMaxVolume),
+                                    description: "The loudest MMTVL's volume buttons set the receiver. Its own remote and knob aren't limited."))
+            rows.append(SettingsRow(id: "receiver.status", title: "Status", value: receiverStatusValue))
+        }
+
+        return [
+            SettingsSection(id: "receiver", rows: rows, footer: "Volume buttons go to the receiver while it answers."),
+        ]
+    }
+
+    /// Step 9c: Connection HDMI-CEC. No brand, port, address or volume limit; Test and Status show the receiver's name.
+    private var cecReceiverSections: [SettingsSection] {
+        let rows = [
+            connectionRow,
+            SettingsRow(id: "receiver.test", title: "Test Connection", detail: probeLines[.testReceiver],
+                        action: .testReceiver,
+                        description: "Asks the receiver over HDMI-CEC whether it's on, and its name. Nothing on the receiver changes."),
+            SettingsRow(id: "receiver.find", title: "Find Receiver", detail: probeLines[.findReceiver], action: .findReceiver,
+                        description: "Tries each brand on the serial port, then HDMI-CEC, and picks the one that answers. A serial cable gives the volume in dB and the volume limit. Nothing on the receiver changes."),
+            SettingsRow(id: "receiver.maxVolume", title: "Maximum Volume", value: "No Limit",
+                        detail: "HDMI-CEC receivers can't be limited"),
+            SettingsRow(id: "receiver.status", title: "Status", value: cecReceiverStatusValue),
+        ]
+        return [
+            SettingsSection(id: "receiver", rows: rows,
+                            footer: "Volume buttons go to the receiver while it's on. MMTVL shares the Mac's HDMI-CEC with macOS."),
+        ]
+    }
+
+    /// Step 9c: "On · VSX-01TXH", "Standby", "Not answering", or why HDMI-CEC can't be used.
+    private var cecReceiverStatusValue: String {
+        switch cecReceiver.availability {
+        case .notAvailable: return "HDMI-CEC not available on this display"
+        case .noDisplay: return "No HDMI display"
+        case .ready, nil: break
+        }
+        guard let power = cecReceiver.power else {
+            return cecReceiver.availability == nil ? "Checking…" : "Not answering"
+        }
+        return CECReceiverTest(power: power, name: cecReceiver.name).line
+    }
+
+    /// Step 9c: Serial / Network / HDMI-CEC.
+    private var receiverConnectionSections: [SettingsSection] {
+        let rows = ReceiverConnection.allCases.map { connection in
+            SettingsRow(id: "connection.\(connection.rawValue)", title: connection.settingsTitle,
+                        value: connection == settings.receiverConnection ? "Selected" : nil, detail: connection.detail,
+                        action: .setReceiverConnection(connection))
+        }
+        return [SettingsSection(id: "connections", rows: rows,
+                                footer: "Serial and Network give the volume in dB and a volume limit. HDMI-CEC works with any receiver that follows it, without a cable or address.")]
+    }
+
+    /// Step 9c: Volume Buttons Change TV Volume (`tvVolumeEnabled`), for Panasonic and HDMI-CEC.
+    private var tvVolumeRow: SettingsRow {
+        SettingsRow(id: "tv.volume", title: "Volume Buttons Change TV Volume", value: Self.onOff(settings.tvVolumeEnabled),
+                    action: .toggle(.tvVolumeEnabled),
+                    description: "When no receiver is set up, the volume buttons change the TV's own volume. For TVs that play through their own speakers. Some TVs ignore HDMI-CEC volume.")
+    }
+
+    /// Step 13b: the volume toast toggle (`volumeToast`); on Audio & TV from step 13c.
+    private var showVolumeRow: SettingsRow {
+        SettingsRow(id: "receiver.showVolume", title: "Show Volume", value: Self.onOff(settings.volumeToast),
+                    action: .toggle(.volumeToast),
+                    description: "Shows the volume at the top of the screen when you press a volume button. Messages about volume not working always show.")
+    }
+
+    /// The Status row: the last known state, else why there's none.
+    private var receiverStatusValue: String {
+        if let line = Self.receiverStatusLine(receiver.state) {
+            return receiver.isAnswering ? line : line + " · Not answering"
+        }
+        if let error = receiver.lastError { return error }
+        return receiver.isConnected ? "Waiting for an answer" : "Not connected"
+    }
+
+    static let vieraTVFooter = "Turn on TV Remote App and Wake on LAN in the TV's Network settings. The TV must be on Ethernet to turn on from MMTVL."
+
+    private var tvSections: [SettingsSection] {
+        var rows = [
+            SettingsRow(id: "tv.brand", title: "Brand", value: settings.tvBrand.settingsTitle, showsDisclosure: true,
+                        action: .push(.tvBrand),
+                        description: "A TV MMTVL turns on and off with the Power button, over the network or HDMI-CEC."),
+        ]
+        // Step 9 (reopened): HDMI-CEC needs no address, Find TV or MAC.
+        if settings.tvBrand == .cec {
+            rows.append(SettingsRow(id: "tv.test", title: "Test TV", detail: probeLines[.testTV], action: .testTV,
+                                    description: "Asks the TV over HDMI-CEC whether it's on. Nothing on the TV changes."))
+            rows.append(SettingsRow(id: "tv.status", title: "Status", value: Self.cecStatusLine(cec)))
+            rows.append(tvVolumeRow)
+            return [
+                SettingsSection(id: "tv", rows: rows,
+                                footer: "MMTVL shares the Mac's HDMI-CEC with macOS. Turning off also turns off receivers that follow HDMI-CEC."),
+            ]
+        }
+        if settings.tvBrand != .none {
+            rows.append(SettingsRow(id: "tv.address", title: "Address", value: settings.tvHost ?? "Not Set",
+                                    showsDisclosure: true, action: .push(.addressEntry(.tv)),
+                                    description: "The TV's IPv4 address or name on this network. Find TV fills it in."))
+            rows.append(SettingsRow(id: "tv.find", title: "Find TV", detail: probeLines[.findTV], action: .findTV,
+                                    description: "Looks for the TV on this network and fills in its address and MAC address. The TV must be on."))
+            rows.append(SettingsRow(id: "tv.test", title: "Test TV", detail: probeLines[.testTV], action: .testTV,
+                                    description: "Asks the TV whether it's on, and its volume and mute. Nothing on the TV changes."))
+            rows.append(SettingsRow(id: "tv.mac", title: "MAC Address", value: settings.tvMAC ?? "Not Set",
+                                    detail: settings.tvMAC == nil ? "MMTVL can't turn the TV on without it; Find TV fills it in" : nil))
+            rows.append(tvVolumeRow)
+        }
+        // Build 25 QA minor: the VIERA setup footer only for a Panasonic TV; none without a TV.
+        return [
+            SettingsSection(id: "tv", rows: rows,
+                            footer: settings.tvBrand == .panasonic ? Self.vieraTVFooter : nil),
+        ]
+    }
+
+    private var receiverBrandSections: [SettingsSection] {
+        let rows = ReceiverBrand.allCases.map { brand in
+            SettingsRow(id: "brand.\(brand.rawValue)", title: brand.settingsTitle,
+                        value: brand == settings.receiverBrand ? "Selected" : nil, detail: brand.years,
+                        action: .setReceiverBrand(brand))
+        }
+        return [SettingsSection(id: "brands", rows: rows,
+                                footer: "Tested with Pioneer. Serial cables: Pioneer needs a null-modem cable, Denon, Marantz and Onkyo a straight one.")]
+    }
+
+    private var receiverPortSections: [SettingsSection] {
+        let configured = settings.receiverSerialPort
+        var rows = [
+            SettingsRow(id: "port.automatic", title: "Automatic", value: configured == nil ? "Selected" : nil,
+                        detail: "The first USB serial port", action: .setReceiverPort(nil)),
+        ]
+        rows += serialPorts.map { port in
+            SettingsRow(id: "port.\(port.path)", title: Self.portTitle(port.path),
+                        value: port.path == configured ? "Selected" : nil, detail: port.displayName,
+                        action: .setReceiverPort(port.path))
+        }
+        if let configured, !serialPorts.contains(where: { $0.path == configured }) {
+            rows.append(SettingsRow(id: "port.\(configured)", title: Self.portTitle(configured), value: "Selected",
+                                    detail: "Not connected", action: .setReceiverPort(configured)))
+        }
+        if serialPorts.isEmpty {
+            rows.append(SettingsRow(id: "port.none", title: "No serial ports found",
+                                    detail: "Plug in the USB serial adapter, then open this list again"))
+        }
+        return [SettingsSection(id: "ports", rows: rows)]
+    }
+
+    /// −30…+10 dB in 5 dB steps, plus a hand-edited value that isn't one of them.
+    static let maxVolumeChoices: [Double] = stride(from: -30.0, through: 10.0, by: 5.0).map { $0 }
+
+    private var receiverMaxVolumeSections: [SettingsSection] {
+        let current = settings.validatedReceiverMaxDB
+        var choices = Self.maxVolumeChoices
+        if !choices.contains(current) { choices = (choices + [current]).sorted() }
+        let rows = choices.map { dB in
+            SettingsRow(id: "maxVolume.\(dB)", title: VolumeToast.format(dB: dB), value: dB == current ? "Selected" : nil,
+                        action: .setReceiverMaxDB(dB))
+        }
+        var footer = "MMTVL's volume buttons never set the receiver louder than this. Its own remote and knob aren't limited."
+        if !settings.receiverBrand.reportsDB {
+            footer += " \(settings.receiverBrand.shortTitle) receivers don't report dB, so there's no limit."
+        }
+        return [SettingsSection(id: "maxVolume", rows: rows, footer: footer)]
+    }
+
+    private var receiverFoundSections: [SettingsSection] {
+        let rows = foundReceivers.map { found in
+            let ownPorts = found.brand.codec?.networkPorts(override: nil) ?? []
+            let address = ownPorts.contains(found.port) ? found.host : LANAddress.display(host: found.host, port: found.port)
+            let isChosen = settings.receiverConnection == .network && settings.receiverHost == found.host
+                && settings.receiverBrand == found.brand
+            return SettingsRow(id: "found.\(found.host):\(found.port)", title: found.name ?? found.model ?? found.brand.settingsTitle,
+                               value: isChosen ? "Selected" : nil,
+                               detail: "\(found.brand.settingsTitle) · \(address)", action: .useFoundReceiver(found))
+        }
+        return [SettingsSection(id: "found", rows: rows, footer: "Choose the receiver MMTVL controls.")]
+    }
+
+    private var tvBrandSections: [SettingsSection] {
+        let rows = TVBrand.allCases.map { brand in
+            SettingsRow(id: "tvBrand.\(brand.rawValue)", title: brand.settingsTitle,
+                        value: brand == settings.tvBrand ? "Selected" : nil, detail: brand.years,
+                        action: .setTVBrand(brand))
+        }
+        return [SettingsSection(id: "tvBrands", rows: rows,
+                                footer: "Newer VIERAs (2019 and later) need a pairing MMTVL doesn't support.")]
+    }
+
+    /// D41: the keyboard is drawn above these rows (`SettingsColumnView`).
+    private func addressEntrySections(_ field: AddressField) -> [SettingsSection] {
+        [SettingsSection(id: "address", rows: [
+            SettingsRow(id: "address.save", title: keyboard.text.isEmpty ? "Save Without an Address" : "Save",
+                        detail: addressMessage, action: .saveAddress(field)),
+            SettingsRow(id: "address.clear", title: "Clear", action: .clearAddress),
+            SettingsRow(id: "address.cancel", title: "Cancel", action: .pop),
+        ])]
+    }
+}
+
+/// M7h step 11: how Settings names each brand.
+extension ReceiverBrand {
+    /// The brand list's titles (*Settings pages*).
+    nonisolated var settingsTitle: String {
+        switch self {
+        case .none: "None"
+        case .pioneer: "Pioneer"
+        case .onkyo: "Onkyo / Integra / Pioneer"
+        case .denon: "Denon / Marantz"
+        case .yamaha: "Yamaha"
+        case .anthem: "Anthem"
+        case .nad: "NAD"
+        }
+    }
+
+    /// Which models each covers.
+    nonisolated var years: String? {
+        switch self {
+        case .pioneer: "Before 2016"
+        case .onkyo: "2016 and later"
+        case .denon: "2010 and later"
+        case .yamaha: "2010–2020"
+        case .none, .anthem, .nad: nil
+        }
+    }
+
+    /// For "Pioneer · VIERA" and notes.
+    nonisolated var shortTitle: String {
+        switch self {
+        case .none: "None"
+        case .pioneer: "Pioneer"
+        case .onkyo: "Onkyo"
+        case .denon: "Denon"
+        case .yamaha: "Yamaha"
+        case .anthem: "Anthem"
+        case .nad: "NAD"
+        }
+    }
+
+    /// Step 10: Onkyo reports a level, not dB, so the volume cap can't apply.
+    nonisolated var reportsDB: Bool { self != .onkyo }
+}
+
+/// Step 9c: how Settings names each receiver connection.
+extension ReceiverConnection {
+    nonisolated var settingsTitle: String {
+        switch self {
+        case .serial: "Serial"
+        case .network: "Network"
+        case .cec: "HDMI-CEC"
+        }
+    }
+
+    nonisolated var detail: String {
+        switch self {
+        case .serial: "An RS-232 cable from a USB serial adapter"
+        case .network: "The receiver's address on this network"
+        case .cec: "Through the Mac's HDMI; no volume in dB"
+        }
+    }
+}
+
+extension TVBrand {
+    nonisolated var settingsTitle: String {
+        switch self {
+        case .none: "None"
+        case .panasonic: "Panasonic VIERA"
+        case .cec: "HDMI-CEC"
+        }
+    }
+
+    nonisolated var years: String? {
+        switch self {
+        case .none: nil
+        case .panasonic: "2012–2018, network"
+        case .cec: "Any TV, through the Mac's HDMI. Also turns a CEC receiver off and on."
+        }
+    }
+
+    nonisolated var shortTitle: String {
+        switch self {
+        case .none: "None"
+        case .panasonic: "VIERA"
+        case .cec: "HDMI-CEC"
+        }
     }
 }

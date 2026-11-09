@@ -7,6 +7,7 @@ struct YouTubeKeyMapTests {
             .up: 38, .down: 40, .left: 37, .right: 39, .select: 13, .back: 27,
             .playPause: 179, .fastForward: 228, .rewind: 227, .home: nil,
             .menu: nil, .channelUp: nil, .channelDown: nil,   // M7 L5
+            .volumeUp: nil, .volumeDown: nil, .mute: nil, .power: nil, .powerMenu: nil,   // M7h L3
         ]
         #expect(expected.count == RemoteCommand.allCases.count)
         for command in RemoteCommand.allCases {

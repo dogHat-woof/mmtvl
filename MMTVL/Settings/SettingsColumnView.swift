@@ -85,16 +85,18 @@ struct SettingsColumnView: View {
         case .none:
             Color.clear
         case .list(let page):
-            SettingsPageList(
-                page: page,
-                sections: model.sections(for: page),
-                role: column.role,
-                markedRowID: markedRowID,
-                launcher: launcher,
-                tileArt: tileArt,
-                onHoverRow: onHoverRow,
-                onActivateRow: onActivateRow
-            )
+            if case .addressEntry = page, column.role == .current {
+                // M7h D41: the on-screen keyboard, with the page's rows (Save, Clear, Cancel) below it.
+                VStack(alignment: .leading, spacing: 0) {
+                    OnScreenKeyboardView(keyboard: model.keyboard, placeholder: "Address",
+                                         isFocused: model.isKeyboardFocused)
+                        .padding(.top, Theme.settingsListVerticalPadding)
+                        .padding(.horizontal, 24)
+                    pageList(page)
+                }
+            } else {
+                pageList(page)
+            }
         case .accessory(let page):
             if let image = model.accessory(for: page) {
                 RowImageView(image: image, launcher: launcher, size: Theme.settingsAccessorySymbolSize,
@@ -102,6 +104,19 @@ struct SettingsColumnView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+    }
+
+    private func pageList(_ page: SettingsPage) -> some View {
+        SettingsPageList(
+            page: page,
+            sections: model.sections(for: page),
+            role: column.role,
+            markedRowID: markedRowID,
+            launcher: launcher,
+            tileArt: tileArt,
+            onHoverRow: onHoverRow,
+            onActivateRow: onActivateRow
+        )
     }
 
     /// The focused row (current), the opening row (parent), or nothing.

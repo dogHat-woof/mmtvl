@@ -16,7 +16,7 @@ struct SettingsModelTests {
         let (model, _) = makeSettingsModel()
         let expected: [(String, SettingsPage)] = [
             ("homeScreen", .homeScreen), ("liveTV", .liveTV), ("plex", .plex), ("youtube", .youtube),
-            ("casting", .casting), ("remoteInput", .remoteInput), ("restrictions", .restrictions),
+            ("casting", .casting), ("audioTV", .audioTV), ("remoteInput", .remoteInput), ("restrictions", .restrictions),
             ("system", .system), ("about", .about),
         ]
         #expect(model.focusableRowIDs == expected.map(\.0))
@@ -30,7 +30,7 @@ struct SettingsModelTests {
         model.open(.remoteInput)
         model.press(.up)
         #expect(model.focusedRowID == "globalInput")
-        model.press(.down, .down, .down, .down, .down)
+        model.press(.down, .down, .down, .down, .down, .down)   // M7h: + Siri Remote (Receiver & TV moved to Audio & TV)
         #expect(model.focusedRowID == "phoneRemote")
         model.press(.down)
         #expect(model.focusedRowID == "phoneRemote")

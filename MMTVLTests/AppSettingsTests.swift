@@ -64,8 +64,8 @@ struct AppSettingsTests {
     }
 
     @Test func freshSettingsHaveCurrentRevision() {
-        #expect(AppSettings().keyBindingsRevision == 2)
-        #expect(KeyBindings.currentRevision == 2)
+        #expect(AppSettings().keyBindingsRevision == 3)   // M7h: revision 3
+        #expect(KeyBindings.currentRevision == 3)
     }
 
     @Test func keyBindingsRevisionRoundTrips() throws {
@@ -134,5 +134,236 @@ struct AppSettingsTests {
         #expect(settings.kioskLock)
         let off = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"kioskLock": false}"#.utf8))
         #expect(!off.kioskLock)
+    }
+
+    /// M7h D43.
+    @Test func siriRemoteEnabledDefaultsToTrue() throws {
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(settings.siriRemoteEnabled)
+        let off = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"siriRemoteEnabled": false}"#.utf8))
+        #expect(!off.siriRemoteEnabled)
+        let encoded = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(off))
+        #expect(!encoded.siriRemoteEnabled)
+    }
+
+    /// M7h D44, L11.
+    @Test func receiverKeysDefault() throws {
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(settings.receiverBrand == .none)
+        #expect(settings.receiverConnection == .serial)
+        #expect(settings.receiverSerialPort == nil)
+        let encoded = try String(decoding: JSONEncoder().encode(settings), as: UTF8.self)
+        #expect(encoded.contains(#""receiverBrand":"none""#))
+        #expect(!encoded.contains("receiverSerialPort"))
+    }
+
+    @Test func receiverKeysDecodeAndRoundTrip() throws {
+        let json = #"{"receiverBrand": "pioneer", "receiverConnection": "network", "receiverSerialPort": "/dev/cu.test"}"#
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+        #expect(settings.receiverBrand == .pioneer)
+        #expect(settings.receiverConnection == .network)
+        #expect(settings.receiverSerialPort == "/dev/cu.test")
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
+        #expect(decoded == settings)
+        for brand in ReceiverBrand.allCases {
+            let one = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"receiverBrand": "\#(brand.rawValue)"}"#.utf8))
+            #expect(one.receiverBrand == brand)
+        }
+    }
+
+    @Test func unknownReceiverValuesReadAsDefaults() throws {
+        let json = #"{"receiverBrand": "sony", "receiverConnection": "usb", "launchAtLogin": true}"#
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+        #expect(settings.receiverBrand == .none)
+        #expect(settings.receiverConnection == .serial)
+        #expect(settings.launchAtLogin)
+    }
+
+    /// M7h L17.
+    @Test func receiverNetworkKeys() throws {
+        let missing = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(missing.receiverHost == nil)
+        #expect(missing.receiverNetworkPort == nil)
+        #expect(missing.validatedReceiverNetworkPort == nil)
+        let encoded = try String(decoding: JSONEncoder().encode(missing), as: UTF8.self)
+        #expect(!encoded.contains("receiverHost"))
+        #expect(!encoded.contains("receiverNetworkPort"))
+
+        let json = #"{"receiverConnection": "network", "receiverHost": "192.168.1.20", "receiverNetworkPort": 60128}"#
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+        #expect(settings.receiverHost == "192.168.1.20")
+        #expect(settings.receiverNetworkPort == 60128)
+        #expect(settings.validatedReceiverNetworkPort == 60128)
+        #expect(try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings)) == settings)
+
+        for bad in [0, -1, 65536, 100_000] {
+            let one = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"receiverNetworkPort": \#(bad)}"#.utf8))
+            #expect(one.validatedReceiverNetworkPort == nil, "\(bad)")
+        }
+    }
+
+    /// QA minor 6: a hand-edited `receiverNetworkPort` of the wrong type reads as nil; the rest of the file is kept.
+    @Test func receiverNetworkPortOfTheWrongTypeIsIgnored() throws {
+        for value in [#""abc""#, #""60128""#, "23.5", "true", "null", "[23]"] {
+            let json = #"{"receiverNetworkPort": \#(value), "launchAtLogin": true, "receiverHost": "avr.local"}"#
+            let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+            #expect(settings.receiverNetworkPort == nil, "\(value)")
+            #expect(settings.launchAtLogin, "\(value)")
+            #expect(settings.receiverHost == "avr.local", "\(value)")
+        }
+    }
+
+    /// M7h step 10 (user decision): the volume cap, tolerant of hand edits.
+    @Test func receiverMaxDBDecodes() throws {
+        let missing = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(missing.receiverMaxDB == 0)
+        #expect(missing.validatedReceiverMaxDB == 0)
+        for (value, expected) in [("-10", -10.0), ("-12.5", -12.5), ("6", 6.0), ("-100", -100.0), ("30", 30.0)] {
+            let settings = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"receiverMaxDB": \#(value)}"#.utf8))
+            #expect(settings.receiverMaxDB == expected, "\(value)")
+            #expect(try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings)) == settings)
+        }
+        // Out of range, another type, or not a number: the default, and the rest of the file is kept.
+        for value in ["1e18", "-1e300", "31", "-101", #""-10""#, "true", "null", "[0]"] {
+            let json = #"{"receiverMaxDB": \#(value), "launchAtLogin": true}"#
+            let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+            #expect(settings.receiverMaxDB == 0, "\(value)")
+            #expect(settings.launchAtLogin, "\(value)")
+        }
+        var edited = AppSettings()
+        edited.receiverMaxDB = .infinity
+        #expect(edited.validatedReceiverMaxDB == 0)
+        edited.receiverMaxDB = .nan
+        #expect(edited.validatedReceiverMaxDB == 0)
+    }
+
+    /// M7h L18. Made-up address and MAC only.
+    @Test func tvKeysDefault() throws {
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(settings.tvBrand == .none)
+        #expect(settings.tvHost == nil)
+        #expect(settings.tvMAC == nil)
+        let encoded = try String(decoding: JSONEncoder().encode(settings), as: UTF8.self)
+        #expect(encoded.contains(#""tvBrand":"none""#))
+        #expect(!encoded.contains("tvHost"))
+        #expect(!encoded.contains("tvMAC"))
+    }
+
+    @Test func tvKeysDecodeAndRoundTrip() throws {
+        let json = #"{"tvBrand": "panasonic", "tvHost": "192.168.1.30", "tvMAC": "02:00:5e:00:10:ab"}"#
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+        #expect(settings.tvBrand == .panasonic)
+        #expect(settings.tvHost == "192.168.1.30")
+        #expect(settings.tvMAC == "02:00:5e:00:10:ab")
+        #expect(try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings)) == settings)
+        for brand in TVBrand.allCases {
+            let one = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"tvBrand": "\#(brand.rawValue)"}"#.utf8))
+            #expect(one.tvBrand == brand)
+        }
+    }
+
+    /// Step 9 (reopened).
+    @Test func cecTVBrandDecodesAndRoundTrips() throws {
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"tvBrand": "cec"}"#.utf8))
+        #expect(settings.tvBrand == .cec)
+        let encoded = try String(decoding: JSONEncoder().encode(settings), as: UTF8.self)
+        #expect(encoded.contains(#""tvBrand":"cec""#))
+        for unknown in [#""CEC""#, #""hdmi-cec""#, #""""#, "null"] {
+            let one = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"tvBrand": \#(unknown)}"#.utf8))
+            #expect(one.tvBrand == .none, "\(unknown)")
+        }
+    }
+
+    @Test func unknownTVBrandAndWrongTypedMACReadAsDefaults() throws {
+        let json = #"{"tvBrand": "sony", "launchAtLogin": true, "tvHost": "tv.local"}"#
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+        #expect(settings.tvBrand == .none)
+        #expect(settings.launchAtLogin)
+        for value in ["12", "true", "null", "[1]", #"{"a": 1}"#] {
+            let one = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"tvMAC": \#(value), "tvHost": "tv.local"}"#.utf8))
+            #expect(one.tvMAC == nil, "\(value)")
+            #expect(one.tvHost == "tv.local", "\(value)")
+        }
+    }
+
+    /// M7h step 13e: Swipes; missing or of another type reads as false, and the rest of the file is kept.
+    @Test func siriRemoteSwipesDecodes() throws {
+        let missing = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(!missing.siriRemoteSwipes)
+        #expect(!AppSettings().siriRemoteSwipes)
+        let on = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"siriRemoteSwipes": true}"#.utf8))
+        #expect(on.siriRemoteSwipes)
+        #expect(try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(on)) == on)
+        let encoded = try String(decoding: JSONEncoder().encode(on), as: UTF8.self)
+        #expect(encoded.contains(#""siriRemoteSwipes":true"#))
+        for value in ["1", #""true""#, "null", "[true]"] {
+            let json = #"{"siriRemoteSwipes": \#(value), "launchAtLogin": true}"#
+            let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+            #expect(!settings.siriRemoteSwipes, "\(value)")
+            #expect(settings.launchAtLogin, "\(value)")
+        }
+    }
+
+    /// M7h step 13b: Show Volume; missing or of another type reads as true, and the rest of the file is kept.
+    @Test func volumeToastDecodes() throws {
+        let missing = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(missing.volumeToast)
+        #expect(AppSettings().volumeToast)
+        let off = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"volumeToast": false}"#.utf8))
+        #expect(!off.volumeToast)
+        #expect(try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(off)) == off)
+        let encoded = try String(decoding: JSONEncoder().encode(off), as: UTF8.self)
+        #expect(encoded.contains(#""volumeToast":false"#))
+        for value in ["0", "1", #""false""#, "null", "[false]", #"{"a": false}"#] {
+            let json = #"{"volumeToast": \#(value), "launchAtLogin": true, "kioskLock": false}"#
+            let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+            #expect(settings.volumeToast, "\(value)")
+            #expect(settings.launchAtLogin, "\(value)")
+            #expect(!settings.kioskLock, "\(value)")
+        }
+    }
+
+    /// Step 9b S6 / QA minor 4: a TV or receiver key of the wrong type reads as its default; the rest of the file
+    /// is kept (no `.bak`).
+    @Test func wrongTypedTVAndReceiverKeysKeepTheFile() throws {
+        let one = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"tvHost": 12, "youtubeCastEnabled": false}"#.utf8))
+        #expect(one.tvHost == nil)
+        #expect(!one.youtubeCastEnabled)
+        let json = #"{"tvBrand": 1, "tvHost": [1], "receiverBrand": true, "receiverConnection": 2, "receiverHost": {"a": 1}, "receiverSerialPort": 5, "youtubeCastEnabled": false, "launchAtLogin": true}"#
+        let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+        #expect(settings.tvBrand == .none)
+        #expect(settings.tvHost == nil)
+        #expect(settings.receiverBrand == .none)
+        #expect(settings.receiverConnection == .serial)
+        #expect(settings.receiverHost == nil)
+        #expect(settings.receiverSerialPort == nil)
+        #expect(!settings.youtubeCastEnabled)
+        #expect(settings.launchAtLogin)
+    }
+
+    /// M7h step 9c: `receiverConnection` `cec` and `tvVolumeEnabled`; unknown or wrong-typed values read as the
+    /// defaults, and the rest of the file is kept (no `.bak`).
+    @Test func cecReceiverAndTVVolumeDecode() throws {
+        let missing = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(!missing.tvVolumeEnabled)
+        #expect(!AppSettings().tvVolumeEnabled)
+        #expect(missing.receiverConnection == .serial)
+        let cec = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"receiverConnection": "cec", "tvVolumeEnabled": true}"#.utf8))
+        #expect(cec.receiverConnection == .cec)
+        #expect(cec.tvVolumeEnabled)
+        #expect(try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(cec)) == cec)
+        let encoded = try String(decoding: JSONEncoder().encode(cec), as: UTF8.self)
+        #expect(encoded.contains(#""receiverConnection":"cec""#))
+        #expect(encoded.contains(#""tvVolumeEnabled":true"#))
+        for value in ["1", #""true""#, "null", "[true]", #"{"a": true}"#] {
+            let json = #"{"tvVolumeEnabled": \#(value), "receiverConnection": "CEC", "launchAtLogin": true, "kioskLock": false}"#
+            let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+            #expect(!settings.tvVolumeEnabled, "\(value)")
+            #expect(settings.receiverConnection == .serial, "\(value)")
+            #expect(settings.launchAtLogin, "\(value)")
+            #expect(!settings.kioskLock, "\(value)")
+        }
+        let tvMode = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"phoneRemoteVolume": "tv"}"#.utf8))
+        #expect(tvMode.volumeMode == .tv)
     }
 }

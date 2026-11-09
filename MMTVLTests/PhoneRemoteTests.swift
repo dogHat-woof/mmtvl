@@ -31,9 +31,9 @@ final class PhoneRemoteRecorder {
             postReturn: { self.returns += 1 },
             launcherAcceptsText: { self.acceptsText },
             frontAppName: { self.isActive ? "MMTVL" : "Plex HTPC" },
-            volume: { action in
+            volume: { action, done in
                 self.volumeActions.append(action)
-                return self.volumeResult
+                done(self.volumeResult)
             },
             now: { self.now },
             makeCode: { self.codes.removeFirst() },
@@ -177,6 +177,45 @@ struct PhoneRemoteTests {
         send(#"{"type":"command","command":"up"}"#)
         #expect(recorder.posted.count == 2)
         #expect(transport.messages(to: 1).last == .toast(PhoneRemote.accessibilityMessage))
+    }
+
+    /// M7h L3: the phone goes through `ExternalRouter`; volume and power commands still post nothing to other apps.
+    @Test func volumeAndPowerCommandsDoNothingInOtherApps() {
+        paired()
+        recorder.isActive = false
+        for command in ["volumeUp", "volumeDown", "mute", "power", "powerMenu"] {
+            send(#"{"type":"command","command":"\#(command)"}"#)
+        }
+        #expect(recorder.posted.isEmpty)
+        #expect(recorder.dispatched.isEmpty)
+        #expect(transport.messages(to: 1).isEmpty)
+
+        // Without Accessibility the phone hears about it, as before (not for Power, which is ignored: step 12).
+        recorder.canPost = false
+        send(#"{"type":"command","command":"power"}"#)
+        #expect(transport.messages(to: 1).isEmpty)
+        send(#"{"type":"command","command":"mute"}"#)
+        #expect(transport.messages(to: 1).last == .toast(PhoneRemote.accessibilityMessage))
+    }
+
+    /// M7h step 12 (step 4 security low): a paired phone's raw `power` / `powerMenu` never reach MMTVL's screens
+    /// (no power menu, no TV off), with MMTVL in front or not.
+    @Test func powerCommandsFromThePhoneAreIgnored() {
+        paired()
+        for isActive in [true, false] {
+            recorder.isActive = isActive
+            recorder.repairs = true
+            send(#"{"type":"command","command":"power"}"#)
+            send(#"{"type":"command","command":"powerMenu"}"#)
+        }
+        #expect(recorder.dispatched.isEmpty)
+        #expect(recorder.posted.isEmpty)
+        #expect(recorder.repairCalls == 0)
+        #expect(transport.messages(to: 1).isEmpty)
+        // Other commands still go through.
+        recorder.isActive = true
+        send(#"{"type":"command","command":"select"}"#)
+        #expect(recorder.dispatched.map(\.0) == [.select])
     }
 
     /// M7c L3: MMTVL's window shows but it isn't active; the command goes to MMTVL, not out as a key.

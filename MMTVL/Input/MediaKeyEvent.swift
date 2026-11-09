@@ -26,4 +26,26 @@ nonisolated enum MediaKeyEvent {
         }
         return Parsed(key: key, isKeyDown: keyState == 0xA, isRepeat: data1 & 0x1 != 0)
     }
+
+    /// M7h L3a: a volume key, for the event tap's volume path only (`parse` still returns nil for these).
+    struct Volume: Equatable, Sendable {
+        var action: VolumeAction
+        var isKeyDown: Bool
+        var isRepeat: Bool
+    }
+
+    /// nil unless subtype == 8 and the key code is SOUND_UP(0)/SOUND_DOWN(1)/MUTE(7).
+    static func parseVolume(subtype: Int16, data1: Int) -> Volume? {
+        guard subtype == auxControlButtonsSubtype else { return nil }
+        let keyCode = (data1 & 0xFFFF_0000) >> 16
+        let keyState = (data1 & 0xFF00) >> 8
+        let action: VolumeAction
+        switch keyCode {
+        case 0: action = .up      // NX_KEYTYPE_SOUND_UP
+        case 1: action = .down    // NX_KEYTYPE_SOUND_DOWN
+        case 7: action = .mute    // NX_KEYTYPE_MUTE
+        default: return nil
+        }
+        return Volume(action: action, isKeyDown: keyState == 0xA, isRepeat: data1 & 0x1 != 0)
+    }
 }

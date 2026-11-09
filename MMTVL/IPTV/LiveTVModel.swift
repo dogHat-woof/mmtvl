@@ -464,6 +464,8 @@ final class LiveTVModel: LiveTVHosting {
             if let current = currentChannel { menu = channelMenu(for: current.id) }
         case .channelUp, .channelDown:
             zap(channelStep(command))
+        case .volumeUp, .volumeDown, .mute, .power, .powerMenu:
+            break   // M7h L3: handled before screens
         }
         return .handled
     }
@@ -934,6 +936,8 @@ final class LiveTVModel: LiveTVHosting {
             if multiview?.focusedChannelID != nil { menu = windowMenu() }
         case .channelUp, .channelDown:
             zapWindow(channelStep(command))
+        case .volumeUp, .volumeDown, .mute, .power, .powerMenu:
+            break   // M7h L3: handled before screens
         }
         return .handled
     }

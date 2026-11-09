@@ -7,8 +7,9 @@ import os
 /// `IOPSCopyPowerSourcesByType(0)` (exported by IOKit, reached with `dlsym`) also lists Bluetooth accessories.
 /// The remote is matched by vendor and product id, never by name or serial number (the name is the serial).
 nonisolated enum RemoteBattery {
-    /// Apple's Siri Remote product ids (its driver's ProductIDArray), vendor 76.
-    static let productIDs: Set<Int> = [614, 621, 788, 789]
+    /// Apple's Siri Remote product ids (its driver's ProductIDArray, AppleBluetoothRemote.kext), vendor 76.
+    /// M7h: also what `SiriRemoteHID` matches and seizes.
+    static let productIDs: Set<Int> = [614, 621, 788, 789, 790]
     static let appleVendorID = 76
 
     private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "RemoteBattery")

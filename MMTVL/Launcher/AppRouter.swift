@@ -82,6 +82,11 @@ final class AppRouter {
     private(set) var homeEntryGeneration = 0
     /// Injectable: 0 (no animation) by default and in tests; AppDelegate sets `Theme.homeExitDuration`.
     @ObservationIgnored var homeExitDelay: Duration = .zero
+    /// M7c L23: how long the home UI stays away for an app that doesn't take the screen (tests shorten it).
+    @ObservationIgnored var homeExitAppFallback: Duration = Theme.homeExitAppFallback
+    /// M7h L16: a launch that restarts its app first (Plex after a hot-plug); the home exit's fallback starts only
+    /// once it has opened the new process, so the home UI doesn't bounce back meanwhile.
+    @ObservationIgnored private var restartingLaunch: Task<Void, Never>?
     @ObservationIgnored private(set) var homeExitTask: Task<Void, Never>?
     /// Injectable; tests use zero.
     @ObservationIgnored var previewDelay: Duration = Theme.previewDelay
@@ -95,6 +100,11 @@ final class AppRouter {
     private var hasPINCache = false
     /// The PIN screen's model while `screen` is `.pin`.
     private(set) var pinEntry: PINEntryModel?
+    /// M7h L15: the power menu, over whatever screen shows (YouTube and Live TV included); it takes every command
+    /// while open (Home closes it and goes home).
+    private(set) var powerMenu: PowerMenu?
+    /// Relaunch and Restart show a lock: a PIN was set when the menu opened.
+    private(set) var powerMenuShowsPINLock = false
 
     @ObservationIgnored let launcher: AppLauncher
     /// M7 L3: custom tile pictures.
@@ -121,6 +131,12 @@ final class AppRouter {
     /// M7c L9: quits MMTVL for real (after the PIN, if one is set).
     @ObservationIgnored var onQuit: (() -> Void)?
     @ObservationIgnored var onRequestAccessibility: (() -> Void)?
+    /// M7h L14: Power's short press (`PowerController.powerButton`).
+    @ObservationIgnored var onPowerButton: (() -> Void)?
+    /// M7h L15: a power menu item ran (Relaunch and Restart after the PIN, when one is set). Never `.cancel`.
+    @ObservationIgnored var onPowerAction: ((PowerMenuAction) -> Void)?
+    /// The power menu closed, and why (U1: Cancel hands the screen back; M7h re-review: Exit to Desktop).
+    @ObservationIgnored var onPowerMenuClose: ((PowerMenuCloseReason) -> Void)?
 
     init(items: [LaunchItem], launcher: AppLauncher, settings: SettingsModel, youtube: any YouTubeHosting,
          liveTV: any LiveTVHosting, pinStore: PINStore, tileArt: TileArtStore,
@@ -139,6 +155,8 @@ final class AppRouter {
         hasPINCache = pinStore.load() != nil
         // M7 L18: a web app whose window never showed shakes its tile.
         launcher.onLaunchFailed = { [weak self] id in self?.shakeTriggers[id, default: 0] += 1 }
+        // M7h step 13e: status changes refresh Settings only while it shows.
+        settings.isShowing = { [weak self] in self?.screen == .settings }
         syncCarousel()
     }
 
@@ -351,7 +369,12 @@ final class AppRouter {
                 finishLeavingHome(animated: false)
                 return
             }
-            try? await Task.sleep(for: Theme.homeExitAppFallback)
+            if let launch = restartingLaunch {
+                restartingLaunch = nil
+                await launch.value
+                guard !Task.isCancelled, isLeavingHome else { return }
+            }
+            try? await Task.sleep(for: homeExitAppFallback)
             guard !Task.isCancelled, isLeavingHome else { return }
             finishLeavingHome(animated: true)
         }
@@ -482,7 +505,8 @@ final class AppRouter {
             return true
         case .up:
             return true
-        case .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown:
+        case .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown,
+             .volumeUp, .volumeDown, .mute, .power, .powerMenu:
             return false
         }
     }
@@ -490,6 +514,22 @@ final class AppRouter {
     /// Returns true if the command was consumed. `isRepeat`: a held key's or button's auto-repeat (M7g: Settings
     /// changes page only on a fresh Left or Right).
     func handle(_ command: RemoteCommand, isRepeat: Bool = false) -> Bool {
+        // M7h D45: Power and Power Menu work on every screen; a held key's repeats do nothing (security S3: a held
+        // Power key would turn things off, then on again).
+        if command == .power {
+            if !isRepeat { pressPower() }
+            return true
+        }
+        if powerMenu != nil {
+            guard command == .home else {
+                routePowerMenu(command)
+                return true
+            }
+            closePowerMenu(reason: .home)
+        } else if command == .powerMenu {
+            if !isRepeat { openPowerMenu() }
+            return true
+        }
         if command == .home { launcher.homePressed() }
         if isLeavingHome {
             // L22: commands wait for the animation; Home cancels it and stays home.
@@ -542,7 +582,8 @@ final class AppRouter {
                 return true
             case .home:
                 return true
-            case .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown:
+            case .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown,
+                 .volumeUp, .volumeDown, .mute, .power, .powerMenu:
                 return false
             }
 
@@ -554,7 +595,8 @@ final class AppRouter {
             case .back, .home:
                 goHomeToStartTile()
                 return true
-            case .up, .down, .left, .right, .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown:
+            case .up, .down, .left, .right, .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown,
+                 .volumeUp, .volumeDown, .mute, .power, .powerMenu:
                 return false
             }
 
@@ -612,6 +654,82 @@ final class AppRouter {
         }
     }
 
+    // MARK: Power (M7h L14, L15)
+
+    /// Power's short press: closes the menu, then turns things off or on (`onPowerButton`).
+    func pressPower() {
+        closePowerMenu()
+        onPowerButton?()
+    }
+
+    /// Over the current screen, on its first item. Already open: stays as it is.
+    func openPowerMenu() {
+        guard powerMenu == nil else { return }
+        powerMenuShowsPINLock = hasPIN
+        powerMenu = PowerMenu()
+        Self.logger.info("Power menu opened")
+    }
+
+    /// `reason` goes to `onPowerMenuClose`.
+    func closePowerMenu(reason: PowerMenuCloseReason = .other) {
+        guard powerMenu != nil else { return }
+        powerMenu = nil
+        Self.logger.info("Power menu closed (\(String(describing: reason), privacy: .public))")
+        onPowerMenuClose?(reason)
+    }
+
+    /// A click on a row.
+    func choosePowerMenuItem(_ index: Int) {
+        guard var menu = powerMenu else { return }
+        let outcome = menu.choose(index: index)
+        powerMenu = menu
+        perform(outcome)
+    }
+
+    /// Hover over a row.
+    func hoverPowerMenuItem(_ index: Int) {
+        guard pointerMovedSinceLastCommand, var menu = powerMenu else { return }
+        menu.focus(index: index)
+        powerMenu = menu
+    }
+
+    /// Every source's commands while the menu is open, a paired phone's included (U3, accepted 2026-11-06: the phone
+    /// can't open the menu, but may move through and choose in one that's open; Relaunch and Restart still need the PIN).
+    private func routePowerMenu(_ command: RemoteCommand) {
+        guard var menu = powerMenu else { return }
+        let outcome = menu.handle(command)
+        powerMenu = menu
+        perform(outcome)
+    }
+
+    private func perform(_ outcome: PowerMenu.Outcome) {
+        switch outcome {
+        case .none:
+            break
+        case .close:
+            closePowerMenu(reason: .cancelled)
+        case .choose(let action):
+            // Closed first (the PIN screen must not sit under it), told after: `onPowerMenuClose` sees the PIN screen
+            // Relaunch and Restart may have opened.
+            powerMenu = nil
+            runPowerAction(action)
+            Self.logger.info("Power menu closed (\(action.rawValue, privacy: .public))")
+            onPowerMenuClose?(.other)
+        }
+    }
+
+    /// D20: Relaunch and Restart ask for the PIN when one is set; cancelling it returns to the screen the PIN screen
+    /// replaced (Settings, else home: like Quit, it can't sit over Live TV or YouTube) and the menu stays closed.
+    private func runPowerAction(_ action: PowerMenuAction) {
+        guard action != .cancel else { return }
+        guard action.needsPIN, hasPIN else {
+            onPowerAction?(action)
+            return
+        }
+        if screen != .home && screen != .settings { goHome() }
+        requestPIN(action == .relaunch ? .relaunch : .restartMac)
+    }
+
     private func bumpFocusMotion(_ direction: RemoteCommand) {
         focusMotion = FocusMotion(direction: direction, generation: focusMotion.generation + 1)
     }
@@ -619,6 +737,7 @@ final class AppRouter {
     /// Shows the home screen, keeping the focus position. Leaving YouTube pauses it (L3); leaving Live TV stops it (M4 L7).
     func goHome() {
         if isLeavingHome { finishLeavingHome(animated: false) }
+        closePowerMenu()
         if screen == .youtube {
             youtube.pause()
         }
@@ -669,7 +788,7 @@ final class AppRouter {
         defer { hasPINCache = hasPIN }
         switch result {
         case .cancelled:
-            screen = screenBeforePIN
+            returnFromPIN()
         case .verified:
             switch purpose {
             case .openSettings:
@@ -681,10 +800,16 @@ final class AppRouter {
                 screen = .home
                 onExitToDesktop?()
             case .quit:
-                screen = screenBeforePIN
+                returnFromPIN()
                 onQuit?()
+            case .relaunch:
+                returnFromPIN()
+                onPowerAction?(.relaunch)
+            case .restartMac:
+                returnFromPIN()
+                onPowerAction?(.restartMac)
             case .setNew, .change, .turnOff:
-                screen = screenBeforePIN
+                returnFromPIN()
             }
         case .newPIN(let pin):
             do {
@@ -700,6 +825,16 @@ final class AppRouter {
                 Self.logger.error("Failed to remove the PIN: \(error.localizedDescription, privacy: .public)")
             }
             returnToSettings()
+        }
+    }
+
+    /// Back to the screen the PIN screen covered. Settings: through `returnToSettings()`, which re-reads every status
+    /// (M7h step 13e: part refreshes while the PIN screen showed were dropped, as Settings wasn't showing).
+    private func returnFromPIN() {
+        if screenBeforePIN == .settings {
+            returnToSettings()
+        } else {
+            screen = screenBeforePIN
         }
     }
 
@@ -814,8 +949,10 @@ final class AppRouter {
                 shakeTriggers[item.id, default: 0] += 1
                 return
             }
+            // M7h L16: a restart (up to ~6 s) holds the home exit until the new process has opened.
+            let restarts = launcher.willRestart(item)
             let launch = { [weak self] in
-                Task {
+                let task = Task {
                     do {
                         try await self?.launcher.launch(item)
                     } catch {
@@ -823,13 +960,14 @@ final class AppRouter {
                         self?.shakeTriggers[item.id, default: 0] += 1
                     }
                 }
+                if restarts, self?.isLeavingHome == true { self?.restartingLaunch = task }
             }
             // M7c L23: the Plex tile (its carousel showing) fades to its art first; the UI stays away until the app
             // takes the screen.
             if !isLeavingHome && item.id == focusedItem?.id && shelfContent.isCarousel {
-                leaveHome(untilInactive: true) { _ = launch() }
+                leaveHome(untilInactive: true) { launch() }
             } else {
-                _ = launch()
+                launch()
             }
         case .internalDestination(.settings):
             openSettings()
@@ -853,33 +991,93 @@ struct LauncherRootView: View {
     let liveTV: LiveTVModel
 
     var body: some View {
-        if router.screen == .youtube {
-            // L4: outside the scaled canvas, at the window's real size.
-            YouTubeView(controller: youtube)
-        } else if router.screen == .liveTV {
-            // M4 L16: the video sits outside the scaled canvas; overlays are scaled inside LiveTVRootView.
-            LiveTVRootView(model: liveTV)
-        } else {
-            GeometryReader { geometry in
-                ZStack {
-                    // M7c L15: the Live TV preview's video, under the canvas at the window's size (as M4 L16).
-                    if router.screen == .home, liveTV.previewChannelID != nil,
-                       let view = (liveTV.player as? MPVPlayerController)?.videoView {
-                        // M7c L25: kept in the window while it preloads (mpv needs the render context).
-                        MPVVideoRepresentable(view: view)
-                            .frame(width: geometry.size.width, height: geometry.size.height)
-                            .opacity(router.showsLivePreviewVideo ? homeFade : 0)
-                            .animation(Theme.focusAnimation, value: homeFade)
-                            .animation(Theme.shelfBackdropCrossfade, value: router.showsLivePreviewVideo)
-                    }
-                    content
-                        .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height)
+        ZStack {
+            screenBody
+            // M7h L15: above every screen, YouTube and Live TV (outside the canvas) included.
+            powerMenuOverlay
+        }
+    }
+
+    /// Fades in and out by itself; screen changes underneath aren't animated with it (QA Q4).
+    private var powerMenuOverlay: some View {
+        ZStack {
+            if let menu = router.powerMenu {
+                GeometryReader { geometry in
+                    // The dim covers the whole window, the panel is on the scaled canvas.
+                    Theme.menuDim
+                    PowerMenuView(menu: menu, hasPIN: router.powerMenuShowsPINLock,
+                                  onHover: router.hoverPowerMenuItem, onChoose: router.choosePowerMenuItem)
                         .scaleEffect(Theme.scale(for: geometry.size))
                         .frame(width: geometry.size.width, height: geometry.size.height)
                 }
+                .ignoresSafeArea()
+                .transition(.opacity)
             }
-            .background(Theme.backgroundGradient)
+        }
+        .animation(Theme.menuFadeAnimation, value: router.powerMenu == nil)
+    }
+
+    @ViewBuilder
+    private var screenBody: some View {
+        if router.screen == .youtube {
+            // L4: outside the scaled canvas, at the window's real size.
+            YouTubeView(controller: youtube)
+        } else {
+            GeometryReader { geometry in
+                ZStack {
+                    // M7h step 13h: one video layer for the home preview (M7c L15) and Live TV (M4 L16, M6 L15), at
+                    // the same place for both, so a player's view never leaves the window between them.
+                    videoLayer(in: geometry.size)
+                    if router.screen == .liveTV {
+                        // Overlays are scaled inside LiveTVRootView.
+                        LiveTVRootView(model: liveTV)
+                    } else {
+                        content
+                            .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height)
+                            .scaleEffect(Theme.scale(for: geometry.size))
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    }
+                }
+            }
+            .background { screenBackground }
             .ignoresSafeArea()
+        }
+    }
+
+    /// Black behind Live TV's video (the guide's preview rect, Multiview, setup and loading); else the gradient.
+    @ViewBuilder
+    private var screenBackground: some View {
+        if router.screen == .liveTV {
+            Color.black
+        } else {
+            Theme.backgroundGradient
+        }
+    }
+
+    private var videoPlacements: [ScreenVideoPlacement] {
+        ScreenVideoLayout.placements(screen: router.screen,
+                                     liveTVPlacements: liveTV.videoPlacements,
+                                     previewPlayer: liveTV.previewChannelID != nil ? liveTV.player : nil,
+                                     showsPreview: router.showsLivePreviewVideo,
+                                     homeFade: homeFade)
+    }
+
+    /// The players' video in window coordinates, outside the scaled canvas. Keyed by player identity, so a view
+    /// that moves (home → Live TV, a Multiview window) keeps its GL context.
+    private func videoLayer(in size: CGSize) -> some View {
+        ForEach(videoPlacements) { placement in
+            if let view = (placement.player as? MPVPlayerController)?.videoView {
+                let rect = placement.canvasRect.map { CanvasGeometry.windowRect(forCanvasRect: $0, in: size) }
+                    ?? CGRect(origin: .zero, size: size)
+                MPVVideoRepresentable(view: view)
+                    .frame(width: rect.width, height: rect.height)
+                    .position(x: rect.midX, y: rect.midY)
+                    .transaction { $0.animation = nil }
+                    .opacity(placement.opacity)
+                    .transaction { if !placement.animatesOpacity { $0.animation = nil } }
+                    .animation(Theme.focusAnimation, value: homeFade)
+                    .animation(Theme.shelfBackdropCrossfade, value: router.showsLivePreviewVideo)
+            }
         }
     }
 

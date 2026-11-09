@@ -78,9 +78,32 @@ final class KioskGuard {
         sessionApps.insert(Self.systemSettingsBundleID)
     }
 
+    /// The guard's "may this app be in front" rule: MMTVL, Reflector (`alwaysAllowed`) and the session apps
+    /// (System Settings only when MMTVL opened it). Whether the guard is on or suspended doesn't change it.
+    func allows(bundleID: String?, isSelf: Bool) -> Bool {
+        if isSelf { return true }
+        guard let bundleID else { return false }
+        return Self.alwaysAllowed.contains(bundleID) || sessionApps.contains(bundleID)
+    }
+
+    /// Whether the Siri Remote's trackpad pointer may act in the app in front (M7h security M1).
+    enum PointerGate: Equatable {
+        case allowed
+        /// The app in front isn't one the guard allows (bundle id, or "?" without one).
+        case blocked(bundleID: String)
+    }
+
+    /// M7h security M1: while the kiosk lock is in force, the remote's pointer moves, clicks and scrolls act only
+    /// in an app the guard allows, even while the guard is suspended (a suspended guard must not open every app
+    /// to the pointer). With the lock not in force, always allowed.
+    func pointerGate(isLockInForce: Bool, frontBundleID: String?, isSelf: Bool) -> PointerGate {
+        guard isLockInForce, !allows(bundleID: frontBundleID, isSelf: isSelf) else { return .allowed }
+        return .blocked(bundleID: frontBundleID ?? "?")
+    }
+
     func appDidActivate(bundleID: String?, isRegular: Bool, isSelf: Bool) -> Decision {
         guard isEnabled, isRegular, !isSelf, !isSuspended else { return .ignore }
-        if let bundleID, Self.alwaysAllowed.contains(bundleID) || sessionApps.contains(bundleID) { return .ignore }
+        if allows(bundleID: bundleID, isSelf: false) { return .ignore }
         let time = now()
         takebacks.removeAll { time.timeIntervalSince($0) >= Self.takebackWindow }
         guard takebacks.count < Self.maxTakebacks else {

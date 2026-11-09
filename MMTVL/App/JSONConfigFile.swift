@@ -45,8 +45,19 @@ nonisolated struct JSONConfigFile<Value: Codable & Sendable>: Sendable {
         return defaultValue
     }
 
+    /// "<name>.bak", where a corrupt file is moved and `copyToBackup()` copies.
+    var backupURL: URL { url.appendingPathExtension("bak") }
+
+    /// M7h: copies the file as it is now to "<name>.bak" (replacing an older backup); the file stays.
+    func copyToBackup() throws {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: backupURL.path) {
+            try fileManager.removeItem(at: backupURL)
+        }
+        try fileManager.copyItem(at: url, to: backupURL)
+    }
+
     private func backUpCorruptFile() {
-        let backupURL = url.appendingPathExtension("bak")
         let fileManager = FileManager.default
         do {
             if fileManager.fileExists(atPath: backupURL.path) {

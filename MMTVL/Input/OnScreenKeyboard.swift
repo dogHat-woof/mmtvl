@@ -54,8 +54,10 @@ nonisolated struct OnScreenKeyboard: Equatable, Sendable {
     private(set) var mode = Mode.letters
     private(set) var focus = Focus(row: 0, key: 0)
 
-    init(text: String = "") {
+    /// M7h step 11: `mode` lets an address page start on the digits.
+    init(text: String = "", mode: Mode = .letters) {
         self.text = String(text.prefix(Self.maxLength))
+        self.mode = mode
     }
 
     static func rows(for mode: Mode) -> [[Key]] {
@@ -93,7 +95,8 @@ nonisolated struct OnScreenKeyboard: Equatable, Sendable {
             return deleteLast()
         case .back:
             return .back
-        case .home, .fastForward, .rewind, .menu, .channelUp, .channelDown:
+        case .home, .fastForward, .rewind, .menu, .channelUp, .channelDown,
+             .volumeUp, .volumeDown, .mute, .power, .powerMenu:   // M7h: handled before screens (L3)
             return .none
         }
     }

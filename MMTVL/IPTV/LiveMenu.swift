@@ -78,7 +78,7 @@ nonisolated struct LiveMenu: Equatable, Sendable {
             return focusedItem.map { .choose($0.action) } ?? .none
         case .back, .menu:
             return .close
-        case .left, .right, .playPause, .fastForward, .rewind, .home:
+        case .left, .right, .playPause, .fastForward, .rewind, .home, .volumeUp, .volumeDown, .mute, .power, .powerMenu:
             return .none
         }
     }

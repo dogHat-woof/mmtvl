@@ -11,8 +11,11 @@ nonisolated final class MPVVideoLayer: CAOpenGLLayer, @unchecked Sendable {
     private var renderContext: OpaquePointer?
     /// True once the render context exists (set on the main thread).
     private(set) var isReady = false
-    /// Called on the main thread when the render context is created.
-    var onReady: (@Sendable () -> Void)?
+    /// Called on the main thread when the render context is created. `replacedContext` (M7h 13g): a render context was
+    /// freed since the last one was created, which turns mpv's video off until the next loadfile (render.h).
+    var onReady: (@Sendable (_ replacedContext: Bool) -> Void)?
+    /// M7h 13g: set when a render context is freed, cleared when the next one is created (Core Animation's GL callbacks).
+    private var renderContextFreed = false
 
     init(mpv: MPVHandle) {
         self.mpv = mpv
@@ -58,6 +61,7 @@ nonisolated final class MPVVideoLayer: CAOpenGLLayer, @unchecked Sendable {
         if let renderContext {
             mpv_render_context_free(renderContext)
             self.renderContext = nil
+            renderContextFreed = true
         }
         createRenderContext()
         return context
@@ -69,6 +73,7 @@ nonisolated final class MPVVideoLayer: CAOpenGLLayer, @unchecked Sendable {
         if let renderContext {
             mpv_render_context_free(renderContext)
             self.renderContext = nil
+            renderContextFreed = true
         }
         let ref = LayerRef(layer: self)
         DispatchQueue.main.async { ref.layer.isReady = false }
@@ -138,10 +143,12 @@ nonisolated final class MPVVideoLayer: CAOpenGLLayer, @unchecked Sendable {
             let ref = LayerRef(layer: Unmanaged<MPVVideoLayer>.fromOpaque(layerContext).takeUnretainedValue())
             DispatchQueue.main.async { ref.layer.setNeedsDisplay() }
         }, Unmanaged.passUnretained(self).toOpaque())
+        let replaced = renderContextFreed
+        renderContextFreed = false
         let ref = LayerRef(layer: self)
         DispatchQueue.main.async {
             ref.layer.isReady = true
-            ref.layer.onReady?()
+            ref.layer.onReady?(replaced)
         }
     }
 }

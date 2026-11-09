@@ -27,4 +27,13 @@ struct ParallaxTests {
         #expect(abs(center.x - 0.85) < 0.0001)
         #expect(abs(center.y - -0.2) < 0.0001)
     }
+
+    /// M7h 13f: only a moving pointer tilts; a resting one (the view moved under it) never does.
+    @Test func onlyAMovedPointerTilts() {
+        let resting = CGPoint(x: 1690, y: 935)
+        #expect(!ParallaxMath.followsPointer(at: resting, last: resting))
+        #expect(ParallaxMath.followsPointer(at: CGPoint(x: 1691, y: 935), last: resting))
+        #expect(ParallaxMath.followsPointer(at: CGPoint(x: 1690, y: 934.5), last: resting))
+        #expect(!ParallaxMath.followsPointer(at: resting, last: nil))
+    }
 }

@@ -376,6 +376,14 @@ enum Theme {
     static let liveMenuTitleFont = Font.system(size: 34, weight: .semibold)
     static let liveMenuRowHeight: CGFloat = 72
     static let liveMenuRowCornerRadius: CGFloat = 12
+    /// The menu panel's padding, the space under its title and above its hint, and its rows' side padding
+    /// (Live TV menus and the power menu, M7h L15).
+    static let menuPanelPadding: CGFloat = 32
+    static let menuTitleSpacing: CGFloat = 16
+    static let menuRowPadding: CGFloat = 20
+    /// Behind a menu: the screen dims (Live TV menus and the power menu).
+    static let menuDim = Color.black.opacity(0.4)
+    static let menuFadeAnimation = Animation.easeInOut(duration: 0.2)
 
     // MARK: On-screen keyboard (M7f L11)
 
@@ -400,6 +408,28 @@ enum Theme {
     static let searchRowHeight: CGFloat = 84
     static let searchRowTitleFont = Font.system(size: 26, weight: .medium)
     static let searchRowDetailFont = Font.system(size: 20)
+
+    // MARK: Toast (M7h L8)
+
+    /// "Trackpad On", "Volume −20 dB": a glass capsule top-centre of the screen, over any app.
+    static let toastFont = Font.system(size: 30, weight: .semibold)
+    static let toastSymbolFont = Font.system(size: 30, weight: .semibold)
+    static let toastSpacing: CGFloat = 16
+    static let toastPadding = CGSize(width: 36, height: 20)
+    /// The capsule's top on the canvas (level with the home clock).
+    static let toastTop: CGFloat = 60
+    /// The panel's height on the canvas: the capsule and room for its shadow.
+    static let toastBandHeight: CGFloat = 200
+    /// Inside the glass: the toast floats over any app, often a white web page, where `panelGlass` alone leaves
+    /// white text at about 2.3:1; this brings it to about 4.5:1 and barely changes it over dark video.
+    static let toastScrim = Color.black.opacity(0.3)
+    static let toastShadowRadius: CGFloat = 24
+    static let toastShadowOpacity: Double = 0.35
+    static let toastDuration: Duration = .seconds(2)
+    static let toastFadeInSeconds: TimeInterval = 0.2
+    static let toastFadeOutSeconds: TimeInterval = 0.5
+    /// A replacing message's text and symbol cross-fade.
+    static let toastContentAnimation = Animation.easeInOut(duration: 0.15)
 
     // MARK: Animation
 

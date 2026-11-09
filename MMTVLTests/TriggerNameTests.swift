@@ -41,5 +41,21 @@ struct TriggerNameTests {
         #expect(TriggerName.kind(key(kVK_Tab)) == "Keyboard")
         #expect(TriggerName.kind(.media(key: .rewind)) == "Media key")
         #expect(TriggerName.kind(.controller(button: .y)) == "Game controller")
+        #expect(TriggerName.kind(.siriRemote(button: .tv)) == "Siri Remote")
+    }
+
+    // MARK: M7h L2
+
+    @Test func siriRemoteNames() {
+        let expected: [(SiriRemoteButton, String)] = [
+            (.tv, "Siri Remote TV"), (.back, "Siri Remote Back"), (.playPause, "Siri Remote Play/Pause"),
+            (.volumeUp, "Siri Remote Volume Up"), (.volumeDown, "Siri Remote Volume Down"), (.mute, "Siri Remote Mute"),
+            (.power, "Siri Remote Power"), (.up, "Siri Remote Up"), (.down, "Siri Remote Down"),
+            (.left, "Siri Remote Left"), (.right, "Siri Remote Right"), (.select, "Siri Remote Select"),
+        ]
+        #expect(expected.count == SiriRemoteButton.allCases.count)
+        for (button, name) in expected {
+            #expect(TriggerName.describe(.siriRemote(button: button)) == name)
+        }
     }
 }

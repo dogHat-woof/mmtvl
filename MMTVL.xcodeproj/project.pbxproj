@@ -264,7 +264,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 22;
+				CURRENT_PROJECT_VERSION = 28;
 				DEVELOPMENT_TEAM = H846CY8RB4;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
@@ -272,6 +272,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = MMTVL;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "MMTVL asks macOS to sleep or restart the Mac mini from its power menu.";
 				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "MMTVL lists pictures here so you can use one as tile art.";
 				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "MMTVL lists pictures here so you can use one as tile art.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MMTVL connects to your Plex Media Server and lets phones on this network find it for casting.";
@@ -279,7 +280,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.1.0;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.mmtvl.launcher;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -297,7 +298,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 22;
+				CURRENT_PROJECT_VERSION = 28;
 				DEVELOPMENT_TEAM = H846CY8RB4;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
@@ -305,6 +306,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = MMTVL;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "MMTVL asks macOS to sleep or restart the Mac mini from its power menu.";
 				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "MMTVL lists pictures here so you can use one as tile art.";
 				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "MMTVL lists pictures here so you can use one as tile art.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MMTVL connects to your Plex Media Server and lets phones on this network find it for casting.";
@@ -312,7 +314,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.1.0;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.mmtvl.launcher;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -328,10 +330,10 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 22;
+				CURRENT_PROJECT_VERSION = 28;
 				DEVELOPMENT_TEAM = H846CY8RB4;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.1.0;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.mmtvl.launcher.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -347,10 +349,10 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 22;
+				CURRENT_PROJECT_VERSION = 28;
 				DEVELOPMENT_TEAM = H846CY8RB4;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.1.0;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = dev.mmtvl.launcher.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;

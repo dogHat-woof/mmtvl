@@ -75,4 +75,33 @@ struct SettingsEnvironment {
     /// Runs the AirPlay probe; when done, the app calls `refreshStatus()`.
     var refreshCasting: () -> Void
     var openAirPlaySettings: () -> Void
+    /// M7h D43: Settings → Siri Remote.
+    var siriRemoteStatus: () -> SiriRemoteSettingsStatus
+    /// M7h D44: the receiver link, from `ReceiverController`.
+    var receiverStatus: () -> ReceiverSettingsStatus
+    /// `SerialPort.available()`, read when the Serial Port list opens.
+    var serialPorts: () -> [SerialPortInfo]
+    /// L12: the chosen brand's read-only queries on the configured link.
+    var testReceiver: () async -> ReceiverTestOutcome
+    /// L12: each brand's read-only queries on the serial port (nil = Automatic); the brand that answered.
+    var findReceiverOnPort: (String?) async -> ReceiverBrand?
+    /// L17: SSDP, then each candidate's read-only queries (`receiverNetworkPort` overrides the port).
+    var findReceiversOnNetwork: (UInt16?) async -> [FoundReceiver]
+    /// L18: read-only; nil when no TV is set up with a usable address.
+    var testTV: () async -> TVTestResult?
+    /// L18: SSDP for VIERAs.
+    var findTVs: () async -> [FoundTV]
+    /// Step 9 (reopened): HDMI-CEC's last known tunnel state (`HDMICEC.availability`); nil before the first check.
+    var cecAvailability: () -> CECAvailability?
+    /// Checks the tunnel (read-only); when done, the app calls `refreshStatus()`.
+    var refreshCEC: () -> Void
+    /// Test TV with HDMI-CEC: Give Device Power Status; nil = no answer (or the tunnel isn't ready).
+    var testCEC: () async -> CECPowerStatus?
+    /// Step 9c: the receiver over HDMI-CEC (`CECAudioSystem`).
+    var cecReceiverStatus: () -> CECReceiverSettingsStatus
+    /// Step 9c: Test Connection with HDMI-CEC, and Find Receiver after the serial brands: Give Device Power Status and
+    /// Give OSD Name to the receiver (read-only).
+    var testCECReceiver: () async -> CECReceiverTest
+    /// Debug builds: the toast panel (L8), for Settings → Siri Remote → Status.
+    var showToast: (String) -> Void
 }

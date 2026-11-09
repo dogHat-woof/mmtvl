@@ -24,6 +24,8 @@ nonisolated enum ExternalKeyMap {
         case .channelUp: .key(CGKeyCode(kVK_PageUp))
         case .channelDown: .key(CGKeyCode(kVK_PageDown))
         case .home, .menu: nil
+        // M7h L3: volume and power are handled before this map, from any app.
+        case .volumeUp, .volumeDown, .mute, .power, .powerMenu: nil
         }
     }
 }

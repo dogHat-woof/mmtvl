@@ -77,7 +77,8 @@ final class LiveSearchModel {
             case .channelDown: focusResult(min(index + Self.visibleResults, results.count - 1))
             case .left, .back: focus = .keyboard
             case .select: return results.indices.contains(index) ? .choose(results[index]) : .none
-            case .right, .playPause, .home, .fastForward, .rewind, .menu: break
+            case .right, .playPause, .home, .fastForward, .rewind, .menu,
+                 .volumeUp, .volumeDown, .mute, .power, .powerMenu: break
             }
             return .none
         }

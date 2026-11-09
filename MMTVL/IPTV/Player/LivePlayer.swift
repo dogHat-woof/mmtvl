@@ -45,7 +45,7 @@ final class MPVPlayerController: LivePlayer {
             if state.phase != oldValue.phase { phaseDidChange() }
         }
     }
-    /// Created with the mpv core on first use; LiveTVRootView hosts it.
+    /// Created with the mpv core on first use; LauncherRootView hosts it (M7h step 13h).
     private(set) var videoView: MPVVideoView?
     @ObservationIgnored var onFailure: (() -> Void)?
     /// M7c L29: follows the provider's redirect once (nil = mpv follows it).
@@ -92,8 +92,8 @@ final class MPVPlayerController: LivePlayer {
             if volumeLevel != 100 || volumeMuted || !audible { applyVolume() }
             if bufferProfile != .full { applyBufferProfile() }
             let view = MPVVideoView(mpv: mpv)
-            view.videoLayer.onReady = { [weak self] in
-                Task { @MainActor in self?.loadPending() }
+            view.videoLayer.onReady = { [weak self] replacedContext in
+                Task { @MainActor in self?.videoContextReady(replacedContext: replacedContext) }
             }
             videoView = view
             logger.info("mpv core created (player \(self.index))")
@@ -236,9 +236,30 @@ final class MPVPlayerController: LivePlayer {
         logger.notice("Loading a stream from \(original.host() ?? "?", privacy: .public) via \(url.host() ?? "?", privacy: .public)\(relayed == nil ? "" : " through the relay", privacy: .public) (player \(self.index))")
     }
 
-    private func loadPending() {
-        guard let url = pendingURL else { return }
+    /// M7h 13g: a pending URL loads as before. A replaced render context (the video view moved between hosts, e.g.
+    /// Select on the home preview) left mpv's video track off, so a playing or loading stream is loaded again.
+    private func videoContextReady(replacedContext: Bool) {
+        if let url = pendingURL {
+            load(url)
+            return
+        }
+        guard Self.reloadsAfterContextChange(replaced: replacedContext, hasPending: false,
+                                             hasCurrentURL: currentURL != nil, phase: state.phase),
+              let url = currentURL
+        else { return }
+        logger.notice("Video GL context replaced while playing; reloading the stream (player \(self.index))")
+        // The reload supersedes a waiting retry, which would load the same URL again.
+        retryTask?.cancel()
+        retryTask = nil
         load(url)
+    }
+
+    /// M7h 13g: whether a new render context should reload the current stream. Not while paused: reloading would drop
+    /// the timeshift buffer and unpause.
+    nonisolated static func reloadsAfterContextChange(replaced: Bool, hasPending: Bool, hasCurrentURL: Bool,
+                                                      phase: PlayerState.Phase) -> Bool {
+        guard replaced, !hasPending, hasCurrentURL else { return false }
+        return phase == .loading || phase == .playing
     }
 
     private func handle(_ event: MPVEvent) {

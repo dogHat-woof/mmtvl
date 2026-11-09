@@ -17,6 +17,65 @@ nonisolated enum SettingsPage: Hashable, Sendable {
     case casting
     /// M7g L6: root categories.
     case youtube, remoteInput, restrictions, system, about
+    /// M7h step 11: Remote & Input → Siri Remote, and the receiver's and TV's lists.
+    case siriRemote, receiver, receiverBrand, receiverPort, receiverMaxVolume, receiverFound, tvBrand
+    /// M7h step 9c: the receiver's Serial / Network / HDMI-CEC list.
+    case receiverConnection
+    /// M7h step 13c: the Audio & TV category, and its TV page (the receiver's is `receiver`).
+    case audioTV, tv
+    /// M7h step 11 (D41): an address typed with the on-screen keyboard.
+    case addressEntry(AddressField)
+}
+
+/// M7h step 11: which address the keyboard page edits.
+nonisolated enum AddressField: Hashable, Sendable {
+    /// `receiverHost`.
+    case receiver
+    /// `tvHost`.
+    case tv
+}
+
+/// M7h step 11: Settings' read-only checks; each runs in the background while its row says "Testing…" or
+/// "Searching…", then shows the result.
+nonisolated enum SettingsProbe: Hashable, Sendable {
+    case testReceiver, findReceiver, testTV, findTV
+}
+
+/// What Settings → Siri Remote shows (M7h D43). Built by the app from `SiriRemoteInput` and `RemoteBattery`.
+nonisolated struct SiriRemoteSettingsStatus: Equatable, Sendable {
+    var isConnected = false
+    /// 0…100; nil when unknown.
+    var batteryLevel: Int?
+    /// MultitouchSupport loaded, and (when connected) the remote's touch surface delivers frames.
+    var isTouchAvailable = false
+}
+
+/// What Settings → Audio & TV → Receiver shows about the receiver link (M7h D44). Never an address or a device path.
+nonisolated struct ReceiverSettingsStatus: Equatable, Sendable {
+    /// The last known power, volume and mute.
+    var state = ReceiverState()
+    var isConnected = false
+    var isAnswering = false
+    /// `ReceiverController.lastConnectError`.
+    var lastError: String?
+}
+
+/// M7h step 9c: what Settings → Audio & TV → Receiver shows about a receiver over HDMI-CEC (`CECAudioSystem`).
+nonisolated struct CECReceiverSettingsStatus: Equatable, Sendable {
+    /// The tunnel's state at the last check; nil before one.
+    var availability: CECAvailability?
+    /// The last power status answer; nil: none yet, or no answer.
+    var power: CECPowerStatus?
+    /// The OSD name ("VSX-01TXH").
+    var name: String?
+    var isAnswering = false
+}
+
+/// M7h L12: Test Connection's replies, or why there were none.
+nonisolated struct ReceiverTestOutcome: Equatable, Sendable {
+    var replies = ReceiverState()
+    /// "Connection refused", "No serial port found"…; nil = use "No answer" when nothing replied.
+    var error: String?
 }
 
 /// Which Live TV address a paste row fills (M4 L2).
@@ -151,6 +210,14 @@ nonisolated enum SettingKey: String, CaseIterable, Sendable {
     case showVersionOnHome
     /// M7f L4: its row shows "Playlist" / "Pasted Guides".
     case usePlaylistGuide
+    /// M7h D43.
+    case siriRemoteEnabled
+    /// M7h step 13b.
+    case volumeToast
+    /// M7h step 9c.
+    case tvVolumeEnabled
+    /// M7h step 13e.
+    case siriRemoteSwipes
 
     var keyPath: WritableKeyPath<AppSettings, Bool> {
         switch self {
@@ -166,6 +233,10 @@ nonisolated enum SettingKey: String, CaseIterable, Sendable {
         case .homeLivePreview: \.homeLivePreview
         case .showVersionOnHome: \.showVersionOnHome
         case .usePlaylistGuide: \.usePlaylistGuide
+        case .siriRemoteEnabled: \.siriRemoteEnabled
+        case .volumeToast: \.volumeToast
+        case .tvVolumeEnabled: \.tvVolumeEnabled
+        case .siriRemoteSwipes: \.siriRemoteSwipes
         }
     }
 }
@@ -220,6 +291,22 @@ nonisolated enum SettingsAction: Hashable, Sendable {
     case openAirPlaySettings
     /// M7c L32: the tile MMTVL opens on (`settings.json` `homeStartTile`).
     case setStartTile(id: String)
+    /// M7h step 11: Settings → Audio & TV → Receiver.
+    case setReceiverBrand(ReceiverBrand)
+    case setReceiverConnection(ReceiverConnection)
+    /// nil = Automatic (the first USB serial port).
+    case setReceiverPort(String?)
+    case setReceiverMaxDB(Double)
+    /// Find on Network's choice: brand, network, host, and the port when it isn't the brand's own.
+    case useFoundReceiver(FoundReceiver)
+    case setTVBrand(TVBrand)
+    /// Read-only checks (L12, L17, L18); never a command that changes anything.
+    case testReceiver, findReceiver, testTV, findTV
+    /// The address page: save the typed address (empty clears it), or clear the field.
+    case saveAddress(AddressField)
+    case clearAddress
+    /// Debug builds: Settings → Siri Remote → Status shows the "Trackpad On" toast (step 6).
+    case showToastDemo
 }
 
 nonisolated enum RowImage: Hashable, Sendable {

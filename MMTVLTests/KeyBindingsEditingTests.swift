@@ -10,7 +10,8 @@ struct KeyBindingsEditingTests {
 
     @Test func bindingsForACommandKeepFileOrder() {
         let select = KeyBindings.defaults.bindings(for: .select).map(\.trigger)
-        #expect(select == [returnKey, .key(keyCode: UInt16(kVK_ANSI_KeypadEnter), modifiers: []), .controller(button: .a)])
+        #expect(select == [returnKey, .key(keyCode: UInt16(kVK_ANSI_KeypadEnter), modifiers: []), .controller(button: .a),
+                           .siriRemote(button: .select)])
     }
 
     @Test func addingMovesATriggerFromAnotherCommand() {
@@ -49,6 +50,7 @@ struct KeyBindingsEditingTests {
         let onlyReturn = KeyBindings.defaults
             .removing(.key(keyCode: UInt16(kVK_ANSI_KeypadEnter), modifiers: []))
             .removing(.controller(button: .a))
+            .removing(.siriRemote(button: .select))
         #expect(!onlyReturn.canRemove(returnKey))
         // A second Select can go.
         #expect(KeyBindings.defaults.canRemove(returnKey))
@@ -57,6 +59,60 @@ struct KeyBindingsEditingTests {
         #expect(oneHome.canRemove(homeKey))
         // An unbound trigger can always be "removed".
         #expect(KeyBindings.defaults.canRemove(f5))
+    }
+
+    // MARK: M7h (L2, L9)
+
+    @Test func addingAPlainLetterToHomeStaysLocal() {
+        let a = InputBinding.Trigger.key(keyCode: UInt16(kVK_ANSI_A), modifiers: [])
+        let added = KeyBindings.defaults.adding(a, for: .home).binding(matching: a)
+        #expect(added?.command == .home)
+        #expect(added?.isGlobal == false)
+        // With a modifier it's not a typing key: global like any Home.
+        let shiftA = InputBinding.Trigger.key(keyCode: UInt16(kVK_ANSI_A), modifiers: [.shift])
+        #expect(KeyBindings.defaults.adding(shiftA, for: .home).binding(matching: shiftA)?.isGlobal == true)
+    }
+
+    @Test func settingGlobalKeepsPlainLettersLocal() {
+        let five = InputBinding.Trigger.key(keyCode: UInt16(kVK_ANSI_5), modifiers: [])
+        let edited = KeyBindings.defaults.adding(five, for: .home).settingGlobal(true, for: five)
+        #expect(edited.binding(matching: five)?.isGlobal == false)
+        // F5 can still be made global.
+        #expect(KeyBindings.defaults.adding(f5, for: .select).settingGlobal(true, for: f5).binding(matching: f5)?.isGlobal == true)
+    }
+
+    @Test func canSetGlobal() {
+        let lettersAndDigits = [kVK_ANSI_A, kVK_ANSI_M, kVK_ANSI_Z, kVK_ANSI_Q, kVK_ANSI_0, kVK_ANSI_5, kVK_ANSI_9]
+        for code in lettersAndDigits {
+            #expect(!KeyBindings.canSetGlobal(.key(keyCode: UInt16(code), modifiers: [])))
+        }
+        let others = [kVK_F1, kVK_F5, kVK_F13, kVK_Home, kVK_PageUp, kVK_Escape, kVK_ANSI_Keypad5, kVK_ANSI_Minus]
+        for code in others {
+            #expect(KeyBindings.canSetGlobal(.key(keyCode: UInt16(code), modifiers: [])))
+        }
+        #expect(KeyBindings.canSetGlobal(.key(keyCode: UInt16(kVK_ANSI_A), modifiers: [.control])))
+        #expect(KeyBindings.canSetGlobal(.controller(button: .a)))
+        #expect(KeyBindings.canSetGlobal(.media(key: .playPause)))
+        #expect(KeyBindings.canSetGlobal(.siriRemote(button: .tv)))
+    }
+
+    /// QA finding 2: L2, Siri Remote bindings are always global.
+    @Test func siriRemoteBindingsStayGlobal() {
+        let tv = InputBinding.Trigger.siriRemote(button: .tv)
+        let edited = KeyBindings.defaults.settingGlobal(false, for: tv)
+        #expect(edited.binding(matching: tv)?.isGlobal == true)
+        #expect(edited == KeyBindings.defaults)
+        // Other Home buttons can still be turned off.
+        #expect(KeyBindings.defaults.settingGlobal(false, for: homeKey).binding(matching: homeKey)?.isGlobal == false)
+    }
+
+    @Test func addingASiriRemoteButtonIsGlobal() {
+        let edited = KeyBindings.defaults.adding(.siriRemote(button: .playPause), for: .menu)
+        let added = edited.binding(matching: .siriRemote(button: .playPause))
+        #expect(added?.command == .menu)
+        #expect(added?.isGlobal == true)
+        #expect(added?.label == "Siri Remote Play/Pause")
+        #expect(edited.bindings(for: .playPause).allSatisfy { $0.trigger != .siriRemote(button: .playPause) })
     }
 }
 

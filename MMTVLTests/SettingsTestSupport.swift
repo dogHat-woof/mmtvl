@@ -13,6 +13,9 @@ final class SettingsRecorder {
     var loginStatus: LoginItemStatus
     var installedApps: [InstalledApp] = []
     var hasPIN = false
+    /// Step 13e: how often the PIN (Keychain) and the login item (SMAppService) were read.
+    var pinReads = 0
+    var loginItemReads = 0
     var pinFlows: [PINPurpose] = []
     var youtubeReloads = 0
     var youtubeClears = 0
@@ -53,6 +56,31 @@ final class SettingsRecorder {
     var casting = CastingSettingsStatus()
     var castingRefreshes = 0
     var airPlaySettingsOpened = 0
+    /// M7h step 11: Siri Remote, and Audio & TV's Receiver and TV (13c). The async checks answer at once with these.
+    var siriRemote = SiriRemoteSettingsStatus()
+    var receiver = ReceiverSettingsStatus()
+    var serialPorts: [SerialPortInfo] = []
+    var serialPortReads = 0
+    var receiverTestOutcome = ReceiverTestOutcome()
+    var receiverTests = 0
+    var serialFindResult: ReceiverBrand?
+    var serialFinds: [String?] = []
+    var networkFindResult: [FoundReceiver] = []
+    var networkFinds: [UInt16?] = []
+    var tvTestResult: TVTestResult?
+    var tvTests = 0
+    var tvFindResult: [FoundTV] = []
+    var tvFinds = 0
+    /// Step 9 (reopened): HDMI-CEC.
+    var cec: CECAvailability?
+    var cecRefreshes = 0
+    var cecTestResult: CECPowerStatus?
+    var cecTests = 0
+    /// Step 9c: the receiver over HDMI-CEC.
+    var cecReceiver = CECReceiverSettingsStatus()
+    var cecReceiverTestResult = CECReceiverTest()
+    var cecReceiverTests = 0
+    var toasts: [String] = []
 
     init(trusted: Bool, loginStatus: LoginItemStatus) {
         self.trusted = trusted
@@ -93,14 +121,20 @@ func makeSettingsModel(
         applyItems: { recorder.appliedItems.append($0) },
         isAccessibilityTrusted: { recorder.trusted },
         requestAccessibility: { recorder.accessibilityRequests += 1 },
-        loginItemStatus: { recorder.loginStatus },
+        loginItemStatus: {
+            recorder.loginItemReads += 1
+            return recorder.loginStatus
+        },
         openLoginItemsSettings: { recorder.loginItemsOpened += 1 },
         scanInstalledApps: { recorder.installedApps },
         relaunch: { recorder.relaunches += 1 },
         exitToDesktop: { recorder.exits += 1 },
         tileTitle: { $0.title },
         isInstalled: { _ in true },
-        hasPIN: { recorder.hasPIN },
+        hasPIN: {
+            recorder.pinReads += 1
+            return recorder.hasPIN
+        },
         startPINFlow: { recorder.pinFlows.append($0) },
         reloadYouTube: { recorder.youtubeReloads += 1 },
         clearYouTubeData: { recorder.youtubeClears += 1 },
@@ -144,7 +178,45 @@ func makeSettingsModel(
         },
         castingStatus: { recorder.casting },
         refreshCasting: { recorder.castingRefreshes += 1 },
-        openAirPlaySettings: { recorder.airPlaySettingsOpened += 1 }
+        openAirPlaySettings: { recorder.airPlaySettingsOpened += 1 },
+        siriRemoteStatus: { recorder.siriRemote },
+        receiverStatus: { recorder.receiver },
+        serialPorts: {
+            recorder.serialPortReads += 1
+            return recorder.serialPorts
+        },
+        testReceiver: {
+            recorder.receiverTests += 1
+            return recorder.receiverTestOutcome
+        },
+        findReceiverOnPort: { path in
+            recorder.serialFinds.append(path)
+            return recorder.serialFindResult
+        },
+        findReceiversOnNetwork: { port in
+            recorder.networkFinds.append(port)
+            return recorder.networkFindResult
+        },
+        testTV: {
+            recorder.tvTests += 1
+            return recorder.tvTestResult
+        },
+        findTVs: {
+            recorder.tvFinds += 1
+            return recorder.tvFindResult
+        },
+        cecAvailability: { recorder.cec },
+        refreshCEC: { recorder.cecRefreshes += 1 },
+        testCEC: {
+            recorder.cecTests += 1
+            return recorder.cecTestResult
+        },
+        cecReceiverStatus: { recorder.cecReceiver },
+        testCECReceiver: {
+            recorder.cecReceiverTests += 1
+            return recorder.cecReceiverTestResult
+        },
+        showToast: { recorder.toasts.append($0) }
     )
     return (SettingsModel(settings: settings, items: items, environment: environment, bindings: bindings), recorder)
 }

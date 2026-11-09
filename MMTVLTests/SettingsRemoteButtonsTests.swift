@@ -29,7 +29,8 @@ struct SettingsRemoteButtonsTests {
         model.open(.remoteInput)
         #expect(model.row(id: "remoteButtons")?.action == .push(.remoteButtons))
         let ids = model.focusableRowIDs
-        #expect(ids.firstIndex(of: "remoteButtons") == ids.firstIndex(of: "controllers")! + 1)
+        // M7h: Siri Remote comes between Game Controllers and Remote Buttons (Receiver & TV is on Audio & TV, 13c).
+        #expect(ids.firstIndex(of: "remoteButtons") == ids.firstIndex(of: "siriRemote")! + 1)
         #expect(ids.firstIndex(of: "channelUp") == ids.firstIndex(of: "remoteButtons")! + 1)
     }
 
@@ -37,15 +38,17 @@ struct SettingsRemoteButtonsTests {
         let (model, _) = makeSettingsModel()
         model.perform(.push(.remoteButtons))
         #expect(model.pageTitle == "Remote Buttons")
+        // M7h U2: every command, Power and Power Menu included.
         let commandRowIDs = RemoteCommand.allCases.map { "command.\($0.rawValue)" }
         #expect(Array(model.focusableRowIDs.prefix(commandRowIDs.count)) == commandRowIDs)
-        #expect(model.row(id: "command.select")?.value == "Return · Keypad Enter +1")
+        #expect(model.row(id: "command.select")?.value == "Return · Keypad Enter +2")   // M7h: + Siri Remote Select
         #expect(model.row(id: "command.channelUp")?.value == "Page Up · Controller Right Trigger")
         #expect(model.row(id: "command.menu")?.title == "Menu")
         #expect(model.row(id: "restoreButtons")?.action == .push(.confirmRestoreButtons))
 
         let (empty, _) = makeSettingsModel(bindings: KeyBindings.defaults.removing(.controller(button: .x))
-            .removing(.key(keyCode: UInt16(kVK_Space), modifiers: [])).removing(.media(key: .playPause)))
+            .removing(.key(keyCode: UInt16(kVK_Space), modifiers: [])).removing(.media(key: .playPause))
+            .removing(.siriRemote(button: .playPause)))
         empty.perform(.push(.remoteButtons))
         #expect(empty.row(id: "command.playPause")?.value == "None")
     }
@@ -105,8 +108,31 @@ struct SettingsRemoteButtonsTests {
         let applied = try #require(recorder.appliedBindings.last)
         #expect(applied.binding(matching: f5)?.command == .select)
         #expect(model.bindings == applied)
-        #expect(model.focusedRowID == "binding.3")
-        #expect(model.row(id: "binding.3")?.title == "F5")
+        #expect(model.focusedRowID == "binding.4")   // after Return, Keypad Enter, Controller A, Siri Remote Select
+        #expect(model.row(id: "binding.4")?.title == "F5")
+    }
+
+    /// M7h U2 (2026-11-06): Power and Power Menu can learn a button again; the long press note stays.
+    @Test func powerAndPowerMenuLearnButtons() throws {
+        for command in [RemoteCommand.power, .powerMenu] {
+            let (model, recorder, clock) = onCommandPage(command)
+            #expect(model.pageTitle == command.title)
+            #expect(model.row(id: "learn")?.action == .startLearning(command))
+            model.perform(.startLearning(command))
+            let handler = try #require(recorder.learningHandler)
+            handler(f5)
+            #expect(model.page == .confirmLearn(command, f5))
+            clock.now += 1
+            model.press(.select)
+            #expect(model.bindings.binding(matching: f5)?.command == command)
+        }
+        let (model, _, _) = onCommandPage(.powerMenu)
+        #expect(model.sections.last?.footer?.hasSuffix("Holding the Siri Remote's Power button opens the power menu too, whatever buttons are here.") == true)
+        let (root, _) = makeSettingsModel()
+        root.perform(.push(.remoteButtons))
+        #expect(root.row(id: "command.powerMenu")?.title == "Power Menu")
+        #expect(root.row(id: "command.power")?.title == "Power")
+        #expect(root.sections.first?.footer?.hasPrefix("Holding the Siri Remote's Power button also opens the power menu") == true)
     }
 
     @Test func aButtonUsedElsewhereMoves() throws {
@@ -118,7 +144,7 @@ struct SettingsRemoteButtonsTests {
         clock.now += 1
         model.press(.select)
         #expect(model.bindings.binding(matching: escape)?.command == .menu)
-        #expect(model.bindings.bindings(for: .back).count == 2)   // Delete and Controller B stay
+        #expect(model.bindings.bindings(for: .back).count == 3)   // Delete, Controller B and Siri Remote Back stay
     }
 
     @Test func aButtonAlreadyUsedForTheSameCommand() throws {
@@ -177,6 +203,7 @@ struct SettingsRemoteButtonsTests {
     @Test func theLastSelectCantBeRemoved() {
         let only = KeyBindings.defaults.removing(.controller(button: .a))
             .removing(.key(keyCode: UInt16(kVK_ANSI_KeypadEnter), modifiers: []))
+            .removing(.siriRemote(button: .select))
         let (model, recorder, _) = onCommandPage(bindings: only)
         let returnKey = InputBinding.Trigger.key(keyCode: UInt16(kVK_Return), modifiers: [])
         model.perform(.push(.remoteBinding(.select, returnKey)))
@@ -196,6 +223,42 @@ struct SettingsRemoteButtonsTests {
         #expect(recorder.appliedBindings.last?.binding(matching: homeKey)?.isGlobal == false)
         #expect(model.row(id: "binding.global")?.value == "Off")
         #expect(model.page == .remoteBinding(.home, homeKey))
+    }
+
+    /// M7h step 12 (follow-up to U2): Power and Power Menu buttons can work in other apps (L9 unchanged: a plain letter
+    /// stays non-global; a Siri Remote button has no row).
+    @Test func powerButtonsToggleWorksInOtherApps() {
+        let f13 = InputBinding.Trigger.key(keyCode: UInt16(kVK_F13), modifiers: [])
+        let letterP = InputBinding.Trigger.key(keyCode: UInt16(kVK_ANSI_P), modifiers: [])
+        for command in [RemoteCommand.power, .powerMenu] {
+            let bindings = KeyBindings.defaults.adding(f13, for: command).adding(letterP, for: command)
+            let (model, recorder, _) = onCommandPage(command, bindings: bindings)
+            model.perform(.push(.remoteBinding(command, f13)))
+            #expect(model.row(id: "binding.global")?.value == "Off")
+            #expect(model.row(id: "binding.global")?.description == SettingsModel.globalDescription(command))
+            model.activate(rowID: "binding.global")
+            #expect(recorder.appliedBindings.last?.binding(matching: f13)?.isGlobal == true)
+            #expect(recorder.appliedBindings.last?.binding(matching: f13)?.command == command)
+            #expect(model.row(id: "binding.global")?.value == "On")
+            model.activate(rowID: "binding.global")
+            #expect(recorder.appliedBindings.last?.binding(matching: f13)?.isGlobal == false)
+
+            // A letter key can't be made global.
+            model.perform(.pop)
+            model.perform(.push(.remoteBinding(command, letterP)))
+            #expect(model.row(id: "binding.global")?.detail == "Letter and number keys only work in MMTVL")
+            #expect(model.row(id: "binding.global")?.action == nil)
+            let applied = recorder.appliedBindings.count
+            model.perform(.toggleBindingGlobal(letterP))
+            #expect(recorder.appliedBindings.count == applied + 1)
+            #expect(recorder.appliedBindings.last?.binding(matching: letterP)?.isGlobal == false)
+
+            // The Siri Remote's Power button: always global, no row.
+            model.perform(.pop)
+            model.perform(.push(.remoteBinding(command, .siriRemote(button: .power))))
+            #expect(model.row(id: "binding.global") == nil)
+        }
+        #expect(SettingsModel.globalDescription(.select) == nil)
     }
 
     @Test func restoreDefaultButtons() {

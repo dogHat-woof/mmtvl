@@ -65,7 +65,8 @@ nonisolated struct LauncherFocusModel: Equatable, Sendable {
             return moveRow(step: -1)
         case .down:
             return moveRow(step: 1)
-        case .select, .back, .home, .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown:
+        case .select, .back, .home, .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown,
+             .volumeUp, .volumeDown, .mute, .power, .powerMenu:
             return false
         }
     }

@@ -17,6 +17,7 @@ nonisolated enum YouTubeKeyMap {
         case .fastForward: 228
         case .rewind: 227
         case .home, .menu, .channelUp, .channelDown: nil   // M7 L5: leanback has no such keys
+        case .volumeUp, .volumeDown, .mute, .power, .powerMenu: nil   // M7h L3: handled before screens
         }
     }
 

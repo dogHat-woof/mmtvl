@@ -6,6 +6,8 @@ nonisolated enum PINPurpose: Hashable, Sendable {
     case openSettings, openTile(id: String), exitToDesktop
     /// M7c L9: ⌘Q or the Dock's Quit while the kiosk lock is on.
     case quit
+    /// M7h L15: the power menu's Relaunch MMTVL and Restart Mac mini.
+    case relaunch, restartMac
     /// Settings → PIN section.
     case setNew, change, turnOff
 }
@@ -43,7 +45,7 @@ nonisolated struct PINFlow: Equatable, Sendable {
                 return .next
             case .turnOff:
                 return .removed
-            case .openSettings, .openTile, .exitToDesktop, .quit, .setNew:
+            case .openSettings, .openTile, .exitToDesktop, .quit, .relaunch, .restartMac, .setNew:
                 return .verified
             }
         case .enterNew:

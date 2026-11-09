@@ -24,7 +24,7 @@ final class KioskWindowController {
     var lockOptions = false {
         didSet { if lockOptions != oldValue && NSApp.isActive { applyPresentationOptions() } }
     }
-    /// Set by Exit to Desktop, cleared by `show`.
+    /// Set by Exit to Desktop, cleared by `show` (not the power menu's).
     private(set) var isExitedToDesktop = false
 
     init(rootView: some View, windowed: Bool = AppEnvironment.windowedMode, hidesCursor: Bool = false) {
@@ -78,12 +78,21 @@ final class KioskWindowController {
         window.setFrame(frame, display: true)
     }
 
+    /// M7h step 12: the power menu's show. It isn't a Home, so it doesn't end Exit to Desktop.
+    nonisolated static let powerMenuReason = "powerMenu"
+
+    /// Whether a show with `reason` ends Exit to Desktop (re-arms the kiosk lock): every show but the power menu's
+    /// (QA minor: Home, wake, a cast… still do). Pure.
+    nonisolated static func endsExitToDesktop(reason: String) -> Bool {
+        reason != powerMenuReason
+    }
+
     /// `reason` names the caller in the `Foreground` log (L2): home, wake, appQuit, mirroringEnded, cast, guard, …
     func show(reason: String) {
         if !windowed {
             refit()
         }
-        isExitedToDesktop = false
+        if Self.endsExitToDesktop(reason: reason) { isExitedToDesktop = false }
         // After Exit to Desktop the app is hidden; global Home must bring it back.
         NSApp.unhide(nil)
         window.makeKeyAndOrderFront(nil)
@@ -178,6 +187,14 @@ final class KioskWindowController {
     /// L3: brings MMTVL forward without reordering the window (it's already on screen).
     func bringForward(reason: String) async -> Bool {
         await foregrounder.bringForward(reason: reason)
+    }
+
+    /// M7h re-review medium: Home while MMTVL is in front after Exit to Desktop (⌘Tab, or the power menu over a
+    /// desktop app) ends the exit, so the lock and presentation options come back.
+    func endExitToDesktop() {
+        guard isExitedToDesktop else { return }
+        show(reason: "home")
+        if NSApp.isActive { applyPresentationOptions() }
     }
 
     func exitToDesktop() {

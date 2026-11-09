@@ -32,6 +32,8 @@ final class PINEntryModel {
             switch purpose {
             case .change, .turnOff: "Enter Current PIN"
             case .quit: "Enter PIN to quit MMTVL"
+            case .relaunch: "Enter PIN to relaunch MMTVL"
+            case .restartMac: "Enter PIN to restart the Mac mini"
             default: "Enter PIN"
             }
         case .enterNew:

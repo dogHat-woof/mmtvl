@@ -2,7 +2,7 @@ import Carbon.HIToolbox
 
 /// Human names of binding triggers for Settings → Remote Buttons (M7). Pure.
 nonisolated enum TriggerName {
-    /// "Page Up", "⌥⇧ F5", "Media Play/Pause", "Controller A", "Controller Left Trigger", "Key 200".
+    /// "Page Up", "⌥⇧ F5", "Media Play/Pause", "Controller A", "Controller Left Trigger", "Siri Remote TV", "Key 200".
     /// Modifiers as symbols in ⌃⌥⇧⌘ order, then a space, then the key name.
     static func describe(_ trigger: InputBinding.Trigger) -> String {
         switch trigger {
@@ -15,15 +15,18 @@ nonisolated enum TriggerName {
             return "Media " + mediaName(key)
         case .controller(let button):
             return "Controller " + controllerName(button)
+        case .siriRemote(let button):
+            return "Siri Remote " + siriRemoteName(button)
         }
     }
 
-    /// "Keyboard", "Media key", "Game controller".
+    /// "Keyboard", "Media key", "Game controller", "Siri Remote".
     static func kind(_ trigger: InputBinding.Trigger) -> String {
         switch trigger {
         case .key: "Keyboard"
         case .media: "Media key"
         case .controller: "Game controller"
+        case .siriRemote: "Siri Remote"
         }
     }
 
@@ -63,6 +66,24 @@ nonisolated enum TriggerName {
         case .home: "Home"
         case .leftTrigger: "Left Trigger"
         case .rightTrigger: "Right Trigger"
+        }
+    }
+
+    /// M7h L2.
+    private static func siriRemoteName(_ button: SiriRemoteButton) -> String {
+        switch button {
+        case .tv: "TV"
+        case .back: "Back"
+        case .playPause: "Play/Pause"
+        case .volumeUp: "Volume Up"
+        case .volumeDown: "Volume Down"
+        case .mute: "Mute"
+        case .power: "Power"
+        case .up: "Up"
+        case .down: "Down"
+        case .left: "Left"
+        case .right: "Right"
+        case .select: "Select"
         }
     }
 

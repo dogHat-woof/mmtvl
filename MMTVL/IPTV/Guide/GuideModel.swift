@@ -180,7 +180,7 @@ nonisolated struct GuideModel: Equatable, Sendable {
         case .channelUp, .channelDown:
             moveRow(by: command == .channelUp ? -Self.visibleRows : Self.visibleRows)
             return .none
-        case .playPause, .home:
+        case .playPause, .home, .volumeUp, .volumeDown, .mute, .power, .powerMenu:
             return .none
         }
     }
@@ -206,7 +206,7 @@ nonisolated struct GuideModel: Equatable, Sendable {
         case .channelUp, .channelDown:
             moveRow(by: command == .channelUp ? -Self.visibleRows : Self.visibleRows)
             return .none
-        case .playPause, .home:
+        case .playPause, .home, .volumeUp, .volumeDown, .mute, .power, .powerMenu:
             return .none
         }
     }
@@ -239,7 +239,7 @@ nonisolated struct GuideModel: Equatable, Sendable {
             let step = command == .channelUp ? -Self.visibleRows : Self.visibleRows
             focus = .groups(min(max(index + step, 0), groups.count - 1))
             return .none
-        case .playPause, .home, .fastForward, .rewind, .menu:
+        case .playPause, .home, .fastForward, .rewind, .menu, .volumeUp, .volumeDown, .mute, .power, .powerMenu:
             return .none
         }
     }
@@ -256,7 +256,8 @@ nonisolated struct GuideModel: Equatable, Sendable {
         case .back, .left:
             focus = .grid
             return .none
-        case .up, .playPause, .home, .fastForward, .rewind, .menu, .channelUp, .channelDown:
+        case .up, .playPause, .home, .fastForward, .rewind, .menu, .channelUp, .channelDown,
+             .volumeUp, .volumeDown, .mute, .power, .powerMenu:
             return .none
         }
     }
