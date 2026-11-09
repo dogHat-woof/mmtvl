@@ -25,11 +25,11 @@ struct SettingsTileArtTests {
         #expect(model.row(id: "art.icon")?.value == nil)
         #expect(model.row(id: "art.file.0")?.title == "Poster.PNG")
         #expect(model.row(id: "art.file.0")?.image == .picture(Self.poster.url))
-        #expect(model.pageImage == .tileArt(itemID: "plex", .style(.designed)))
+        #expect(model.accessory(for: model.page) == .tileArt(itemID: "plex", .style(.designed)))
         model.press(.down)
-        #expect(model.pageImage == .tileArt(itemID: "plex", .style(.icon)))
+        #expect(model.accessory(for: model.page) == .tileArt(itemID: "plex", .style(.icon)))
         model.press(.down)
-        #expect(model.pageImage == .tileArt(itemID: "plex", .file(Self.poster.url)))
+        #expect(model.accessory(for: model.page) == .tileArt(itemID: "plex", .file(Self.poster.url)))
     }
 
     @Test func builtInTilesOnlyHaveTheDesignedStyle() async {

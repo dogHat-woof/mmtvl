@@ -154,6 +154,11 @@ extension SettingsModel {
     func press(_ commands: RemoteCommand...) {
         for command in commands { _ = handle(command) }
     }
+
+    /// M7g L6: opens a root category (or any page) like selecting its row.
+    func open(_ page: SettingsPage) {
+        perform(.push(page))
+    }
 }
 
 /// A tile art store on an empty temporary folder, so tests never read the real one (M7 L3).

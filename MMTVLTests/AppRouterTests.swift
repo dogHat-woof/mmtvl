@@ -64,6 +64,22 @@ struct AppRouterTests {
         #expect(recorder.learningHandler == nil)
     }
 
+    /// M7g review fixes: a held Left or Right repeats; in Settings only the fresh press changes page.
+    @Test func settingsIgnoresRepeatedLeftAndRight() {
+        let router = makeRouter()
+        openSettingsFromTile(router)
+        #expect(router.screen == .settings)
+        #expect(router.handle(.right, isRepeat: true))
+        #expect(router.settings.page == .root)
+        #expect(router.handle(.right))
+        #expect(router.settings.page == .homeScreen)
+        #expect(router.handle(.left, isRepeat: true))
+        #expect(router.settings.page == .homeScreen)
+        #expect(router.handle(.left))
+        #expect(router.settings.page == .root)
+        #expect(router.screen == .settings)
+    }
+
     /// M7c L32.
     @Test func launchFocusesTheStartTileOutOfTheShelf() {
         let router = makeRouter()

@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import Observation
 
 /// The Settings screen (D19): a navigation stack of pages built from data (L4), driven by `RemoteCommand`s.
@@ -7,6 +7,26 @@ final class SettingsModel {
     struct PageState: Equatable {
         var page: SettingsPage
         var focusedRowID: String?
+    }
+
+    /// M7g L1: one column of the sliding track; the view draws `columns` left to right.
+    struct Column: Identifiable, Equatable {
+        enum Role: Equatable {
+            /// The page below the top one: dimmed, its opening row selected (or the top page's accessory).
+            case parent
+            /// The top page, with focus.
+            case current
+            /// The empty slot to the right of the current page (at the root, off to the right of the centered list).
+            case empty
+            /// Older pages, off screen to the left.
+            case hidden
+        }
+
+        let index: Int
+        /// nil for `.empty`.
+        let page: SettingsPage?
+        let role: Role
+        var id: Int { index }
     }
 
     private(set) var settings: AppSettings
@@ -43,8 +63,12 @@ final class SettingsModel {
     private(set) var learnMessage: String?
     /// How long `.learnButton` waits for a press (L8).
     @ObservationIgnored var learnTimeout: Duration = .seconds(10)
-    /// Injectable clock (the confirm page's Select delay).
+    /// Injectable clock (the confirm page's Select delay, the column click guard).
     @ObservationIgnored var now: () -> Date = Date.init
+    /// The system's double-click interval, read at each click; injectable for tests.
+    @ObservationIgnored var doubleClickInterval: () -> TimeInterval = { NSEvent.doubleClickInterval }
+    /// When a click on the parent column last changed the page (the row click guard).
+    @ObservationIgnored private var columnClickedAt: Date?
     /// The running learn timeout; tests await it.
     @ObservationIgnored private(set) var learnTimeoutTask: Task<Void, Never>?
     @ObservationIgnored private var isLearning = false
@@ -88,6 +112,36 @@ final class SettingsModel {
         sections.lazy.flatMap(\.rows).first { $0.id == id }
     }
 
+    /// M7g L1: every stack page, then one empty column (the slot a pushed page slides into).
+    var columns: [Column] {
+        let top = stack.count - 1
+        var columns = stack.indices.map { index in
+            Column(index: index, page: stack[index].page,
+                   role: index == top ? .current : index == top - 1 ? .parent : .hidden)
+        }
+        columns.append(Column(index: stack.count, page: nil, role: .empty))
+        return columns
+    }
+
+    /// M7g L1: the row in the parent column that opened the current page; nil at the root.
+    var parentSelectionRowID: String? {
+        guard stack.count > 1 else { return nil }
+        let parent = stack[stack.count - 2]
+        let ids = sections(for: parent.page).flatMap(\.rows).filter { $0.action != nil }.map(\.id)
+        return ListFocus.resolve(ids: ids, current: parent.focusedRowID)
+    }
+
+    /// M7g: a click on the parent column goes back a page, like Back (move mode ends first).
+    func activateParentColumn() {
+        if movingTileID != nil {
+            movingTileID = nil
+            return
+        }
+        guard stack.count > 1 else { return }
+        pop()
+        columnClickedAt = now()
+    }
+
     func reset() {
         stack = [PageState(page: .root, focusedRowID: nil)]
         movingTileID = nil
@@ -120,7 +174,9 @@ final class SettingsModel {
     }
 
     /// Returns false only for commands it doesn't use, and for Back on the root page (the router then goes home).
-    func handle(_ command: RemoteCommand) -> Bool {
+    /// `isRepeat`: a held key's or button's auto-repeat. Only a fresh Left or Right changes page; their repeats
+    /// are swallowed (so holding Left doesn't run back to the root, nor Right down a chain of pages).
+    func handle(_ command: RemoteCommand, isRepeat: Bool = false) -> Bool {
         switch command {
         case .up, .down:
             let step = command == .up ? -1 : 1
@@ -130,8 +186,16 @@ final class SettingsModel {
                 setFocus(ListFocus.move(ids: focusableRowIDs, current: focusedRowID, by: step))
             }
             return true
-        case .left, .right:
-            // L13: no value cycling.
+        case .right:
+            // M7g L7 (replaces M2b L13): Right opens a disclosure row; values still don't cycle.
+            if !isRepeat, movingTileID == nil, let id = focusedRowID, let action = row(id: id)?.action, case .push = action {
+                perform(action)
+            }
+            return true
+        case .left:
+            // M7g L7: Left goes back a page, except on the root and while learning a button.
+            if case .learnButton = page { return true }
+            if !isRepeat, movingTileID == nil, stack.count > 1 { pop() }
             return true
         case .select:
             if case .confirmLearn = page, let shownAt = learnConfirmShownAt,
@@ -163,14 +227,29 @@ final class SettingsModel {
         }
     }
 
-    /// Mouse hover.
+    /// Mouse hover on a row of the current page.
     func focus(rowID: String) {
-        guard movingTileID == nil, focusableRowIDs.contains(rowID) else { return }
+        focus(rowID: rowID, on: page)
+    }
+
+    /// Mouse hover on a row of `page`; ignored unless `page` is the current page (a parent or closing column's
+    /// rows never take focus).
+    func focus(rowID: String, on page: SettingsPage) {
+        guard page == self.page, movingTileID == nil, focusableRowIDs.contains(rowID) else { return }
         setFocus(rowID)
     }
 
-    /// Mouse click.
+    /// Mouse click on a row of the current page.
     func activate(rowID: String) {
+        activate(rowID: rowID, on: page)
+    }
+
+    /// Mouse click on a row of `page`; ignored unless `page` is the current page (a page fading out after a pop or
+    /// a replace can still be under the pointer), and within a double-click interval of a column click (its second
+    /// click would land on a row of the page the first one opened).
+    func activate(rowID: String, on page: SettingsPage) {
+        guard page == self.page else { return }
+        if let columnClickedAt, now().timeIntervalSince(columnClickedAt) < doubleClickInterval() { return }
         if movingTileID != nil {
             movingTileID = nil
             return

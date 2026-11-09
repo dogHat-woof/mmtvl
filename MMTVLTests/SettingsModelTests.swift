@@ -8,21 +8,37 @@ struct SettingsModelTests {
     @Test func initialFocusIsFirstRow() {
         let (model, _) = makeSettingsModel()
         #expect(model.page == .root)
-        #expect(model.focusedRowID == "globalInput")
+        #expect(model.focusedRowID == "homeScreen")
+    }
+
+    /// M7g L6: the root lists the categories, each opening its page.
+    @Test func rootListsCategories() {
+        let (model, _) = makeSettingsModel()
+        let expected: [(String, SettingsPage)] = [
+            ("homeScreen", .homeScreen), ("liveTV", .liveTV), ("plex", .plex), ("youtube", .youtube),
+            ("casting", .casting), ("remoteInput", .remoteInput), ("restrictions", .restrictions),
+            ("system", .system), ("about", .about),
+        ]
+        #expect(model.focusableRowIDs == expected.map(\.0))
+        for (id, page) in expected {
+            #expect(model.row(id: id)?.action == .push(page))
+        }
     }
 
     @Test func upDownMovesAndClamps() {
         let (model, _) = makeSettingsModel()
+        model.open(.remoteInput)
         model.press(.up)
         #expect(model.focusedRowID == "globalInput")
         model.press(.down, .down, .down, .down, .down)
         #expect(model.focusedRowID == "phoneRemote")
         model.press(.down)
-        #expect(model.focusedRowID == "accessibility")
+        #expect(model.focusedRowID == "phoneRemote")
     }
 
     @Test func togglingAppliesSettings() {
         let (model, recorder) = makeSettingsModel()
+        model.open(.remoteInput)
         model.press(.down, .select)
         #expect(recorder.appliedSettings.count == 1)
         #expect(recorder.appliedSettings.first?.controllersEnabled == false)
@@ -32,53 +48,62 @@ struct SettingsModelTests {
 
     @Test func accessibilityRowRequestsAccess() {
         let (model, recorder) = makeSettingsModel(trusted: false)
+        model.open(.system)
         #expect(model.row(id: "accessibility")?.value == "Not Allowed")
-        model.press(.down, .down, .down, .down, .down, .down, .select)
+        model.press(.select)
         #expect(recorder.accessibilityRequests == 1)
     }
 
     @Test func approveLoginItemRowOnlyWhenWaitingForApproval() {
         let (plain, _) = makeSettingsModel(loginStatus: .requiresApproval)
+        plain.open(.system)
         #expect(plain.row(id: "approveLoginItem") == nil)
 
         var settings = AppSettings()
         settings.launchAtLogin = true
         let (waiting, recorder) = makeSettingsModel(loginStatus: .requiresApproval, settings: settings)
+        waiting.open(.system)
         #expect(waiting.row(id: "approveLoginItem") != nil)
         waiting.activate(rowID: "approveLoginItem")
         #expect(recorder.loginItemsOpened == 1)
 
         let (windowed, _) = makeSettingsModel(kiosk: false, loginStatus: .requiresApproval, settings: settings)
+        windowed.open(.system)
         #expect(windowed.row(id: "approveLoginItem") == nil)
     }
 
     @Test func windowedModeMarksKioskOnlyRows() {
         let (model, _) = makeSettingsModel(kiosk: false)
+        model.open(.system)
         #expect(model.row(id: "launchAtLogin")?.detail == "Applies in kiosk mode only")
+        model.perform(.pop)
+        model.open(.remoteInput)
         #expect(model.row(id: "globalInput")?.detail == "Applies in kiosk mode only")
     }
 
     @Test func globalInputNeedsAccessibilityDetail() {
         let (model, _) = makeSettingsModel(trusted: false)
+        model.open(.remoteInput)
         #expect(model.row(id: "globalInput")?.detail == "Needs Accessibility access")
     }
 
     @Test func pushAndPopRestoresFocus() {
         let (model, _) = makeSettingsModel()
-        model.focus(rowID: "editHome")
+        model.focus(rowID: "homeScreen")
         let pushed = model.handle(.select)
         #expect(pushed)
         #expect(model.page == .homeScreen)
         let popped = model.handle(.back)
         #expect(popped)
         #expect(model.page == .root)
-        #expect(model.focusedRowID == "editHome")
+        #expect(model.focusedRowID == "homeScreen")
         let leftRoot = model.handle(.back)
         #expect(!leftRoot)
     }
 
     @Test func refreshStatusRereadsAccessibility() {
         let (model, recorder) = makeSettingsModel(trusted: false)
+        model.open(.system)
         recorder.trusted = true
         model.refreshStatus()
         #expect(model.row(id: "accessibility")?.value == "Allowed")
@@ -90,8 +115,35 @@ struct SettingsModelTests {
         #expect(!handled)
     }
 
+    /// M7g review fixes: no detail or footer repeats its row's description.
+    @Test func copyDoesntRepeatDescriptions() {
+        let (model, recorder) = makeSettingsModel()
+        model.open(.liveTV)
+        recorder.iptv = IPTVSettingsStatus(hasPlaylist: true, playlistHost: "example.com", channelCount: 5)
+        model.refreshStatus()
+        #expect(model.row(id: "iptv.teams") != nil)
+        #expect(model.row(id: "iptv.teams")?.detail == nil)
+
+        model.reset()
+        model.open(.homeScreen)
+        model.perform(.push(.tile(id: "youtube")))
+        #expect(model.row(id: "tile.remove")?.detail == nil)
+        #expect(model.row(id: "tile.remove")?.description == "Removes the tile. Built-in tiles can be added back from Add Tile.")
+
+        model.reset()
+        model.open(.plex)
+        #expect(model.row(id: "plex.signIn") != nil)
+        #expect(model.sections.allSatisfy { $0.footer == nil })
+
+        model.reset()
+        model.open(.restrictions)
+        let kioskLock = model.row(id: "kioskLock")?.description
+        #expect(kioskLock == "⌘Tab, Force Quit and other apps can't take over the TV, and ⌘Q asks for the PIN when one is set. Exit to Desktop is the way out.")
+    }
+
     @Test func systemActions() {
         let (model, recorder) = makeSettingsModel()
+        model.open(.system)
         model.activate(rowID: "relaunch")
         model.activate(rowID: "exit")
         #expect(recorder.relaunches == 1)
@@ -264,6 +316,7 @@ struct SettingsPINTests {
 
     @Test func rootOffersSetPINWithoutPIN() {
         let (model, recorder) = makeSettingsModel()
+        model.open(.restrictions)
         #expect(rowIDs(model).contains("pin.set"))
         #expect(!rowIDs(model).contains("pin.change"))
         model.perform(model.row(id: "pin.set")!.action!)
@@ -272,6 +325,7 @@ struct SettingsPINTests {
 
     @Test func rootOffersChangeAndTurnOffWithPIN() {
         let (model, recorder) = makeSettingsModel(hasPIN: true)
+        model.open(.restrictions)
         #expect(!rowIDs(model).contains("pin.set"))
         model.perform(model.row(id: "pin.change")!.action!)
         model.perform(model.row(id: "pin.off")!.action!)
@@ -280,6 +334,7 @@ struct SettingsPINTests {
 
     @Test func refreshStatusRereadsPIN() {
         let (model, recorder) = makeSettingsModel()
+        model.open(.restrictions)
         recorder.hasPIN = true
         model.refreshStatus()
         #expect(model.hasPIN)
@@ -323,6 +378,7 @@ struct SettingsPINTests {
 struct SettingsYouTubeTests {
     @Test func rootHasYouTubeRows() {
         let (model, recorder) = makeSettingsModel()
+        model.open(.youtube)
         #expect(model.row(id: "youtube.clear") != nil)
         model.perform(model.row(id: "youtube.reload")!.action!)
         #expect(recorder.youtubeReloads == 1)
@@ -374,7 +430,8 @@ struct SettingsLiveTVTests {
         model.perform(.push(.liveTV))
         let row = model.row(id: "iptv.homePreview")
         #expect(row?.value == "On")
-        #expect(row?.detail == "Loads the channel, muted, while the home screen shows; you see it when Live TV is focused")
+        #expect(row?.detail == nil)
+        #expect(row?.description == "Loads the channel, muted, while the Home screen shows; you see it when Live TV is focused.")
         model.activate(rowID: "iptv.homePreview")
         #expect(recorder.appliedSettings.last?.homeLivePreview == false)
         #expect(model.row(id: "iptv.homePreview")?.value == "Off")
@@ -383,6 +440,7 @@ struct SettingsLiveTVTests {
     /// M7c L28.
     @Test func aboutShowsTheVersionAndBuild() {
         let (model, recorder) = makeSettingsModel()
+        model.open(.about)
         #expect(model.row(id: "about.version")?.value == "1.1.0")
         #expect(model.row(id: "about.build")?.value == "7")
         #expect(model.row(id: "about.version")?.action == nil)
@@ -460,7 +518,9 @@ struct SettingsLiveTVTests {
         model.refreshStatus()
         let row = model.row(id: "iptv.guideSource")
         #expect(row?.value == "Pasted Guides")
-        #expect(row?.detail == "Your pasted guides are kept while the playlist's is used")
+        #expect(row?.detail == nil)
+        #expect(row?.description
+            == "Use the guide the playlist names, or your pasted guides. Your pasted guides are kept either way.")
         model.activate(rowID: "iptv.guideSource")
         #expect(recorder.appliedSettings.last?.usePlaylistGuide == true)
         #expect(model.row(id: "iptv.guideSource")?.value == "Playlist")
@@ -719,8 +779,10 @@ struct SettingsLiveTVTests {
 
     @Test func channelUpRowTogglesTheDirection() {
         let (model, recorder) = makeSettingsModel()
+        model.open(.remoteInput)
         #expect(model.row(id: "channelUp")?.value == "Up the List")
-        #expect(model.row(id: "channelUp")?.detail == "Changes channel in Live TV")
+        #expect(model.row(id: "channelUp")?.detail == nil)
+        #expect(model.row(id: "channelUp")?.description?.hasPrefix("Changes channel in Live TV.") == true)
         model.activate(rowID: "channelUp")
         #expect(recorder.appliedSettings.last?.channelUpMovesUpList == false)
         #expect(model.row(id: "channelUp")?.value == "Higher Number")
@@ -729,6 +791,7 @@ struct SettingsLiveTVTests {
     /// M7c L6.
     @Test func keepOtherAppsOutRowTogglesTheLock() {
         let (model, recorder) = makeSettingsModel()
+        model.open(.restrictions)
         #expect(model.row(id: "kioskLock")?.value == "On")
         #expect(model.row(id: "kioskLock")?.action == .toggle(.kioskLock))
         model.activate(rowID: "kioskLock")
@@ -738,6 +801,283 @@ struct SettingsLiveTVTests {
 }
 
 /// A web app tile's start page (M7 L23).
+/// M7g: the column track, Left/Right, the description band and the mouse on columns.
+struct SettingsColumnsTests {
+    @Test func columnsRoles() {
+        let (model, _) = makeSettingsModel()
+        #expect(model.columns.map(\.role) == [.current, .empty])
+        #expect(model.columns.map(\.page) == [.root, nil])
+        #expect(model.columns.map(\.id) == [0, 1])
+
+        model.open(.remoteInput)
+        #expect(model.columns.map(\.role) == [.parent, .current, .empty])
+        model.open(.remoteButtons)
+        #expect(model.columns.map(\.role) == [.hidden, .parent, .current, .empty])
+        #expect(model.columns.map(\.page) == [.root, .remoteInput, .remoteButtons, nil])
+        #expect(model.columns.map(\.id) == [0, 1, 2, 3])
+    }
+
+    @Test func rightOpensDisclosureRow() {
+        let (model, _) = makeSettingsModel()
+        #expect(model.handle(.right))
+        #expect(model.page == .homeScreen)
+        model.reset()
+        model.open(.remoteInput)
+        model.focus(rowID: "remoteButtons")
+        #expect(model.handle(.right))
+        #expect(model.page == .remoteButtons)
+    }
+
+    @Test func rightIgnoresToggle() {
+        let (model, recorder) = makeSettingsModel()
+        model.open(.remoteInput)
+        #expect(model.focusedRowID == "globalInput")
+        #expect(model.handle(.right))
+        #expect(model.page == .remoteInput)
+        #expect(recorder.appliedSettings.isEmpty)
+        // Other actions don't run: Relaunch and Exit to Desktop stay put.
+        model.reset()
+        model.open(.system)
+        model.focus(rowID: "relaunch")
+        #expect(model.handle(.right))
+        model.focus(rowID: "exit")
+        #expect(model.handle(.right))
+        #expect(model.page == .system)
+        #expect(recorder.relaunches == 0)
+        #expect(recorder.exits == 0)
+        // Info rows never take focus: on a page of info rows only (Add Tile while apps load, every default tile
+        // already there), Right does nothing.
+        model.reset()
+        model.open(.addTile)
+        #expect(model.row(id: "apps.loading")?.action == nil)
+        #expect(model.focusedRowID == nil)
+        #expect(model.handle(.right))
+        #expect(model.page == .addTile)
+    }
+
+    @Test func leftPopsExceptRootAndLearn() {
+        let (model, recorder) = makeSettingsModel()
+        #expect(model.handle(.left))
+        #expect(model.page == .root)
+
+        model.open(.remoteInput)
+        model.open(.remoteButtons)
+        #expect(model.handle(.left))
+        #expect(model.page == .remoteInput)
+        #expect(model.handle(.left))
+        #expect(model.page == .root)
+        #expect(model.handle(.left))
+        #expect(model.page == .root)
+
+        model.open(.remoteInput)
+        model.open(.remoteButtons)
+        model.activate(rowID: "command.home")
+        model.activate(rowID: "learn")
+        #expect(model.page == .learnButton(.home))
+        #expect(model.handle(.left))
+        #expect(model.page == .learnButton(.home))
+        #expect(recorder.learningCalls == [true])
+        // Back still cancels learning.
+        #expect(model.handle(.back))
+        #expect(model.page == .remoteCommand(.home))
+        #expect(recorder.learningCalls == [true, false])
+
+        // Left ends pairing like Back does.
+        model.reset()
+        recorder.phoneRemote.isRunning = true
+        model.refreshStatus()
+        model.open(.phoneRemote)
+        model.open(.pairPhone)
+        #expect(recorder.pairingCalls == [true])
+        #expect(model.handle(.left))
+        #expect(model.page == .phoneRemote)
+        #expect(recorder.pairingCalls == [true, false])
+    }
+
+    @Test func leftAndRightInertInMoveMode() {
+        let (model, _) = makeSettingsModel()
+        model.open(.homeScreen)
+        model.perform(.push(.tile(id: "youtube")))
+        model.perform(.startMove(id: "youtube"))
+        let items = model.items
+        #expect(model.handle(.right))
+        #expect(model.handle(.left))
+        #expect(model.page == .homeScreen)
+        #expect(model.movingTileID == "youtube")
+        #expect(model.items == items)
+    }
+
+    @Test func parentSelectionIsOpeningRow() {
+        let (model, _) = makeSettingsModel()
+        #expect(model.parentSelectionRowID == nil)
+        // The first row, never moved to: the parent's focus resolves to it.
+        model.press(.select)
+        #expect(model.parentSelectionRowID == "homeScreen")
+        model.press(.back, .down, .down, .select)
+        #expect(model.page == .plex)
+        #expect(model.parentSelectionRowID == "plex")
+        model.press(.back)
+        model.focus(rowID: "remoteInput")
+        model.press(.select)
+        model.focus(rowID: "remoteButtons")
+        model.press(.right)
+        #expect(model.parentSelectionRowID == "remoteButtons")
+        model.press(.left)
+        #expect(model.parentSelectionRowID == "remoteInput")
+    }
+
+    @Test func parentColumnActivates() {
+        let (model, _) = makeSettingsModel()
+        model.press(.down)
+        model.open(.liveTV)
+        #expect(model.page == .liveTV)
+        model.activateParentColumn()
+        #expect(model.page == .root)
+        #expect(model.focusedRowID == "liveTV")
+        model.activateParentColumn()
+        #expect(model.page == .root)
+    }
+
+    /// The parent column builds the sections of a page that isn't on top.
+    @Test func sectionsForOtherPagesHaveNoSideEffects() {
+        let (model, recorder) = makeSettingsModel()
+        let plexRefreshes = recorder.plexRefreshes
+        let castingRefreshes = recorder.castingRefreshes
+        model.focus(rowID: "plex")
+        _ = model.columns
+        _ = model.sections(for: .plex)
+        model.focus(rowID: "casting")
+        _ = model.columns
+        _ = model.sections(for: .casting)
+        #expect(recorder.plexRefreshes == plexRefreshes)
+        #expect(recorder.castingRefreshes == castingRefreshes)
+        #expect(recorder.plexLinkingCalls.isEmpty)
+        #expect(recorder.pairingCalls.isEmpty)
+        #expect(model.page == .root)
+    }
+
+    /// M7g L3.
+    @Test func bandTextPrefersModeHint() {
+        let (model, _) = makeSettingsModel()
+        #expect(model.bandText == model.row(id: "homeScreen")?.description)
+        #expect(model.bandText != nil)
+
+        model.open(.homeScreen)
+        model.perform(.push(.tile(id: "youtube")))
+        model.perform(.startMove(id: "youtube"))
+        #expect(model.page == .homeScreen)
+        #expect(model.bandText == "Up/Down: move · Select or Back: done")
+        #expect(model.handle(.back))
+        #expect(model.bandText == nil)
+
+        model.reset()
+        model.open(.remoteInput)
+        model.activate(rowID: "remoteButtons")
+        model.activate(rowID: "command.home")
+        model.activate(rowID: "learn")
+        #expect(model.bandText == "Waiting for a button…")
+        model.screenDidClose()
+
+        model.reset()
+        model.open(.system)
+        model.focus(rowID: "relaunch")
+        #expect(model.bandText == "Quits and reopens MMTVL. Picks up changes made by hand to its settings files.")
+    }
+
+    // MARK: Held Left/Right (M7g review fixes)
+
+    /// Only a fresh Left or Right changes page; a held key's or button's repeats are swallowed (still handled).
+    @Test func repeatedRightAndLeftDontChangePage() {
+        let (model, _) = makeSettingsModel()
+        #expect(model.handle(.right, isRepeat: true))
+        #expect(model.page == .root)
+        #expect(model.handle(.right))
+        #expect(model.page == .homeScreen)
+        #expect(model.handle(.left, isRepeat: true))
+        #expect(model.page == .homeScreen)
+        #expect(model.handle(.left))
+        #expect(model.page == .root)
+        // Up and Down still repeat.
+        #expect(model.handle(.down, isRepeat: true))
+        #expect(model.focusedRowID == "liveTV")
+    }
+
+    /// A key just learned for Left auto-repeats on the confirm page: it mustn't leave it.
+    @Test func repeatedLeftStaysOnConfirmLearn() {
+        let (model, recorder) = makeSettingsModel()
+        model.open(.remoteButtons)
+        model.activate(rowID: "command.left")
+        model.activate(rowID: "learn")
+        recorder.learningHandler?(.key(keyCode: 123, modifiers: []))
+        guard case .confirmLearn = model.page else {
+            Issue.record("Expected the confirm page")
+            return
+        }
+        #expect(model.handle(.left, isRepeat: true))
+        guard case .confirmLearn = model.page else {
+            Issue.record("A repeated Left left the confirm page")
+            return
+        }
+        #expect(model.handle(.left))
+        #expect(model.page == .remoteCommand(.left))
+        model.screenDidClose()
+    }
+
+    // MARK: Mouse guards (M7g review fixes)
+
+    /// The second click of a double-click on the parent column lands on a row of the page the first click went back
+    /// to: it's ignored for the system's double-click interval.
+    @Test func rowClickRightAfterAColumnClickIsIgnored() {
+        let (model, _) = makeSettingsModel()
+        var clock = Date(timeIntervalSinceReferenceDate: 1000)
+        model.now = { clock }
+        model.doubleClickInterval = { 0.5 }
+        model.open(.remoteInput)
+        model.focus(rowID: "remoteButtons")
+        model.open(.remoteButtons)
+        model.activateParentColumn()
+        #expect(model.page == .remoteInput)
+        clock += 0.3
+        model.activate(rowID: "remoteButtons", on: .remoteInput)
+        #expect(model.page == .remoteInput)
+        clock += 0.3
+        model.activate(rowID: "remoteButtons", on: .remoteInput)
+        #expect(model.page == .remoteButtons)
+
+        // Back to the root the same way, where a row would push.
+        model.activateParentColumn()
+        model.activateParentColumn()
+        #expect(model.page == .root)
+        clock += 0.1
+        model.activate(rowID: "about", on: .root)
+        #expect(model.page == .root)
+        clock += 0.5
+        model.activate(rowID: "about", on: .root)
+        #expect(model.page == .about)
+    }
+
+    /// Only the current page's rows react, not a page fading out after a pop or a replace, or the parent.
+    @Test func rowsOfOtherPagesIgnoreThePointer() {
+        let (model, recorder) = makeSettingsModel()
+        model.focus(rowID: "system")
+        model.open(.system)
+        model.activateParentColumn()
+        #expect(model.page == .root)
+        model.doubleClickInterval = { 0 }
+        // The popped System page, still fading out.
+        model.activate(rowID: "exit", on: .system)
+        model.focus(rowID: "relaunch", on: .system)
+        #expect(recorder.exits == 0)
+        #expect(model.page == .root)
+        #expect(model.focusedRowID == "system")
+        // The current page's rows do react.
+        model.focus(rowID: "liveTV", on: .root)
+        #expect(model.focusedRowID == "liveTV")
+        model.activate(rowID: "liveTV", on: .root)
+        #expect(model.page == .liveTV)
+    }
+}
+
 struct SettingsWebAppStartPageTests {
     static let meet = LaunchItem(id: "app.meet", title: "Google Meet",
                                  kind: .application(bundleID: "com.brave.Browser.app.kjgfgldnnfoeklkmfkjfagphfepbbdan"))

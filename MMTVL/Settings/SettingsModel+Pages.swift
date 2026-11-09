@@ -2,7 +2,14 @@ import Foundation
 
 /// Builds the sections and rows for each Settings page.
 extension SettingsModel {
-    var sections: [SettingsSection] {
+    /// The top page's sections.
+    var sections: [SettingsSection] { sections(for: page) }
+
+    /// The top page's title.
+    var pageTitle: String { title(for: page) }
+
+    /// Pure: builders only read model state, so this is safe for pages that aren't on top (M7g).
+    func sections(for page: SettingsPage) -> [SettingsSection] {
         switch page {
         case .root: rootSections
         case .homeScreen: homeScreenSections
@@ -32,10 +39,15 @@ extension SettingsModel {
         case .plexServers: plexServersSections
         case .confirmPlexSignOut: confirmPlexSignOutSections
         case .casting: castingSections
+        case .youtube: youtubeSections
+        case .remoteInput: remoteInputSections
+        case .restrictions: restrictionsSections
+        case .system: systemSections
+        case .about: aboutSections
         }
     }
 
-    var pageTitle: String {
+    func title(for page: SettingsPage) -> String {
         switch page {
         case .root: "Settings"
         case .homeScreen: "Home Screen"
@@ -65,68 +77,126 @@ extension SettingsModel {
         case .plexServers: "Plex Server"
         case .confirmPlexSignOut: "Sign Out of Plex?"
         case .casting: "Casting"
+        case .youtube: "YouTube"
+        case .remoteInput: "Remote & Input"
+        case .restrictions: "Restrictions"
+        case .system: "System"
+        case .about: "About"
         }
     }
 
-    var pageImage: RowImage {
+    /// M7g L2: the working visual that replaces the parent column; nil for every other page.
+    func accessory(for page: SettingsPage) -> RowImage? {
         switch page {
-        case .root: .symbol("gearshape")
-        case .homeScreen: .symbol("square.grid.2x2")
-        case .tile(let id): item(id: id).map(RowImage.item) ?? .symbol("app.dashed")
-        case .addTile: .symbol("plus.app")
-        case .confirmRestoreDefaults: .symbol("arrow.counterclockwise")
-        case .confirmClearYouTube: .symbol("play.rectangle")
-        case .liveTV: .symbol("tv")
-        case .confirmRemoveIPTV: .symbol("tv.slash")
-        case .guideSource: .symbol("list.bullet.rectangle")
-        case .iptvGroups: .symbol("folder")
-        case .iptvHiddenChannels: .symbol("eye.slash")
-        case .iptvTeams, .iptvLeague: .symbol("sportscourt")
-        case .phoneRemote: .symbol("iphone")
         case .pairPhone: phoneRemote.pairingURL.map(RowImage.qrCode) ?? .symbol("iphone")
-        case .confirmForgetPhones: .symbol("iphone.slash")
-        case .remoteButtons, .remoteCommand, .remoteBinding, .confirmLearn: .symbol("appletvremote.gen4")
-        case .learnButton: .symbol("hand.point.up.left")
-        case .confirmRestoreButtons: .symbol("arrow.counterclockwise")
-        case .plex, .plexServers: .symbol("play.square.stack")
         case .plexLink: plex.linkURL.map(RowImage.qrCode) ?? .symbol("play.square.stack")
-        case .confirmPlexSignOut: .symbol("rectangle.portrait.and.arrow.right")
         case .tileArt(let id): .tileArt(itemID: id, tileArtPreviewChoice)
-        case .casting: .symbol("airplay.video")
+        case .tile(let id): .tileArt(itemID: id, .current)
+        case .learnButton: .symbol("hand.point.up.left")
+        default: nil
         }
     }
 
-    var hint: String {
-        switch page {
-        case .root, .tile, .liveTV, .phoneRemote, .guideSource, .iptvGroups, .iptvHiddenChannels, .iptvTeams, .iptvLeague,
-             .remoteButtons, .remoteCommand, .remoteBinding, .plex, .plexServers, .tileArt, .casting:
-            "Select: choose · Back: return"
-        case .plexLink: "Back: cancel"
-        case .learnButton: "Waiting for a button…"
-        case .pairPhone: "Back: done"
-        case .homeScreen:
-            movingTileID == nil ? "Select: edit tile · Back: return" : "Up/Down: move · Select or Back: done"
-        case .addTile: "Select: add · Back: return"
-        case .confirmRestoreDefaults, .confirmClearYouTube, .confirmRemoveIPTV, .confirmForgetPhones,
-             .confirmLearn, .confirmRestoreButtons, .confirmPlexSignOut:
-            "Select: choose · Back: cancel"
-        }
+    /// M7g L3: the description band: the mode hint, else the focused row's description, else nothing.
+    var bandText: String? {
+        if movingTileID != nil { return "Up/Down: move · Select or Back: done" }
+        if case .learnButton = page { return "Waiting for a button…" }
+        return focusedRowID.flatMap { row(id: $0)?.description }
     }
 
     private static func onOff(_ value: Bool) -> String { value ? "On" : "Off" }
 
     private static let kioskOnly = "Applies in kiosk mode only"
 
+    /// M7g L6: categories only; each opens its page.
     private var rootSections: [SettingsSection] {
-        let kiosk = environment.isKiosk
+        [
+            SettingsSection(id: "categories", rows: [
+                SettingsRow(id: "homeScreen", title: "Home Screen", showsDisclosure: true, action: .push(.homeScreen),
+                            description: "Arrange, hide and add tiles, and choose each tile's art and the tile MMTVL opens on."),
+                SettingsRow(id: "liveTV", title: "Live TV",
+                            value: iptv.hasPlaylist ? Self.channelCount(iptv.channelCount) : "Not Set Up",
+                            showsDisclosure: true, action: .push(.liveTV),
+                            description: "The playlist and guides, channel groups, hidden channels, teams and the Home screen preview."),
+                SettingsRow(id: "plex", title: "Plex", value: plex.isSignedIn ? "Signed In" : "Not Signed In",
+                            showsDisclosure: true, action: .push(.plex),
+                            description: "Continue Watching from your Plex server on the Home screen."),
+                SettingsRow(id: "youtube", title: "YouTube", showsDisclosure: true, action: .push(.youtube),
+                            description: "Reload YouTube, or sign every account out of it."),
+                SettingsRow(id: "casting", title: "Casting", showsDisclosure: true, action: .push(.casting),
+                            description: "Casting from the YouTube app, AirPlay from iPhones, Android mirroring through Reflector, and Plex HTPC."),
+                SettingsRow(id: "remoteInput", title: "Remote & Input", showsDisclosure: true,
+                            action: .push(.remoteInput),
+                            description: "Remote buttons, game controllers, the pointer and the phone remote."),
+                SettingsRow(id: "restrictions", title: "Restrictions", value: hasPIN ? "PIN On" : "PIN Off",
+                            showsDisclosure: true, action: .push(.restrictions),
+                            description: "The PIN, and keeping other apps from taking over the TV."),
+                SettingsRow(id: "system", title: "System", showsDisclosure: true, action: .push(.system),
+                            description: "Accessibility access, starting at login, relaunching MMTVL and leaving to the desktop."),
+                SettingsRow(id: "about", title: "About", value: environment.version.version, showsDisclosure: true,
+                            action: .push(.about), description: "The version and build of MMTVL."),
+            ]),
+        ]
+    }
 
+    private var remoteInputSections: [SettingsSection] {
         var globalInputDetail: String?
-        if !kiosk {
+        if !environment.isKiosk {
             globalInputDetail = Self.kioskOnly
         } else if settings.globalInputEnabled && !isAccessibilityTrusted {
             globalInputDetail = "Needs Accessibility access"
         }
+        return [
+            SettingsSection(id: "input", rows: [
+                SettingsRow(id: "globalInput", title: "Global Home & Media Keys",
+                            value: Self.onOff(settings.globalInputEnabled), detail: globalInputDetail,
+                            action: .toggle(.globalInputEnabled),
+                            description: "Home and the media keys also work while another app is in front. Needs Accessibility access."),
+                SettingsRow(id: "controllers", title: "Game Controllers",
+                            value: Self.onOff(settings.controllersEnabled), action: .toggle(.controllersEnabled),
+                            description: "Use game controllers as remotes. The Siri Remote's TV button works through this too."),
+                SettingsRow(id: "remoteButtons", title: "Remote Buttons", showsDisclosure: true,
+                            action: .push(.remoteButtons),
+                            description: "See which buttons do what, and teach MMTVL the buttons of a new remote."),
+                SettingsRow(id: "channelUp", title: "Channel Up",
+                            value: settings.channelUpMovesUpList ? "Up the List" : "Higher Number",
+                            action: .toggle(.channelUpMovesUpList),
+                            description: "Changes channel in Live TV. Up the List moves up the list like the Up arrow; Higher Number goes to the next number."),
+                SettingsRow(id: "cursorAutoHide", title: "Hide Pointer During Remote Use",
+                            value: Self.onOff(settings.cursorAutoHide), action: .toggle(.cursorAutoHide),
+                            description: "Hides the pointer while you use the remote. It comes back when the mouse moves."),
+                SettingsRow(id: "phoneRemote", title: "Phone Remote", value: Self.onOff(settings.phoneRemoteEnabled),
+                            showsDisclosure: true, action: .push(.phoneRemote),
+                            description: "Control MMTVL and other apps from a phone's browser, with typing and a trackpad."),
+            ]),
+        ]
+    }
 
+    private var youtubeSections: [SettingsSection] {
+        [
+            SettingsSection(id: "youtube", rows: [
+                SettingsRow(id: "youtube.reload", title: "Reload YouTube", action: .reloadYouTube,
+                            description: "Reloads the YouTube page. Try this if YouTube stops responding."),
+                SettingsRow(id: "youtube.clear", title: "Sign Out & Clear YouTube Data", showsDisclosure: true,
+                            action: .push(.confirmClearYouTube),
+                            description: "Signs every account out of YouTube on this Mac and deletes its watch data."),
+            ], footer: "To keep kids in their own profile, set a Parent code in YouTube → Settings → Parent code."),
+        ]
+    }
+
+    private var restrictionsSections: [SettingsSection] {
+        [
+            pinSection,
+            SettingsSection(id: "otherApps", title: "Other Apps", rows: [
+                SettingsRow(id: "kioskLock", title: "Keep Other Apps Out", value: Self.onOff(settings.kioskLock),
+                            action: .toggle(.kioskLock),
+                            description: "⌘Tab, Force Quit and other apps can't take over the TV, and ⌘Q asks for the PIN when one is set. Exit to Desktop is the way out."),
+            ]),
+        ]
+    }
+
+    private var systemSections: [SettingsSection] {
+        let kiosk = environment.isKiosk
         var launchAtLoginDetail: String?
         if !kiosk {
             launchAtLoginDetail = Self.kioskOnly
@@ -136,72 +206,41 @@ extension SettingsModel {
 
         var startupRows = [
             SettingsRow(id: "launchAtLogin", title: "Launch at Login", value: Self.onOff(settings.launchAtLogin),
-                        detail: launchAtLoginDetail, action: .toggle(.launchAtLogin)),
+                        detail: launchAtLoginDetail, action: .toggle(.launchAtLogin),
+                        description: "Opens MMTVL when this Mac starts up."),
         ]
         if kiosk && settings.launchAtLogin && loginItemStatus == .requiresApproval {
             startupRows.append(SettingsRow(id: "approveLoginItem", title: "Open Login Items Settings",
-                                           action: .openLoginItemsSettings))
+                                           action: .openLoginItemsSettings,
+                                           description: "macOS asks you to allow MMTVL in System Settings → General → Login Items."))
         }
 
         return [
-            SettingsSection(id: "input", title: "Remote & Input", rows: [
-                SettingsRow(id: "globalInput", title: "Global Home & Media Keys",
-                            value: Self.onOff(settings.globalInputEnabled), detail: globalInputDetail,
-                            action: .toggle(.globalInputEnabled)),
-                SettingsRow(id: "controllers", title: "Game Controllers",
-                            value: Self.onOff(settings.controllersEnabled), action: .toggle(.controllersEnabled)),
-                SettingsRow(id: "remoteButtons", title: "Remote Buttons", showsDisclosure: true,
-                            action: .push(.remoteButtons)),
-                SettingsRow(id: "channelUp", title: "Channel Up",
-                            value: settings.channelUpMovesUpList ? "Up the List" : "Higher Number",
-                            detail: "Changes channel in Live TV", action: .toggle(.channelUpMovesUpList)),
-                SettingsRow(id: "cursorAutoHide", title: "Hide Pointer During Remote Use",
-                            value: Self.onOff(settings.cursorAutoHide), action: .toggle(.cursorAutoHide)),
-                SettingsRow(id: "phoneRemote", title: "Phone Remote", value: Self.onOff(settings.phoneRemoteEnabled),
-                            showsDisclosure: true, action: .push(.phoneRemote)),
-            ]),
             SettingsSection(id: "permissions", title: "Permissions", rows: [
                 SettingsRow(id: "accessibility", title: "Accessibility",
                             value: isAccessibilityTrusted ? "Allowed" : "Not Allowed",
-                            detail: "Needed for Home in other apps, media keys and full-screen apps",
-                            action: .requestAccessibility),
+                            action: .requestAccessibility,
+                            description: "Needed for Home in other apps, the media keys, full-screen apps and the phone remote in other apps."),
             ]),
             SettingsSection(id: "startup", title: "Startup", rows: startupRows),
-            SettingsSection(id: "home", title: "Home Screen", rows: [
-                SettingsRow(id: "editHome", title: "Edit Home Screen", showsDisclosure: true,
-                            action: .push(.homeScreen)),
+            SettingsSection(id: "mmtvl", title: "MMTVL", rows: [
+                SettingsRow(id: "relaunch", title: "Relaunch MMTVL", action: .relaunch,
+                            description: "Quits and reopens MMTVL. Picks up changes made by hand to its settings files."),
+                SettingsRow(id: "exit", title: "Exit to Desktop", action: .exitToDesktop,
+                            description: "Leaves MMTVL for the macOS desktop. Home brings MMTVL back."),
             ]),
-            pinSection,
-            SettingsSection(id: "youtube", title: "YouTube", rows: [
-                SettingsRow(id: "youtube.reload", title: "Reload YouTube", action: .reloadYouTube),
-                SettingsRow(id: "youtube.clear", title: "Sign Out & Clear YouTube Data", showsDisclosure: true,
-                            action: .push(.confirmClearYouTube)),
-            ], footer: "To keep kids in their own profile, set a Parent code in YouTube → Settings → Parent code."),
-            SettingsSection(id: "casting", title: "Casting", rows: [
-                SettingsRow(id: "casting", title: "Casting", showsDisclosure: true, action: .push(.casting)),
-            ]),
-            SettingsSection(id: "plex", title: "Plex", rows: [
-                SettingsRow(id: "plex", title: "Plex", value: plex.isSignedIn ? "Signed In" : "Not Signed In",
-                            showsDisclosure: true, action: .push(.plex)),
-            ]),
-            SettingsSection(id: "liveTV", title: "Live TV", rows: [
-                SettingsRow(id: "liveTV", title: "Live TV",
-                            value: iptv.hasPlaylist ? Self.channelCount(iptv.channelCount) : "Not Set Up",
-                            showsDisclosure: true, action: .push(.liveTV)),
-            ]),
-            SettingsSection(id: "system", title: "System", rows: [
-                SettingsRow(id: "relaunch", title: "Relaunch MMTVL", action: .relaunch),
-                SettingsRow(id: "kioskLock", title: "Keep Other Apps Out", value: Self.onOff(settings.kioskLock),
-                            detail: "⌘Tab, ⌘Q and the Dock can't leave MMTVL", action: .toggle(.kioskLock)),
-                SettingsRow(id: "exit", title: "Exit to Desktop", action: .exitToDesktop),
-            ]),
-            // M7c L28.
-            SettingsSection(id: "about", title: "About", rows: [
+        ]
+    }
+
+    /// M7c L28.
+    private var aboutSections: [SettingsSection] {
+        [
+            SettingsSection(id: "about", rows: [
                 SettingsRow(id: "about.version", title: "Version", value: environment.version.version),
                 SettingsRow(id: "about.build", title: "Build", value: environment.version.build),
                 SettingsRow(id: "about.showOnHome", title: "Show Version on Home",
-                            value: Self.onOff(settings.showVersionOnHome), detail: "Under the clock, for testing builds",
-                            action: .toggle(.showVersionOnHome)),
+                            value: Self.onOff(settings.showVersionOnHome), action: .toggle(.showVersionOnHome),
+                            description: "Shows the version and build under the clock, for testing builds."),
             ], footer: "Settings are saved in ~/Library/Application Support/MMTVL"),
         ]
     }
@@ -210,16 +249,16 @@ extension SettingsModel {
     private var pinSection: SettingsSection {
         let rows = hasPIN
             ? [
-                SettingsRow(id: "pin.change", title: "Change PIN", action: .startPIN(.change)),
-                SettingsRow(id: "pin.off", title: "Turn Off PIN", action: .startPIN(.turnOff)),
+                SettingsRow(id: "pin.change", title: "Change PIN", action: .startPIN(.change),
+                            description: "Choose a new PIN. You'll enter the current one first."),
+                SettingsRow(id: "pin.off", title: "Turn Off PIN", action: .startPIN(.turnOff),
+                            description: "Removes the PIN. Settings, Exit to Desktop and protected tiles open without it."),
             ]
             : [
-                SettingsRow(id: "pin.set", title: "Set PIN",
-                            detail: "Guards Settings, Exit to Desktop and tiles set to Require PIN",
-                            action: .startPIN(.setNew)),
+                SettingsRow(id: "pin.set", title: "Set PIN", action: .startPIN(.setNew),
+                            description: "A 4-digit PIN that guards Settings, Exit to Desktop and tiles set to Require PIN."),
             ]
-        return SettingsSection(id: "pin", title: "PIN", rows: rows,
-                               footer: hasPIN ? "The PIN guards Settings, Exit to Desktop and tiles set to Require PIN." : nil)
+        return SettingsSection(id: "pin", title: "PIN", rows: rows)
     }
 
     private var homeScreenSections: [SettingsSection] {
@@ -241,7 +280,7 @@ extension SettingsModel {
         }
         return [
             SettingsSection(id: "tiles", title: "Tiles", rows: tileRows,
-                            footer: "Hidden tiles stay here but don't show on the Home screen. MMTVL opens on the start tile, and Home returns to it; to change it, select a tile, then Start Here."),
+                            footer: "Hidden tiles stay here but don't show on the Home screen."),
             SettingsSection(id: "manage", rows: [
                 SettingsRow(id: "addTile", title: "Add Tile", showsDisclosure: true, action: .push(.addTile)),
                 SettingsRow(id: "restoreDefaults", title: "Restore Default Tiles", showsDisclosure: true,
@@ -256,18 +295,18 @@ extension SettingsModel {
             return [SettingsSection(id: "options", rows: [
                 startHereRow(item),
                 tileArtRow(id: id),
-                SettingsRow(id: "tile.move", title: "Move", action: .startMove(id: id)),
+                tileMoveRow(id: id),
             ], footer: "Settings is always on the Home screen and asks for the PIN when one is set.")]
         }
         var rows = [
             SettingsRow(id: "tile.visible", title: "Show on Home Screen", value: Self.onOff(item.isVisible),
-                        action: .toggleTileVisible(id: id)),
+                        action: .toggleTileVisible(id: id), description: "Show this tile on the Home screen."),
         ]
         if item.supportsFullScreen {
             rows.append(SettingsRow(id: "tile.fullScreen", title: "Open Full Screen",
                                     value: Self.onOff(item.wantsFullScreen),
                                     detail: isAccessibilityTrusted ? nil : "Needs Accessibility access",
-                                    action: .toggleTileFullScreen(id: id)))
+                                    action: .toggleTileFullScreen(id: id), description: "Open the app full screen."))
         }
         if environment.webAppInfo(item) != nil {
             rows.append(contentsOf: startURLRows(item))
@@ -276,17 +315,16 @@ extension SettingsModel {
             rows.append(SettingsRow(id: "tile.requiresPIN", title: "Require PIN",
                                     value: Self.onOff(item.requiresPIN == true),
                                     detail: hasPIN ? nil : "Set a PIN in Settings first",
-                                    action: .toggleTileRequiresPIN(id: id)))
+                                    action: .toggleTileRequiresPIN(id: id),
+                                    description: "Ask for the PIN before opening."))
         }
         if !item.isExitToDesktop {
             rows.append(startHereRow(item))
         }
-        let isDefault = LaunchItem.defaults.contains { $0.id == id }
         rows.append(tileArtRow(id: id))
-        rows.append(SettingsRow(id: "tile.move", title: "Move", action: .startMove(id: id)))
-        rows.append(SettingsRow(id: "tile.remove", title: "Remove from Home Screen",
-                                detail: isDefault ? "You can add it back from Add Tile" : nil,
-                                action: .removeTile(id: id)))
+        rows.append(tileMoveRow(id: id))
+        rows.append(SettingsRow(id: "tile.remove", title: "Remove from Home Screen", action: .removeTile(id: id),
+                                description: "Removes the tile. Built-in tiles can be added back from Add Tile."))
         let footer = item.isExitToDesktop ? "Exit to Desktop always asks for the PIN when one is set." : nil
         return [SettingsSection(id: "options", rows: rows, footer: footer)]
     }
@@ -300,10 +338,15 @@ extension SettingsModel {
     /// M7c L32.
     private func startHereRow(_ item: LaunchItem) -> SettingsRow {
         let isStart = item.id == startTileID
-        var detail = "MMTVL opens on this tile, and Home returns to it"
-        if !item.isVisible { detail = "Show it on the Home screen first" }
-        return SettingsRow(id: "tile.start", title: "Start Here", value: isStart ? "On" : "Off", detail: detail,
-                           action: .setStartTile(id: item.id))
+        return SettingsRow(id: "tile.start", title: "Start Here", value: isStart ? "On" : "Off",
+                           detail: item.isVisible ? nil : "Show it on the Home screen first",
+                           action: .setStartTile(id: item.id),
+                           description: "MMTVL opens on this tile, and Home returns to it.")
+    }
+
+    private func tileMoveRow(id: String) -> SettingsRow {
+        SettingsRow(id: "tile.move", title: "Move", action: .startMove(id: id),
+                    description: "Move the tile with Up and Down.")
     }
 
     /// M7 L23: web app tiles only.
@@ -331,7 +374,8 @@ extension SettingsModel {
         let value = environment.tileArtFileName(id)
             ?? (item(id: id)?.tileArtStyle == .icon ? "App Icon" : "Designed")
         return SettingsRow(id: "tile.art", title: "Tile Art", value: value, showsDisclosure: true,
-                           action: .push(.tileArt(id: id)))
+                           action: .push(.tileArt(id: id)),
+                           description: "Designed art, the app icon, or your own picture.")
     }
 
     /// L25: the style for apps; only designed art for built-ins and web addresses.
@@ -434,11 +478,12 @@ extension SettingsModel {
         sections.append(channelsSection)
         sections.append(SettingsSection(id: "homePreview", rows: [
             SettingsRow(id: "iptv.homePreview", title: "Preview on Home", value: Self.onOff(settings.homeLivePreview),
-                        detail: "Loads the channel, muted, while the home screen shows; you see it when Live TV is focused",
-                        action: .toggle(.homeLivePreview)),
+                        action: .toggle(.homeLivePreview),
+                        description: "Loads the channel, muted, while the Home screen shows; you see it when Live TV is focused."),
         ]))
         sections.append(SettingsSection(id: "manage", rows: [
-            SettingsRow(id: "iptv.refresh", title: "Refresh Now", action: .refreshIPTV),
+            SettingsRow(id: "iptv.refresh", title: "Refresh Now", action: .refreshIPTV,
+                        description: "Downloads the playlist and the guides again now."),
             SettingsRow(id: "iptv.remove", title: "Remove Live TV Source", showsDisclosure: true,
                         action: .push(.confirmRemoveIPTV)),
         ], footer: "Addresses are kept in the Keychain. The first paste may ask for permission; choose Allow."))
@@ -460,8 +505,8 @@ extension SettingsModel {
         if iptv.playlistNamesGuide && iptv.customGuideCount > 0 {
             rows.append(SettingsRow(id: "iptv.guideSource", title: "Guide Source",
                                     value: settings.usePlaylistGuide ? "Playlist" : "Pasted Guides",
-                                    detail: "Your pasted guides are kept while the playlist's is used",
-                                    action: .toggle(.usePlaylistGuide)))
+                                    action: .toggle(.usePlaylistGuide),
+                                    description: "Use the guide the playlist names, or your pasted guides. Your pasted guides are kept either way."))
         }
         rows += iptv.guideSources.enumerated().map { index, source in
             SettingsRow(id: "iptv.guide.\(source.id)", title: source.label,
@@ -487,13 +532,14 @@ extension SettingsModel {
         let hiddenGroups = iptv.groups.filter(\.isHidden).count
         return SettingsSection(id: "channels", title: "Channels", rows: [
             SettingsRow(id: "iptv.groups", title: "Groups", value: hiddenGroups == 0 ? "All Shown" : "\(hiddenGroups) Hidden",
-                        showsDisclosure: true, action: .push(.iptvGroups)),
+                        showsDisclosure: true, action: .push(.iptvGroups), description: "Which playlist groups show."),
             SettingsRow(id: "iptv.hiddenChannels", title: "Hidden Channels",
                         value: iptv.hiddenChannels.isEmpty ? "None" : "\(iptv.hiddenChannels.count)",
-                        showsDisclosure: true, action: .push(.iptvHiddenChannels)),
+                        showsDisclosure: true, action: .push(.iptvHiddenChannels),
+                        description: "Channels hidden from the guide."),
             SettingsRow(id: "iptv.teams", title: "Teams", value: Self.teamCountLabel(iptv.teams.count),
-                        detail: "Live games and channels of your teams, in the guide's Teams group",
-                        showsDisclosure: true, action: .push(.iptvTeams)),
+                        showsDisclosure: true, action: .push(.iptvTeams),
+                        description: "Your teams' live games, in the guide's Teams group."),
         ], footer: "To favorite, hide or match one channel: in the guide, press Left on the programme airing now, then Select.")
     }
 
@@ -525,7 +571,7 @@ extension SettingsModel {
                                showsDisclosure: true, action: .push(.iptvLeague(league)))
         }
         return [SettingsSection(id: "leagues", rows: rows,
-                                footer: "The guide's Teams group shows your teams' live games (both feeds, your team's first) and channels showing them now. You can also add a team from a game: in the guide, press Left on the programme airing now, then Select.")]
+                                footer: "The guide's Teams group shows your teams' live games and the channels showing them now.")]
     }
 
     private func iptvLeagueSections(_ league: TeamLeague) -> [SettingsSection] {
@@ -577,7 +623,8 @@ extension SettingsModel {
     private var phoneRemoteSections: [SettingsSection] {
         var serverRows = [
             SettingsRow(id: "phone.enabled", title: "Phone Remote", value: Self.onOff(settings.phoneRemoteEnabled),
-                        detail: phoneRemote.problem, action: .toggle(.phoneRemoteEnabled)),
+                        detail: phoneRemote.problem, action: .toggle(.phoneRemoteEnabled),
+                        description: "Serves the phone remote's page on this Mac's network address."),
         ]
         if settings.phoneRemoteEnabled {
             serverRows.append(SettingsRow(id: "phone.address", title: "Address",
@@ -604,8 +651,8 @@ extension SettingsModel {
             SettingsSection(id: "phone.access", title: "Typing & Other Apps", rows: [
                 SettingsRow(id: "phone.accessibility", title: "Accessibility",
                             value: phoneRemote.canControlOtherApps ? "Allowed" : "Not Allowed",
-                            detail: "Needed to type from the phone and to control Plex, Prime Video and the browser",
-                            action: .requestAccessibility),
+                            action: .requestAccessibility,
+                            description: "Needed to type from the phone and to control Plex, Prime Video and the browser."),
             ], footer: "Volume buttons use SoundSource when it's running, else the Mac's volume when the output allows it, else MMTVL's own volume."),
         ]
     }
@@ -705,7 +752,8 @@ extension SettingsModel {
             let isGlobal = bindings.binding(matching: trigger)?.isGlobal == true
             rows.append(SettingsRow(id: "binding.global", title: "Works in Other Apps", value: Self.onOff(isGlobal),
                                     detail: isAccessibilityTrusted ? nil : "Needs Accessibility access",
-                                    action: .toggleBindingGlobal(trigger)))
+                                    action: .toggleBindingGlobal(trigger),
+                                    description: "This button also brings MMTVL back while another app is in front. Needs Accessibility access."))
         }
         if bindings.canRemove(trigger) {
             rows.append(SettingsRow(id: "binding.remove", title: "Remove Button", action: .removeBinding(trigger)))
@@ -749,9 +797,9 @@ extension SettingsModel {
     private var plexSections: [SettingsSection] {
         guard plex.isSignedIn else {
             return [SettingsSection(id: "plex", rows: [
-                SettingsRow(id: "plex.signIn", title: "Sign In", detail: "Shows Continue Watching on the Home screen",
-                            showsDisclosure: true, action: .push(.plexLink)),
-            ], footer: "Signing in uses a code at plex.tv/link; no password is typed here.")]
+                SettingsRow(id: "plex.signIn", title: "Sign In", showsDisclosure: true, action: .push(.plexLink),
+                            description: "Shows Continue Watching on the Home screen. Uses a code at plex.tv/link; no password is typed here."),
+            ])]
         }
         let canChoose = plex.servers.count > 1
         return [SettingsSection(id: "plex", rows: [
@@ -820,7 +868,8 @@ extension SettingsModel {
         if casting.reflector != .notInstalled {
             androidRows.append(SettingsRow(id: "cast.android.autostart", title: "Start Reflector with MMTVL",
                                            value: Self.onOff(settings.reflectorAutoStart),
-                                           action: .toggle(.reflectorAutoStart)))
+                                           action: .toggle(.reflectorAutoStart),
+                                           description: "Keeps Reflector running hidden, so Android phones can mirror at any time."))
         }
         let plexValue = switch casting.plexHTPC {
         case .running: "Running"
@@ -832,17 +881,19 @@ extension SettingsModel {
                 SettingsRow(id: "cast.youtube.enabled", title: "Cast from the YouTube App",
                             value: Self.onOff(settings.youtubeCastEnabled),
                             detail: settings.youtubeCastEnabled ? youtubeDetail : nil,
-                            action: .toggle(.youtubeCastEnabled)),
-            ], footer: "In the YouTube app on a phone, tap Cast and choose MMTVL. A cast switches the TV to YouTube. YouTube → Settings → Link with TV Code also works."),
+                            action: .toggle(.youtubeCastEnabled),
+                            description: "Phones on this network list MMTVL in the YouTube app's Cast menu."),
+            ], footer: "In the YouTube app on a phone, tap Cast and choose MMTVL, or use Link with TV Code in YouTube's settings."),
             SettingsSection(id: "cast.airplay", title: "AirPlay", rows: [
                 SettingsRow(id: "cast.airplay.receiver", title: "AirPlay Receiver", value: airPlayValue,
-                            detail: "Opens AirDrop & Handoff in System Settings", action: .openAirPlaySettings),
-            ], footer: "Turn on AirPlay Receiver and set Allow AirPlay for to \"Anyone on the Same Network\", or \"Current User\" if every phone uses your Apple Account. iPhones then list this Mac under Screen Mirroring and in AirPlay menus."),
+                            action: .openAirPlaySettings,
+                            description: "Opens AirDrop & Handoff in System Settings, where AirPlay Receiver is turned on."),
+            ], footer: "Turn on AirPlay Receiver and allow AirPlay for \"Anyone on the Same Network\" so iPhones list this Mac under Screen Mirroring."),
             SettingsSection(id: "cast.android", title: "Android", rows: androidRows,
-                            footer: "On an Android phone: Quick Settings → Cast → MMTVL Screen Mirroring. For YouTube, use Cast in the YouTube app and pick MMTVL instead. Home on the remote ends mirroring. In Reflector's Preferences: turn AirPlay off and Google Cast on, Always on Top off, Display Fullscreen on, Show Client Name off, no connection prompt, and name it MMTVL Screen Mirroring."),
+                            footer: "On an Android phone, open Quick Settings → Cast and choose MMTVL Screen Mirroring; Home on the remote ends it."),
             SettingsSection(id: "cast.plex", title: "Plex", rows: [
                 SettingsRow(id: "cast.plex.htpc", title: "Plex HTPC", value: plexValue),
-            ], footer: "Phones cast to Plex HTPC while it runs, signed in to your Plex account: in the Plex app, tap Cast and choose Plex HTPC. Home leaves it running; after a restart, open it once."),
+            ], footer: "In the Plex app on a phone, tap Cast and choose Plex HTPC; it must be running, so open it once after a restart."),
         ]
     }
 }

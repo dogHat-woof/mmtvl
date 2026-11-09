@@ -13,7 +13,7 @@ Every way of casting to the TV is confirmed on the Mac mini with real phones. A 
 
 ## Out of scope
 
-- The Siri Remote driver spike (M7c step 19) and Q21: [M7e](M7e-siri-remote-spike.md).
+- The Siri Remote driver spike (M7c step 19) and Q21: [M7e](archive/M7e-siri-remote-spike.md).
 - AirPlay to macOS's receiver playing over Live TV's sound (M7b *Risks*): macOS gives no session signal. This would need a later milestone.
 - New casting features. If a check fails and the fix isn't small, record it under *Deviations & questions* and ask.
 

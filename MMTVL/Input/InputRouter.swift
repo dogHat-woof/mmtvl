@@ -9,7 +9,8 @@ final class InputRouter {
     private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "InputRouter")
 
     /// The active screen. Returns `true` if the command was handled; only then is the event swallowed.
-    @ObservationIgnored var handler: ((RemoteCommand) -> Bool)?
+    /// The flag is true for a held key's or button's auto-repeat (M7g: Settings ignores repeated Left/Right).
+    @ObservationIgnored var handler: ((_ command: RemoteCommand, _ isRepeat: Bool) -> Bool)?
     /// A global binding fired while another app is frontmost.
     @ObservationIgnored var onGlobalCommand: ((RemoteCommand) -> Void)?
     /// Called for every command dispatched while the launcher is active (cursor auto-hide).
@@ -68,12 +69,13 @@ final class InputRouter {
         return true
     }
 
-    /// The single entry point for every input source. Returns true if consumed.
+    /// The single entry point for every input source. Returns true if consumed. `isRepeat`: a held key's or
+    /// controller button's auto-repeat (sources without repeats, like the phone, leave it false).
     @discardableResult
-    func dispatch(_ command: RemoteCommand, isGlobal: Bool) -> Bool {
+    func dispatch(_ command: RemoteCommand, isGlobal: Bool, isRepeat: Bool = false) -> Bool {
         if NSApp.isActive {
             onCommandDispatched?()
-            return handler?(command) ?? false
+            return handler?(command, isRepeat) ?? false
         }
         if isGlobal {
             onGlobalCommand?(command)
@@ -99,7 +101,7 @@ final class InputRouter {
             return false
         }
         Self.logger.debug("Key \(event.keyCode) → \(binding.command.rawValue, privacy: .public)")
-        return dispatch(binding.command, isGlobal: binding.isGlobal)
+        return dispatch(binding.command, isGlobal: binding.isGlobal, isRepeat: event.isARepeat)
     }
 
     /// Bound media keys are always swallowed while MMTVL is frontmost (L5), so they don't start Music.

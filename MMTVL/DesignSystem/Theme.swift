@@ -242,20 +242,64 @@ enum Theme {
 
     // Literal sizes on purpose: the semantic macOS fonts are too small on the 1920-point TV canvas.
     static let settingsTitleFont = Font.system(size: 48, weight: .semibold)
-    static let settingsSectionFont = Font.system(size: 24, weight: .semibold)
+    /// M7g L4: uppercase section headers, as on tvOS 27.
+    static let settingsSectionFont = Font.system(size: 22, weight: .bold)
     static let settingsRowFont = Font.system(size: 30, weight: .medium)
+    /// The PIN screen, YouTube and the Live TV menu (Settings' own rows use `settingsRowDetailFont`).
     static let settingsDetailFont = Font.system(size: 22)
     static let settingsHintFont = Font.system(size: 22)
+    /// M7g: a Settings row's second line, its badges and chevron, and section footers.
+    static let settingsRowDetailFont = Font.system(size: 24)
 
-    static let settingsSideColumnWidth: CGFloat = 600
-    static let settingsListWidth: CGFloat = 1000
-    static let settingsColumnSpacing: CGFloat = 80
-    static let settingsRowMinHeight: CGFloat = 80
-    static let settingsRowCornerRadius: CGFloat = 12
+    /// M7g L3: the focused row's description in the band at the bottom.
+    static let settingsDescriptionFont = Font.system(size: 28)
+
+    /// M7g L1: the sliding column track. Two columns and the gap fill the canvas between the side margins.
+    static let settingsColumnWidth: CGFloat = 840
+    static let settingsColumnGap: CGFloat = 80
+    static let settingsSideMargin: CGFloat = (canvasSize.width - 2 * settingsColumnWidth - settingsColumnGap) / 2
+    /// M7g L1: the track's offset at the root, so the root column is centered on the canvas with nothing beside it.
+    static let settingsRootColumnLeading: CGFloat = (canvasSize.width - settingsColumnWidth) / 2
+    /// M7g L3: the band's reserved height, so the columns never move.
+    static let settingsBandHeight: CGFloat = 104
+    static let settingsBandMaxWidth: CGFloat = 1400
+    /// M7g: the parent column (its opening row selected).
+    static let settingsDimmedColumnOpacity: Double = 0.55
+    /// M7g: the parent column's "you came from here" row.
+    static let settingsSelectedRowFill = Color.white.opacity(0.4)
+    /// M7g: under an action row's content, over its glass, so unfocused rows read as translucent gray, not black.
+    static let settingsRowCapsuleFill = Color.white.opacity(0.075)
+    /// M7g L4: info rows (no action) on a quiet fill instead of glass.
+    static let settingsInfoRowFill = Color.white.opacity(0.05)
+    /// M7g L2: a symbol accessory in the parent column (the learn prompt, or while a QR code loads).
+    static let settingsAccessorySymbolSize: CGFloat = 240
+    /// M7g L1: the track's slide when going deeper or back. Critically damped: it settles without overshoot.
+    static let settingsPageAnimation = Animation.spring(response: 0.4, dampingFraction: 1)
+    /// M7g: a column dimming or brightening when its role changes.
+    static let settingsFadeAnimation = Animation.easeInOut(duration: 0.25)
+    /// M7g step 7: replaced text and lists fade through (out quickly, then in), so the old and new never sit on
+    /// top of each other: the title, the band, a replaced or previewed page.
+    static let settingsFadeOutAnimation = Animation.easeOut(duration: 0.12)
+    static let settingsFadeInAnimation = Animation.easeOut(duration: 0.22).delay(0.06)
+    static let settingsFadeThrough = AnyTransition.asymmetric(
+        insertion: .opacity.animation(settingsFadeInAnimation),
+        removal: .opacity.animation(settingsFadeOutAnimation)
+    )
+    /// M7g step 7: a page leaving the screen with the slide (pushed off to the left, or popped off to the right)
+    /// fades over most of the slide instead of vanishing as it starts to move.
+    static let settingsLeaveFadeAnimation = Animation.easeIn(duration: 0.35)
+
+    static let settingsRowMinHeight: CGFloat = 72
+    /// M7g L4: rows with a second line; one-line rows are capsules.
+    static let settingsRowCornerRadius: CGFloat = 40
+    /// M7g: the list's top and bottom padding (room for the focused row's scale and shadow); the scrolled
+    /// list fades out over it at the top and bottom.
+    static let settingsListVerticalPadding: CGFloat = 32
+    /// M7g L4: the row text's distance from the capsule's edge; section headers and footers line up with it.
+    static let settingsRowTextInset: CGFloat = 32
     static let settingsRowSpacing: CGFloat = 8
     static let settingsSectionSpacing: CGFloat = 40
     static let settingsRowIconSize: CGFloat = 48
-    static let settingsPageImageSize: CGFloat = 280
     /// The phone pairing QR code (M5); fits the side column and reads from the couch.
     static let settingsQRCodeSize: CGFloat = 440
 
@@ -331,6 +375,7 @@ enum Theme {
     static let liveMenuWideWidth: CGFloat = 1040
     static let liveMenuTitleFont = Font.system(size: 34, weight: .semibold)
     static let liveMenuRowHeight: CGFloat = 72
+    static let liveMenuRowCornerRadius: CGFloat = 12
 
     // MARK: On-screen keyboard (M7f L11)
 

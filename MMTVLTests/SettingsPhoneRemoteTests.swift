@@ -8,12 +8,14 @@ struct SettingsPhoneRemoteTests {
 
     @Test func rootRowShowsOnOff() {
         let (model, _) = makeSettingsModel()
+        model.open(.remoteInput)
         #expect(model.row(id: "phoneRemote")?.value == "On")
         #expect(model.row(id: "phoneRemote")?.action == .push(.phoneRemote))
 
         var settings = AppSettings()
         settings.phoneRemoteEnabled = false
         let (off, _) = makeSettingsModel(settings: settings)
+        off.open(.remoteInput)
         #expect(off.row(id: "phoneRemote")?.value == "Off")
     }
 
@@ -83,14 +85,14 @@ struct SettingsPhoneRemoteTests {
         let (model, recorder) = makeSettingsModel()
         model.perform(.push(.phoneRemote))
         model.perform(.push(.pairPhone))
-        #expect(model.pageImage == .symbol("iphone"))
+        #expect(model.accessory(for: model.page) == .symbol("iphone"))
         #expect(model.row(id: "pair.code")?.value == "—")
 
         let url = "http://192.168.1.20:8765/#pair=1234"
         recorder.phoneRemote = PhoneRemoteSettingsStatus(isRunning: true, address: "http://192.168.1.20:8765",
                                                          pairingCode: "1234", pairingURL: url, lastPairedName: "iPhone")
         model.refreshStatus()
-        #expect(model.pageImage == .qrCode(url))
+        #expect(model.accessory(for: model.page) == .qrCode(url))
         #expect(model.row(id: "pair.code")?.value == "1234")
         #expect(model.row(id: "pair.done")?.title == "Paired \"iPhone\"")
         #expect(model.focusableRowIDs == ["pair.close"])

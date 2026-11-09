@@ -11,8 +11,8 @@ struct SettingsPlexTests {
         model.refreshStatus()
         #expect(model.row(id: "plex")?.value == "Signed In")
         let ids = model.focusableRowIDs
-        // M7b: Casting sits between YouTube and Plex.
-        #expect(ids.firstIndex(of: "plex") == ids.firstIndex(of: "casting")! + 1)
+        // M7g L6: Plex follows Live TV.
+        #expect(ids.firstIndex(of: "plex") == ids.firstIndex(of: "liveTV")! + 1)
     }
 
     @Test func signedOutPageOffersSignIn() {
@@ -50,7 +50,7 @@ struct SettingsPlexTests {
         recorder.plex.linkURL = PlexAPI.linkURL(code: "AB12")
         model.refreshStatus()
         #expect(model.row(id: "plexLink.code")?.value == "AB12")
-        #expect(model.pageImage == .qrCode("https://plex.tv/link/?pin=AB12"))
+        #expect(model.accessory(for: model.page) == .qrCode("https://plex.tv/link/?pin=AB12"))
         #expect(model.focusableRowIDs == ["plexLink.cancel"])
         model.press(.back)
         #expect(recorder.plexLinkingCalls == [true, false])

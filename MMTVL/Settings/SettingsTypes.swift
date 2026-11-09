@@ -15,6 +15,8 @@ nonisolated enum SettingsPage: Hashable, Sendable {
     case tileArt(id: String)
     /// M7b L14: Settings → Casting.
     case casting
+    /// M7g L6: root categories.
+    case youtube, remoteInput, restrictions, system, about
 }
 
 /// Which Live TV address a paste row fills (M4 L2).
@@ -260,6 +262,8 @@ nonisolated struct SettingsRow: Identifiable, Hashable, Sendable {
     var needsRelaunch = false
     /// nil = info row: shown, never focused.
     var action: SettingsAction? = nil
+    /// M7g L3, L8: the band's text when focused; an explanation, while `detail` holds status and messages.
+    var description: String? = nil
 }
 
 nonisolated struct SettingsSection: Identifiable, Hashable, Sendable {

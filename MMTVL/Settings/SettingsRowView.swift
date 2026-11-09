@@ -1,21 +1,84 @@
 import SwiftUI
 
-/// One Settings row. Focused (or lifted) rows turn white with dark text, as on tvOS.
+/// M7g L4: a row's capsule. One-line rows are full pills; rows with a second line are rounded rectangles
+/// (`Theme.settingsRowCornerRadius`), so the pill doesn't squeeze the text.
+nonisolated struct SettingsRowShape: InsettableShape {
+    /// Nil: a capsule.
+    var cornerRadius: CGFloat?
+    var insetAmount: CGFloat = 0
+
+    func path(in rect: CGRect) -> Path {
+        let rect = rect.insetBy(dx: insetAmount, dy: insetAmount)
+        let radius = cornerRadius.map { max(0, $0 - insetAmount) } ?? min(rect.width, rect.height) / 2
+        return RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: rect)
+    }
+
+    func inset(by amount: CGFloat) -> SettingsRowShape {
+        var shape = self
+        shape.insetAmount += amount
+        return shape
+    }
+}
+
+/// One Settings row (M7g L4), its own glass capsule. The focused (or lifted) row turns white with dark text, as on
+/// tvOS; with a highlight namespace (L5) the white fill slides between the column's rows instead of fading.
 struct SettingsRowView: View {
+    enum Style {
+        /// The current column's focused row.
+        case focused
+        /// The row in the parent column that opened the current page.
+        case selected
+        case normal
+    }
+
     let row: SettingsRow
-    let isFocused: Bool
+    let style: Style
+    /// L5: the column's namespace for the sliding highlight; nil with Reduce Motion (the fill crossfades per row).
+    var highlightNamespace: Namespace.ID? = nil
     let launcher: AppLauncher
     var tileArt: TileArtStore? = nil
     let onHover: () -> Void
     let onActivate: () -> Void
 
     /// Info rows never look focused.
-    private var isHighlighted: Bool { (isFocused || row.isLifted) && row.action != nil }
+    private var isHighlighted: Bool { (style == .focused || row.isLifted) && row.action != nil }
+    private var isMarkedSelected: Bool { style == .selected && !isHighlighted }
+    private var isInfo: Bool { row.action == nil }
     private var primary: Color { isHighlighted ? Theme.focusedRowText : Theme.primaryText }
     private var secondary: Color { isHighlighted ? Theme.focusedRowSecondaryText : Theme.secondaryText }
+    private var shape: SettingsRowShape {
+        SettingsRowShape(cornerRadius: row.detail == nil ? nil : Theme.settingsRowCornerRadius)
+    }
 
+    private var scale: CGFloat { isHighlighted ? Theme.settingsRowFocusScale : 1 }
+
+    /// The glass is never scaled (so it doesn't reach its neighbours); the fill over it and the content scale
+    /// each on their own. The white fill isn't under a per-row transform: `matchedGeometryEffect` misplaces it
+    /// inside one. The glass is the surface of the row's views, which keeps it behind them in the glass container.
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: Theme.settingsRowCornerRadius, style: .continuous)
+        ZStack {
+            fill
+            content
+                .scaleEffect(scale)
+        }
+        // Selected ↔ focused (a category open, Back onto the opening row) flips at once: crossfading the text from
+        // white to black over the gray-to-white fill left the capsule blank for a couple of frames. Normal ↔
+        // focused still animates, and so does the column's dimming.
+        .animation(nil, value: style == .selected)
+        .frame(maxWidth: .infinity, minHeight: Theme.settingsRowMinHeight)
+        .modifier(SettingsRowSurface(shape: shape, isInfo: isInfo))
+        .contentShape(shape)
+        .opacity(row.isDimmed && !isHighlighted ? Theme.unavailableOpacity : 1)
+        // No `zIndex` for the focused row: changing it makes the glass container rebuild the row's glass, which
+        // shrinks and regrows it.
+        .animation(Theme.focusAnimation, value: isHighlighted)
+        .onHover { hovering in
+            if hovering { onHover() }
+        }
+        .onTapGesture(perform: onActivate)
+    }
+
+    private var content: some View {
         HStack(spacing: 24) {
             if let image = row.image {
                 RowImageView(image: image, launcher: launcher, size: Theme.settingsRowIconSize, foreground: primary,
@@ -27,14 +90,14 @@ struct SettingsRowView: View {
                     .foregroundStyle(primary)
                 if let detail = row.detail {
                     Text(detail)
-                        .font(Theme.settingsDetailFont)
+                        .font(Theme.settingsRowDetailFont)
                         .foregroundStyle(secondary)
                 }
             }
             Spacer(minLength: 16)
             if row.needsRelaunch {
                 Text("Relaunch needed")
-                    .font(Theme.settingsDetailFont)
+                    .font(Theme.settingsRowDetailFont)
                     .foregroundStyle(secondary)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 4)
@@ -52,31 +115,52 @@ struct SettingsRowView: View {
             }
             if row.showsDisclosure {
                 Image(systemName: "chevron.right")
-                    .font(Theme.settingsDetailFont.weight(.semibold))
+                    .font(Theme.settingsRowDetailFont.weight(.semibold))
                     .foregroundStyle(secondary)
             }
         }
-        .padding(.horizontal, 32)
+        .padding(.horizontal, Theme.settingsRowTextInset)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, minHeight: Theme.settingsRowMinHeight, alignment: .leading)
-        .background(shape.fill(isHighlighted ? Theme.focusedRowFill : .clear))
-        .contentShape(shape)
-        .opacity(row.isDimmed && !isHighlighted ? Theme.unavailableOpacity : 1)
-        .scaleEffect(isHighlighted ? Theme.settingsRowFocusScale : 1)
-        .shadow(
-            color: .black.opacity(isHighlighted ? Theme.focusShadowOpacity : 0),
-            radius: Theme.focusShadowRadius,
-            y: Theme.focusShadowYOffset
-        )
-        .animation(Theme.focusAnimation, value: isHighlighted)
-        .onHover { hovering in
-            if hovering { onHover() }
+    }
+
+    /// The white highlight (L5: sliding with a namespace, else fading in place), scaled and shadowed with the
+    /// content, or the parent's selected fill. It sits over the row's glass, so the glass never tints it.
+    @ViewBuilder
+    private var fill: some View {
+        if isHighlighted {
+            let highlight = shape.fill(Theme.focusedRowFill)
+                .scaleEffect(scale)
+                .shadow(color: .black.opacity(Theme.focusShadowOpacity), radius: Theme.focusShadowRadius,
+                        y: Theme.focusShadowYOffset)
+            if let highlightNamespace, style == .focused {
+                highlight.matchedGeometryEffect(id: "focus", in: highlightNamespace)
+            } else {
+                highlight
+            }
+        } else if isMarkedSelected {
+            shape.fill(Theme.settingsSelectedRowFill)
+        } else if !isInfo {
+            shape.fill(Theme.settingsRowCapsuleFill)
         }
-        .onTapGesture(perform: onActivate)
     }
 }
 
-/// An SF Symbol or app icon for a row or the page's side column.
+/// L4: action rows on glass (solid with Reduce Transparency, through `glassPanel`); info rows on a quiet fill.
+private struct SettingsRowSurface: ViewModifier {
+    let shape: SettingsRowShape
+    let isInfo: Bool
+
+    func body(content: Content) -> some View {
+        if isInfo {
+            content.background(Theme.settingsInfoRowFill, in: shape)
+        } else {
+            content.glassPanel(in: shape)
+        }
+    }
+}
+
+/// An SF Symbol or app icon for a row, or the page's accessory in the parent column (M7g L2).
 struct RowImageView: View {
     let image: RowImage
     let launcher: AppLauncher

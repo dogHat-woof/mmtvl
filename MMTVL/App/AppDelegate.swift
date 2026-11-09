@@ -145,12 +145,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             router?.shelfContentChanged()
         }
         // M7b L21: Home on MMTVL also ends a mirroring session.
-        inputRouter.handler = { [weak self, weak router] command in
+        inputRouter.handler = { [weak self, weak router] command, isRepeat in
             if command == .home {
                 self?.endMirroringIfNeeded()
                 self?.kioskGuard.homePressed()
             }
-            return router?.handle(command) ?? false
+            return router?.handle(command, isRepeat: isRepeat) ?? false
         }
         inputRouter.onScrollWheel = { [weak router] deltaY, precise in router?.scrollWheel(deltaY: deltaY, precise: precise) }
         inputRouter.onGlobalCommand = { [weak self] command in self?.handleGlobal(command) }

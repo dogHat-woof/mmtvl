@@ -26,6 +26,7 @@ struct SettingsRemoteButtonsTests {
 
     @Test func rootHasTheRemoteButtonsRow() {
         let (model, _) = makeSettingsModel()
+        model.open(.remoteInput)
         #expect(model.row(id: "remoteButtons")?.action == .push(.remoteButtons))
         let ids = model.focusableRowIDs
         #expect(ids.firstIndex(of: "remoteButtons") == ids.firstIndex(of: "controllers")! + 1)

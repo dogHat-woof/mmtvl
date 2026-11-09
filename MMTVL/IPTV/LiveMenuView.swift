@@ -59,6 +59,6 @@ struct LiveMenuView: View {
         .padding(.horizontal, 20)
         .frame(height: Theme.liveMenuRowHeight)
         .background(isFocused ? Theme.focusedRowFill : Color.clear,
-                    in: RoundedRectangle(cornerRadius: Theme.settingsRowCornerRadius))
+                    in: RoundedRectangle(cornerRadius: Theme.liveMenuRowCornerRadius))
     }
 }

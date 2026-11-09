@@ -7,7 +7,7 @@ struct SettingsCastingTests {
         let (model, recorder) = makeSettingsModel()
         #expect(model.row(id: "casting")?.action == .push(.casting))
         let ids = model.focusableRowIDs
-        #expect(ids.firstIndex(of: "casting") == ids.firstIndex(of: "youtube.clear")! + 1)
+        #expect(ids.firstIndex(of: "casting") == ids.firstIndex(of: "youtube")! + 1)
         model.perform(.push(.casting))
         #expect(model.page == .casting)
         #expect(model.pageTitle == "Casting")

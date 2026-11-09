@@ -487,8 +487,9 @@ final class AppRouter {
         }
     }
 
-    /// Returns true if the command was consumed.
-    func handle(_ command: RemoteCommand) -> Bool {
+    /// Returns true if the command was consumed. `isRepeat`: a held key's or button's auto-repeat (M7g: Settings
+    /// changes page only on a fresh Left or Right).
+    func handle(_ command: RemoteCommand, isRepeat: Bool = false) -> Bool {
         if command == .home { launcher.homePressed() }
         if isLeavingHome {
             // L22: commands wait for the animation; Home cancels it and stays home.
@@ -498,7 +499,7 @@ final class AppRouter {
             }
             return true
         }
-        let consumed = route(command)
+        let consumed = route(command, isRepeat: isRepeat)
         // M7c L32: every screen's Home lands on the home screen; then on the start tile.
         if command == .home && screen == .home {
             withAnimation(Theme.focusAnimation) { focusStartTile(id: startTileID) }
@@ -509,7 +510,7 @@ final class AppRouter {
         return consumed
     }
 
-    private func route(_ command: RemoteCommand) -> Bool {
+    private func route(_ command: RemoteCommand, isRepeat: Bool) -> Bool {
         switch screen {
         case .home:
             shelfContentChanged()
@@ -562,7 +563,7 @@ final class AppRouter {
                 goHome()
                 return true
             }
-            if settings.handle(command) { return true }
+            if settings.handle(command, isRepeat: isRepeat) { return true }
             if command == .back {
                 // Back on the root page; M7c L32: on the start tile.
                 goHomeToStartTile()
@@ -779,9 +780,10 @@ final class AppRouter {
         }
     }
 
-    func hoverSettingsRow(_ id: String) {
+    /// `page`: the page of the column the row is in; only the current page's rows take focus.
+    func hoverSettingsRow(_ id: String, on page: SettingsPage) {
         guard screen == .settings, pointerMovedSinceLastCommand else { return }
-        settings.focus(rowID: id)
+        settings.focus(rowID: id, on: page)
     }
 
     /// `index` is into `visibleItems`.
@@ -927,7 +929,8 @@ struct LauncherRootView: View {
                 launcher: router.launcher,
                 tileArt: router.tileArt,
                 onHoverRow: router.hoverSettingsRow,
-                onActivateRow: router.settings.activate
+                onActivateRow: router.settings.activate(rowID:on:),
+                onActivateParent: router.settings.activateParentColumn
             )
         case .youtube, .liveTV:
             // Shown by `body` outside the canvas.

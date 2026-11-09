@@ -177,7 +177,7 @@ final class ControllerInput {
             do {
                 try await Task.sleep(for: Self.repeatDelay)
                 while true {
-                    self?.inputRouter.dispatch(binding.command, isGlobal: binding.isGlobal)
+                    self?.inputRouter.dispatch(binding.command, isGlobal: binding.isGlobal, isRepeat: true)
                     try await Task.sleep(for: Self.repeatInterval)
                 }
             } catch {
