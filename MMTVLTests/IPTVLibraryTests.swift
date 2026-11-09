@@ -76,6 +76,42 @@ struct IPTVLibraryTests {
         #expect(fixture.network.fetchCount == 2)
     }
 
+    /// M7f L5: the timer's check. The playlist first (so the guide imports with channels), then the guide.
+    @Test func refreshIfStaleFetchesThePlaylistBeforeTheGuide() async throws {
+        let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL, guides: [IPTVFixtures.customGuideURL])
+        defer { fixture.cleanUp() }
+        let library = fixture.library
+        await library.refreshIfStale()
+        #expect(fixture.network.fetchCount == 1)
+        #expect(fixture.network.downloadCount == 1)
+        #expect(!library.channels.isEmpty)
+        #expect(library.guideProgrammeCount > 0)
+
+        // Fresh: nothing is fetched.
+        await library.refreshIfStale()
+        #expect(fixture.network.fetchCount == 1)
+        #expect(fixture.network.downloadCount == 1)
+
+        // 15 minutes later the playlist is stale, the guide isn't.
+        fixture.clock.advance(IPTVLibrary.autoRefreshInterval)
+        await library.refreshIfStale()
+        #expect(fixture.network.fetchCount == 2)
+        #expect(fixture.network.downloadCount == 1)
+    }
+
+    @Test func aChangedLineupIsReported() async throws {
+        let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL)
+        defer { fixture.cleanUp() }
+        let library = fixture.library
+        var changes = 0
+        library.onLineupChange = { changes += 1 }
+        await library.refreshPlaylist()
+        #expect(changes == 1)
+        // The same playlist again: no change.
+        await library.refreshPlaylist()
+        #expect(changes == 1)
+    }
+
     @Test func playlistGuidesUntilOneIsPasted() async throws {
         let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL,
                                       texts: [IPTVFixtures.playlistURL: IPTVFixtures.playlistWithGuide])
@@ -102,6 +138,50 @@ struct IPTVLibraryTests {
         #expect(fixture.network.downloadCount == 3)
         #expect(try await fixture.store.programmeCounts().keys.sorted() == [playlistID])
         #expect(library.guideStatus == .loaded(fixture.clock.now))
+    }
+
+    /// M7f L4: the playlist's guide instead of the pasted one; the pasted URL is kept.
+    @Test func usePlaylistGuideKeepsPastedGuides() async throws {
+        let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL, guides: [IPTVFixtures.customGuideURL],
+                                      texts: [IPTVFixtures.playlistURL: IPTVFixtures.playlistWithGuide])
+        defer { fixture.cleanUp() }
+        let library = fixture.library
+        let playlistGuide = GuideSource(url: IPTVFixtures.playlistGuideURL, isFromPlaylist: true)
+        let pastedGuide = GuideSource(url: IPTVFixtures.customGuideURL, isFromPlaylist: false)
+        await library.refreshAll()
+        #expect(library.playlistNamesGuide)
+        #expect(library.guideSources == [pastedGuide])
+        #expect(fixture.network.downloadCount == 1)
+
+        await library.applyUsePlaylistGuide(true)
+        #expect(library.guideSources == [playlistGuide])
+        #expect(library.customGuideSources == [pastedGuide])
+        #expect(fixture.sources.guideURLs() == [IPTVFixtures.customGuideURL])
+        #expect(fixture.network.downloadCount == 2)
+        #expect(try await fixture.store.programmeCounts().keys.sorted() == [playlistGuide.id])
+        #expect(library.state.guideImports.keys.sorted() == [playlistGuide.id])
+
+        // Back to the pasted guide: imported again (its rows were pruned).
+        await library.applyUsePlaylistGuide(false)
+        #expect(library.guideSources == [pastedGuide])
+        #expect(fixture.network.downloadCount == 3)
+        #expect(try await fixture.store.programmeCounts().keys.sorted() == [pastedGuide.id])
+    }
+
+    /// M7f L4: without a playlist guide the setting changes nothing.
+    @Test func usePlaylistGuideWithoutOneKeepsPastedGuides() async throws {
+        let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL, guides: [IPTVFixtures.customGuideURL])
+        defer { fixture.cleanUp() }
+        let library = fixture.library
+        let pastedGuide = GuideSource(url: IPTVFixtures.customGuideURL, isFromPlaylist: false)
+        await library.refreshAll()
+        #expect(library.playlistNamesGuide == false)
+        #expect(fixture.network.downloadCount == 1)
+
+        await library.applyUsePlaylistGuide(true)
+        #expect(library.usePlaylistGuide)
+        #expect(library.guideSources == [pastedGuide])
+        #expect(fixture.network.downloadCount == 1)
     }
 
     @Test func guideImport() async throws {

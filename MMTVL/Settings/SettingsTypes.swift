@@ -3,6 +3,8 @@ import Foundation
 nonisolated enum SettingsPage: Hashable, Sendable {
     case root, homeScreen, tile(id: String), addTile, confirmRestoreDefaults, confirmClearYouTube
     case liveTV, confirmRemoveIPTV, guideSource(id: String), iptvGroups, iptvHiddenChannels
+    /// M7f L13: Settings → Live TV → Teams, and one league's teams.
+    case iptvTeams, iptvLeague(TeamLeague)
     case phoneRemote, pairPhone, confirmForgetPhones
     /// M7: Settings → Remote Buttons (D27).
     case remoteButtons, remoteCommand(RemoteCommand), remoteBinding(RemoteCommand, InputBinding.Trigger)
@@ -28,8 +30,10 @@ nonisolated struct IPTVSettingsStatus: Equatable, Sendable {
     var channelCount = 0
     /// "Loading…", "Updated 10:42 PM", "Failed: Server error (HTTP 403)"
     var playlistLine: String = ""
-    /// The guides in use, in priority order (M6b L1).
+    /// The guides in use, in priority order (M6b L1), then the pasted guides not in use (M7f L4).
     var guideSources: [GuideSourceStatus] = []
+    /// M7f L4: the playlist's header names a guide, so Settings offers Guide Source.
+    var playlistNamesGuide = false
     /// Pasted guides; the add row disappears at `IPTVLibrary.maxGuideSources`.
     var customGuideCount = 0
     /// Playlist channels with guide data.
@@ -38,6 +42,8 @@ nonisolated struct IPTVSettingsStatus: Equatable, Sendable {
     var groups: [GroupStatus] = []
     /// Hidden playlist channels, in playlist order.
     var hiddenChannels: [HiddenChannelStatus] = []
+    /// M7f L13: picked team ids, in the order added.
+    var teams: [String] = []
 
     struct GuideSourceStatus: Identifiable, Equatable, Sendable {
         /// GuideSource.id.
@@ -47,6 +53,8 @@ nonisolated struct IPTVSettingsStatus: Equatable, Sendable {
         /// "1,234 programmes · 40 channels · Updated 10:43 PM", "Loading…", "Failed: …", "Not loaded yet"
         var line: String
         var isFromPlaylist: Bool
+        /// M7f L4: false for a pasted guide kept while the playlist's guide is used.
+        var isInUse = true
     }
 
     struct GroupStatus: Identifiable, Equatable, Sendable {
@@ -139,6 +147,8 @@ nonisolated enum SettingKey: String, CaseIterable, Sendable {
     case homeLivePreview
     /// M7c L28.
     case showVersionOnHome
+    /// M7f L4: its row shows "Playlist" / "Pasted Guides".
+    case usePlaylistGuide
 
     var keyPath: WritableKeyPath<AppSettings, Bool> {
         switch self {
@@ -153,6 +163,7 @@ nonisolated enum SettingKey: String, CaseIterable, Sendable {
         case .kioskLock: \.kioskLock
         case .homeLivePreview: \.homeLivePreview
         case .showVersionOnHome: \.showVersionOnHome
+        case .usePlaylistGuide: \.usePlaylistGuide
         }
     }
 }
@@ -183,6 +194,8 @@ nonisolated enum SettingsAction: Hashable, Sendable {
     case removeGuideSource(id: String)
     case toggleIPTVGroupHidden(String)
     case unhideIPTVChannel(id: String)
+    /// M7f L13.
+    case toggleTeam(id: String)
     case refreshIPTV
     case removeIPTVSource
     case forgetAllPhones

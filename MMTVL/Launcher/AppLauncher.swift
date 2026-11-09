@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import os
 
 /// Home pressed while a launched app is still starting: that app must not take the screen when it comes up.
@@ -98,6 +99,9 @@ final class AppLauncher {
     /// L18: how long to look for a web app's window after a hand-off, and how often.
     static let webAppWindowSearch: Duration = .seconds(10)
     static let webAppWindowPoll: Duration = .milliseconds(300)
+    /// M7f L10: how long to wait for an already-running web app to come forward before reloading it.
+    static let webAppReloadWait: Duration = .seconds(2)
+    static let webAppReloadPoll: Duration = .milliseconds(100)
 
     /// Chromium browsers honor `--start-fullscreen`, but only when they aren't already running.
     /// Other browsers (Safari), and already-running ones, get full screen via Accessibility (`WindowFullScreener`).
@@ -227,10 +231,19 @@ final class AppLauncher {
             }
             Self.logger.notice("Launching \(bundleID, privacy: .public)")
             cancellation.began(bundleID, at: Date())
+            let wasRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
             let app = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
             launchedPIDs.insert(app.processIdentifier)
+            if webApp == nil {
+                let pid = app.processIdentifier
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    logWindows(bundleID: bundleID, pid: pid, wasRunning: wasRunning)
+                }
+            }
             if let webApp {
                 webAppLaunches[app.processIdentifier] = (item, webApp, Date())
+                if wasRunning { reloadWebAppWhenFront(bundleID: bundleID, info: webApp) }
             }
             makeFullScreenIfWanted(item, pid: app.processIdentifier)
 
@@ -267,6 +280,44 @@ final class AppLauncher {
 
         case .internalDestination, .system:
             throw LaunchError.unsupportedKind
+        }
+    }
+
+    /// M7f L1: what an opened app shows 2 s later (Q22). Sizes only, never window titles.
+    private func logWindows(bundleID: String, pid: pid_t, wasRunning: Bool) {
+        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+        let windows = WindowSnapshot.onScreen(pid: pid).filter { $0.layer == 0 }
+        let sizes = windows.map { "\(Int($0.bounds.width.rounded()))×\(Int($0.bounds.height.rounded()))" }
+            .joined(separator: ", ")
+        let fullScreen = switch fullScreener.isFullScreen(pid: pid) {
+        case true?: "yes"
+        case false?: "no"
+        case nil: "unknown"
+        }
+        let running = wasRunning ? "yes" : "no"
+        let front = frontmost ? "yes" : "no"
+        Self.logger.notice("\(bundleID, privacy: .public) opened (was running: \(running, privacy: .public)): frontmost \(front, privacy: .public), on-screen windows \(windows.count) [\(sizes, privacy: .public)], full screen \(fullScreen, privacy: .public)")
+    }
+
+    /// M7f L10: a web app that was already running reloads its page when its tile opens it again
+    /// (⌘R to the front window, once the shim or its browser is in front). Calling apps never reload.
+    private func reloadWebAppWhenFront(bundleID: String, info: WebAppInfo) {
+        if let host = info.startURL?.host(), CallingApps.isCalling(host: host) {
+            Self.logger.notice("Not reloading \(bundleID, privacy: .public): a calling app")
+            return
+        }
+        let wanted: Set<String> = [bundleID, info.browserBundleID]
+        Task {
+            let deadline = ContinuousClock.now + Self.webAppReloadWait
+            while ContinuousClock.now < deadline {
+                if cancellation.shouldReturn(activated: bundleID, at: Date()) { return }
+                if let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier, wanted.contains(front) {
+                    SyntheticInput.postKey(CGKeyCode(kVK_ANSI_R), flags: .maskCommand)
+                    Self.logger.notice("Reloaded web app \(bundleID, privacy: .public)")
+                    return
+                }
+                try? await Task.sleep(for: Self.webAppReloadPoll)
+            }
         }
     }
 

@@ -38,12 +38,18 @@ struct LiveTVRootView: View {
                 }
                 ZStack {
                     overlay
+                    // M7f L12: search over the guide, the player or Multiview.
+                    if let search = model.search {
+                        LiveSearchView(model: search)
+                            .transition(.opacity)
+                    }
                     if let menu = model.menu {
                         LiveMenuView(menu: menu)
                             .transition(.opacity)
                     }
                 }
                     .animation(.easeInOut(duration: 0.2), value: model.menu)
+                    .animation(.easeInOut(duration: 0.2), value: model.search == nil)
                     .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height)
                     .scaleEffect(Theme.scale(for: size))
                     .frame(width: size.width, height: size.height)
@@ -155,7 +161,7 @@ private struct PlayerOverlayView: View {
                 Spacer()
                 VStack(alignment: .leading, spacing: 24) {
                     if let banner = model.banner {
-                        LiveBannerView(banner: banner)
+                        LiveBannerView(banner: banner, format: state.videoFormat)
                     }
                     if showsTimeshift {
                         TimeshiftBarView(timeshift: state.timeshift, isPaused: state.phase == .paused)
@@ -204,6 +210,8 @@ private struct PlayerOverlayView: View {
 /// Channel, now and next.
 struct LiveBannerView: View {
     let banner: LiveTVModel.Banner
+    /// M7f L3: "1080i · 29.97 fps", shown only when known.
+    var format: VideoFormat? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 32) {
@@ -212,9 +220,17 @@ struct LiveBannerView: View {
                     .frame(width: Theme.liveBannerLogoSize, height: Theme.liveBannerLogoSize)
             }
             VStack(alignment: .leading, spacing: 12) {
-                Text("\(banner.channel.number)  \(banner.channel.name)")
-                    .font(Theme.liveBannerTitleFont)
-                    .foregroundStyle(Theme.primaryText)
+                HStack(alignment: .firstTextBaseline) {
+                    Text("\(banner.channel.number)  \(banner.channel.name)")
+                        .font(Theme.liveBannerTitleFont)
+                        .foregroundStyle(Theme.primaryText)
+                    Spacer(minLength: 24)
+                    if let format {
+                        Text(format.label)
+                            .font(Theme.liveBannerDetailFont.monospacedDigit())
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+                }
                 if let now = banner.now {
                     Text(now.title)
                         .font(Theme.liveBannerProgrammeFont)

@@ -48,6 +48,12 @@ final class FakeLiveTV: LiveTVHosting {
         previewChannelID = channelID
     }
 
+    var playlistChanges = 0
+    func playlistDidChange() {
+        calls.append("playlistDidChange")
+        playlistChanges += 1
+    }
+
     func stopPreview() {
         calls.append("stop")
         previewStops += 1

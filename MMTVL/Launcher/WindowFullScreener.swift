@@ -61,6 +61,15 @@ final class WindowFullScreener {
         return Self.mainWindow(of: app) != nil
     }
 
+    /// M7f L1: whether the app's main window is full screen; nil when it has no window (or without Accessibility).
+    func isFullScreen(pid: pid_t) -> Bool? {
+        guard AccessibilityPermission.isTrusted else { return nil }
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 1.0)
+        guard let window = Self.mainWindow(of: app) else { return nil }
+        return Self.isFullScreen(window)
+    }
+
     /// M7b L21: presses the close button of every window of the app at least `minimumSize` big.
     /// Returns how many it pressed (0 without Accessibility).
     func closeWindows(pid: pid_t, minimumSize: CGSize) -> Int {

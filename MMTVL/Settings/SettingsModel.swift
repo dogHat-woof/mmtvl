@@ -257,6 +257,9 @@ final class SettingsModel {
         case .unhideIPTVChannel(let id):
             environment.unhideIPTVChannel(id)
             refreshStatus()
+        case .toggleTeam(let id):
+            environment.setTeamPicked(id, !iptv.teams.contains(id))
+            refreshStatus()
         case .refreshIPTV:
             environment.refreshIPTV()
         case .removeIPTVSource:

@@ -155,10 +155,12 @@ struct GuideModelTests {
         #expect(model.focus == .grid)
         #expect(model.selectedGroup == "NBA")
 
-        // Right applies too; Up/Down clamp.
+        // Right applies too; Up stops at the Search row (M7f L12), Down from it returns to the first group.
         _ = model.handle(.left, now: now)   // the now-cell → the channel cell
         _ = model.handle(.left, now: now)
         for _ in 0..<6 { _ = model.handle(.up, now: now) }
+        #expect(model.focus == .search)
+        _ = model.handle(.down, now: now)
         #expect(model.focus == .groups(0))
         #expect(model.handle(.right, now: now) == .groupChanged("All Channels"))
         #expect(model.channels.count == 10)
@@ -307,4 +309,51 @@ struct GuideModelTests {
         #expect(model.focus == .groups(0))
     }
 
+    // MARK: M7f L12
+
+    @Test func theSearchRowOpensSearchAndKeepsTheGuide() {
+        var model = model(group: "NBA", focused: "id:c8")
+        _ = model.handle(.left, now: now)   // the channel cell
+        _ = model.handle(.left, now: now)   // groups, on NBA
+        #expect(model.focus == .groups(2))
+        _ = model.handle(.up, now: now)
+        _ = model.handle(.up, now: now)
+        _ = model.handle(.up, now: now)
+        #expect(model.focus == .search)
+        #expect(model.handle(.up, now: now) == .none)
+        #expect(model.handle(.select, now: now) == .openSearch)
+        // The guide keeps its group and row; focus stays on the Search row.
+        #expect(model.focus == .search)
+        #expect(model.selectedGroup == "NBA")
+        #expect(model.focusedChannel?.id == "id:c8")
+        #expect(model.handle(.right, now: now) == .openSearch)
+        #expect(model.handle(.back, now: now) == .none)
+        #expect(model.focus == .grid)
+    }
+
+    @Test func focusOnALaterProgramme() {
+        var model = model(group: "Live", focused: "id:c1")
+        let later = GuideTimelineTests.utc(17, 30)
+        // In the group: the row moves and the timeline shows the programme.
+        let inGroup = model.focus(channelID: "id:c2", at: later, now: now)
+        #expect(inGroup)
+        #expect(model.selectedGroup == "Live")
+        #expect(model.focusedChannel?.id == "id:c2")
+        #expect(model.focus == .grid)
+        #expect(model.focusTime == later)
+        #expect(model.timeline.windowStart <= later && later < model.timeline.windowEnd)
+        // Not in the group: All Channels.
+        let inAllChannels = model.focus(channelID: "id:c10", at: later, now: now)
+        #expect(inAllChannels)
+        #expect(model.selectedGroup == "All Channels")
+        #expect(model.focusedChannel?.id == "id:c10")
+        #expect(model.firstVisibleRow + GuideModel.visibleRows > model.row)
+        // A time before now focuses now; an unknown channel changes nothing.
+        let beforeNow = model.focus(channelID: "id:c1", at: now - 3600, now: now)
+        #expect(beforeNow)
+        #expect(model.focusTime == now)
+        let unknown = model.focus(channelID: "id:nope", at: later, now: now)
+        #expect(!unknown)
+        #expect(model.focusedChannel?.id == "id:c1")
+    }
 }

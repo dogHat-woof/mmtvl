@@ -39,6 +39,8 @@ struct SettingsEnvironment {
     var setIPTVGroupHidden: (String, Bool) -> Void
     /// `IPTVLibrary.setChannelHidden(id, false)`.
     var unhideIPTVChannel: (String) -> Void
+    /// M7f L13: `IPTVLibrary.setTeamPicked(_:_:)`.
+    var setTeamPicked: (Team.ID, Bool) -> Void
     var refreshIPTV: () -> Void
     var removeIPTVSource: () -> Void
     var phoneRemoteStatus: () -> PhoneRemoteSettingsStatus

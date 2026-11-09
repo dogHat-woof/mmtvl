@@ -116,4 +116,35 @@ struct EPGStoreTests {
         try Data("not a database at all, just text that is long enough".utf8).write(to: corruptURL)
         #expect(try await EPGStore.open(at: corruptURL).programmeCount() == 0)
     }
+
+    // MARK: M7f L12
+
+    @Test func searchProgrammes() async throws {
+        let store = try EPGStore.inMemory()
+        try await store.replaceSource("s1", channels: [EPGChannel(id: "a", names: ["A"]), EPGChannel(id: "b", names: ["B"])], programmes: [
+            programme("a", 2, 3, "NBA Basketball: Heat at Lakers"),
+            programme("a", 0, 1, "nba basketball: Knicks at Celtics"),
+            programme("a", -2, -1, "NBA Basketball: over"),
+            programme("a", 25, 26, "NBA Basketball: tomorrow"),
+            programme("b", 1, 2, "NBA Basketball: Bulls at Suns"),
+            programme("b", 3, 4, "NBA Today"),
+            programme("c", 1, 2, "NBA Basketball: not asked"),
+            programme("a", 4, 5, "100% Basketball"),
+        ])
+        let day = DateInterval(start: t0, duration: 24 * 3600)
+        // Every word, any case; only the refs given; only the interval; by start.
+        let both = try await store.searchProgrammes(words: ["nba", "BASKETBALL"], refs: [ref("a"), ref("b")], interval: day, limit: 40)
+        #expect(both.map(\.title) == ["nba basketball: Knicks at Celtics", "NBA Basketball: Bulls at Suns", "NBA Basketball: Heat at Lakers"])
+        let onlyB = try await store.searchProgrammes(words: ["nba"], refs: [ref("b")], interval: day, limit: 40)
+        #expect(onlyB.map(\.title) == ["NBA Basketball: Bulls at Suns", "NBA Today"])
+        // A ref names a source too.
+        #expect(try await store.searchProgrammes(words: ["nba"], refs: [ref("a", "s2")], interval: day, limit: 40).isEmpty)
+        // The limit.
+        let limited = try await store.searchProgrammes(words: ["nba"], refs: [ref("a"), ref("b")], interval: day, limit: 2)
+        #expect(limited.map(\.title) == ["nba basketball: Knicks at Celtics", "NBA Basketball: Bulls at Suns"])
+        // % and _ match literally.
+        #expect(try await store.searchProgrammes(words: ["100%"], refs: [ref("a")], interval: day, limit: 40).map(\.title) == ["100% Basketball"])
+        #expect(try await store.searchProgrammes(words: ["n_a"], refs: [ref("a")], interval: day, limit: 40).isEmpty)
+        #expect(try await store.searchProgrammes(words: [], refs: [ref("a")], interval: day, limit: 40).isEmpty)
+    }
 }

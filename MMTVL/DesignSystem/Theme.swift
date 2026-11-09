@@ -33,6 +33,18 @@ enum Theme {
     // MARK: Typography
 
     static let clockFont = Font.title2
+    /// M7f L7: the home clock (and the remote battery beside it), readable across the room.
+    static let homeClockFont = Font.system(size: 38, weight: .medium)
+    static let homeClockPadding = CGSize(width: 24, height: 10)
+    /// The top of the home clock stack.
+    static let homeClockTop: CGFloat = 60
+    /// M7f L8: between the clock and the battery capsule.
+    static let homeBatterySpacing: CGFloat = 12
+    /// Below this percent the battery shows red and pulses.
+    static let batteryLowThreshold = 15
+    static let batteryLowColor = Color.red
+    static let batteryPulseOpacity: Double = 0.35
+    static let batteryPulseAnimation = Animation.easeInOut(duration: 1.2).repeatForever(autoreverses: true)
     /// M7c L28: between the clock and the version capsule under it.
     static let homeClockStackSpacing: CGFloat = 12
     static let tileTitleFont = Font.title3.weight(.medium)
@@ -69,7 +81,7 @@ enum Theme {
     static let homeGridHeroOpacity: Double = 0.3
     /// Precise (trackpad) scroll distance that moves focus one row.
     static let homeScrollStep: CGFloat = 40
-    static let homeClockFadeHeight: CGFloat = 160
+    static let homeClockFadeHeight: CGFloat = 200
 
     // MARK: Tile art (M7 L3, L4)
 
@@ -173,14 +185,17 @@ enum Theme {
     // MARK: Glass (M7 L26)
 
     static let glassCornerRadius: CGFloat = 28
-    static let glassRimWidth: CGFloat = 1.5
-    static let glassRimTop: Double = 0.55
+    /// M7f L9: panels are clearer than `.regular`; the tint keeps text readable.
+    /// Hard to read on the TV: raise the tint before going back to `.regular`.
+    static let panelGlass = Glass.clear.tint(.black.opacity(0.22))
+    static let glassRimWidth: CGFloat = 2
+    static let glassRimTop: Double = 0.70
     static let glassRimMiddle: Double = 0.08
-    static let glassRimBottom: Double = 0.25
-    static let glassRimTopFocused: Double = 0.85
-    static let glassRimBottomFocused: Double = 0.4
-    static let glassSheen: Double = 0.10
-    static let glassSheenFocused: Double = 0.18
+    static let glassRimBottom: Double = 0.32
+    static let glassRimTopFocused: Double = 1.0
+    static let glassRimBottomFocused: Double = 0.5
+    static let glassSheen: Double = 0.14
+    static let glassSheenFocused: Double = 0.24
     /// Reduce Transparency: panels without see-through.
     static let solidPanelFill = Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1E / 255).opacity(0.92)
 
@@ -316,6 +331,30 @@ enum Theme {
     static let liveMenuWideWidth: CGFloat = 1040
     static let liveMenuTitleFont = Font.system(size: 34, weight: .semibold)
     static let liveMenuRowHeight: CGFloat = 72
+
+    // MARK: On-screen keyboard (M7f L11)
+
+    static let keyboardWidth: CGFloat = 600
+    static let keyboardKeySpacing: CGFloat = 8
+    static let keyboardKeyHeight: CGFloat = 64
+    static let keyboardKeyCornerRadius: CGFloat = 12
+    static let keyboardKeyFill = Color.white.opacity(0.08)
+    static let keyboardKeyFont = Font.system(size: 30, weight: .medium)
+    static let keyboardWideKeyFont = Font.system(size: 22, weight: .semibold)
+    static let keyboardFocusedScale: CGFloat = 1.08
+    static let keyboardFieldHeight: CGFloat = 72
+    static let keyboardFieldFont = Font.system(size: 32, weight: .medium)
+    static let keyboardFieldSpacing: CGFloat = 24
+
+    // MARK: Live TV search (M7f L12)
+
+    static let searchDim = Color.black.opacity(0.78)
+    static let searchKeyboardOrigin = CGPoint(x: 120, y: 200)
+    static let searchResultsRect = CGRect(x: 800, y: 200, width: 1000, height: 780)
+    static let searchTitleTop: CGFloat = 80
+    static let searchRowHeight: CGFloat = 84
+    static let searchRowTitleFont = Font.system(size: 26, weight: .medium)
+    static let searchRowDetailFont = Font.system(size: 20)
 
     // MARK: Animation
 

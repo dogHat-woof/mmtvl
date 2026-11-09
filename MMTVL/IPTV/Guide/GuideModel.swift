@@ -5,8 +5,13 @@ nonisolated struct GuideModel: Equatable, Sendable {
     static let visibleRows = 6
 
     /// `.channel`: the channel cell of the focused row (M6 L8), between the grid and the groups.
-    enum Focus: Equatable, Sendable { case grid, channel, groups(Int) }
-    enum Action: Equatable, Sendable { case none, play(Channel.ID), close, groupChanged(String), channelMenu(Channel.ID) }
+    /// `.search` (M7f L12): the Search row above the groups.
+    enum Focus: Equatable, Sendable { case grid, channel, groups(Int), search }
+    enum Action: Equatable, Sendable {
+        case none, play(Channel.ID), close, groupChanged(String), channelMenu(Channel.ID)
+        /// M7f L12: Select on the Search row.
+        case openSearch
+    }
     /// One focusable cell: a programme, or a placeholder spanning the window when a row has no data.
     struct Cell: Equatable, Sendable {
         var programme: Programme?
@@ -77,7 +82,34 @@ nonisolated struct GuideModel: Equatable, Sendable {
         case .grid: handleGrid(command, now: now)
         case .channel: handleChannel(command)
         case .groups(let index): handleGroups(command, index: index, now: now)
+        case .search: handleSearchRow(command)
         }
+    }
+
+    /// M7f L12: a search result for a later programme. Focus goes to `channelID` (All Channels if it isn't in the
+    /// selected group, else its own group) at `date`. False when the channel isn't in the lineup.
+    @discardableResult
+    mutating func focus(channelID: Channel.ID, at date: Date, now: Date) -> Bool {
+        if !channels.contains(where: { $0.id == channelID }) {
+            guard lineup.visibleChannels.contains(where: { $0.id == channelID }) else { return false }
+            let channelGroup = lineup.visibleChannels.first { $0.id == channelID }?.group
+            let candidates = [ChannelList.allChannelsGroup] + [channelGroup].compactMap { $0 }
+            let groups = groups, lineup = lineup
+            guard let index = candidates.compactMap({ groups.firstIndex(of: $0) })
+                .first(where: { lineup.channels(in: groups[$0]).contains { $0.id == channelID } })
+            else { return false }
+            groupIndex = index
+            channels = channelsOfSelectedGroup()
+            firstVisibleRow = 0
+        }
+        guard let index = channels.firstIndex(where: { $0.id == channelID }) else { return false }
+        row = index
+        keepRowVisible()
+        focus = .grid
+        focusTime = max(date, now)
+        timeline = GuideTimeline(now: now)
+        timeline.reveal(focusTime, now: now)
+        return true
     }
 
     /// Tests and callers without preferences.
@@ -181,6 +213,10 @@ nonisolated struct GuideModel: Equatable, Sendable {
 
     private mutating func handleGroups(_ command: RemoteCommand, index: Int, now: Date) -> Action {
         switch command {
+        case .up where index == 0:
+            // M7f L12: the Search row sits above the first group.
+            focus = .search
+            return .none
         case .up, .down:
             guard !groups.isEmpty else { return .none }
             focus = .groups(min(max(index + (command == .up ? -1 : 1), 0), groups.count - 1))
@@ -204,6 +240,23 @@ nonisolated struct GuideModel: Equatable, Sendable {
             focus = .groups(min(max(index + step, 0), groups.count - 1))
             return .none
         case .playPause, .home, .fastForward, .rewind, .menu:
+            return .none
+        }
+    }
+
+    /// M7f L12: the Search row; Down returns to the first group.
+    private mutating func handleSearchRow(_ command: RemoteCommand) -> Action {
+        switch command {
+        case .select, .right:
+            // Focus stays here, so closing search comes back to the Search row.
+            return .openSearch
+        case .down:
+            if !groups.isEmpty { focus = .groups(0) }
+            return .none
+        case .back, .left:
+            focus = .grid
+            return .none
+        case .up, .playPause, .home, .fastForward, .rewind, .menu, .channelUp, .channelDown:
             return .none
         }
     }

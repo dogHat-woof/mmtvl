@@ -21,15 +21,17 @@ nonisolated enum ChannelList {
 
     /// Keeps entries whose URL is http(s) and not VOD (path contains "/movie/" or "/series/", or ends in .mp4/.mkv/.avi/.mov).
     /// id: "id:" + tvgID.lowercased(), else "name:" + name.lowercased(); duplicates get "#2", "#3"… in order.
-    /// name: entry.name, else tvgName, else "Channel \(number)".
+    /// name: entry.name, else tvgName, else "Channel \(number)"; a game feed's "-H"/"-A" is spelled out (M7f L13).
     static func make(from playlist: M3UPlaylist) -> [Channel] {
         var channels: [Channel] = []
         var idCounts: [String: Int] = [:]
         for entry in playlist.entries {
             guard let url = URL(string: entry.url), isLiveStream(url) else { continue }
             let number = channels.count + 1
-            let name = !entry.name.isEmpty ? entry.name : (entry.tvgName ?? "Channel \(number)")
-            let baseID = entry.tvgID.map { "id:" + $0.lowercased() } ?? "name:" + name.lowercased()
+            let playlistName = !entry.name.isEmpty ? entry.name : (entry.tvgName ?? "Channel \(number)")
+            // Ids come from the playlist's own name, so a renamed feed keeps its favorites and Multiview window.
+            let baseID = entry.tvgID.map { "id:" + $0.lowercased() } ?? "name:" + playlistName.lowercased()
+            let name = feedName(playlistName)
             let count = (idCounts[baseID] ?? 0) + 1
             idCounts[baseID] = count
             channels.append(Channel(
@@ -44,6 +46,19 @@ nonisolated enum ChannelList {
             ))
         }
         return channels
+    }
+
+    /// M7f L13: a game's broadcast, "Away @ Home-H" / "-A", reads "Away @ Home (Home Feed)" / "(Away Feed)".
+    static func feedName(_ name: String) -> String {
+        guard name.contains(" @ "), name.count > 2 else { return name }
+        let suffix = name.suffix(2)
+        let base = String(name.dropLast(2))
+        guard !base.hasSuffix(" @"), base.components(separatedBy: " @ ").allSatisfy({ !$0.isEmpty }) else { return name }
+        switch suffix {
+        case "-H": return base + TeamMatcher.homeFeedSuffix
+        case "-A": return base + TeamMatcher.awayFeedSuffix
+        default: return name
+        }
     }
 
     /// Distinct groups in first-appearance order.

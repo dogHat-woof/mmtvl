@@ -35,6 +35,9 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
     /// M7c L32: the tile focused when MMTVL opens (a `launch-items.json` id; Settings → a tile → Start Here).
     /// Missing or hidden: the first tile.
     var homeStartTile = "plex"
+    /// M7f L4: use the guide the playlist names instead of the pasted guides (kept in the Keychain).
+    /// Settings → Live TV → Guide Source; only offered when the playlist names a guide.
+    var usePlaylistGuide = false
 
     var volumeMode: VolumeMode { VolumeMode(rawValue: phoneRemoteVolume) ?? .auto }
     var validatedPhoneRemotePort: Int { (1024...65534).contains(phoneRemotePort) ? phoneRemotePort : 8765 }
@@ -65,5 +68,6 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
         showVersionOnHome = try container.decodeIfPresent(Bool.self, forKey: .showVersionOnHome)
             ?? defaults.showVersionOnHome
         homeStartTile = try container.decodeIfPresent(String.self, forKey: .homeStartTile) ?? defaults.homeStartTile
+        usePlaylistGuide = try container.decodeIfPresent(Bool.self, forKey: .usePlaylistGuide) ?? defaults.usePlaylistGuide
     }
 }

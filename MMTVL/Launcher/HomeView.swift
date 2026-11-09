@@ -21,6 +21,8 @@ struct HomeView: View {
     var isLeaving = false
     /// M7c L28: "Version 1.1.0 Build 2" under the clock; nil = hidden.
     var versionLabel: String? = nil
+    /// M7f L8: the lowest Siri Remote battery percent, right of the clock; nil = hidden.
+    var remoteBatteryLevel: Int? = nil
     /// Bumped when MMTVL comes back; the dock slides up.
     var entryGeneration = 0
     @State private var isEntering = false
@@ -101,11 +103,14 @@ struct HomeView: View {
                 .allowsHitTesting(false)
 
             VStack(alignment: .trailing, spacing: Theme.homeClockStackSpacing) {
-                clock
+                HStack(spacing: Theme.homeBatterySpacing) {
+                    clock
+                    if let remoteBatteryLevel { RemoteBatteryCapsule(level: remoteBatteryLevel) }
+                }
                 if let versionLabel { capsule(Text(versionLabel)) }
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.top, 60)
+            .padding(.top, Theme.homeClockTop)
             .padding(.horizontal, Theme.sideMargin)
             .opacity(isLeaving ? 0 : 1)
             .zIndex(1)
@@ -139,11 +144,13 @@ struct HomeView: View {
     /// L28: on a small glass capsule.
     private var clock: some View {
         TimelineView(.everyMinute) { context in
-            capsule(Text(context.date.formatted(date: .omitted, time: .shortened)))
+            Text(context.date.formatted(date: .omitted, time: .shortened))
+                .foregroundStyle(Theme.primaryText)
+                .homeClockCapsule()
         }
     }
 
-    /// The clock's look (M7c L28: the version uses it too).
+    /// The version capsule's look (M7c L28).
     private func capsule(_ text: Text) -> some View {
         text
             .font(Theme.clockFont)
@@ -190,5 +197,49 @@ private struct HomeExitMotion: ViewModifier {
         content
             .offset(y: isAway ? Theme.homeExitSlide : 0)
             .opacity(isAway ? 0 : 1)
+    }
+}
+
+/// M7f L7: the home clock's capsule (38 pt); the battery capsule beside it uses it too.
+private extension View {
+    func homeClockCapsule() -> some View {
+        font(Theme.homeClockFont)
+            .monospacedDigit()
+            .padding(.horizontal, Theme.homeClockPadding.width)
+            .padding(.vertical, Theme.homeClockPadding.height)
+            .glassPanel(in: Capsule())
+    }
+}
+
+/// M7f L8: a Siri Remote symbol and its percent. Below 15 % it's red and slowly pulses (solid with Reduce Motion).
+private struct RemoteBatteryCapsule: View {
+    let level: Int
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isDimmed = false
+
+    private var isLow: Bool { level < Theme.batteryLowThreshold }
+    private var pulses: Bool { isLow && !reduceMotion }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "appletvremote.gen4.fill")
+            Text("\(level)%")
+        }
+        .foregroundStyle(isLow ? Theme.batteryLowColor : Theme.primaryText)
+        .opacity(pulses && isDimmed ? Theme.batteryPulseOpacity : 1)
+        .homeClockCapsule()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Siri Remote battery \(level) percent")
+        .onAppear { updatePulse() }
+        .onChange(of: pulses) { updatePulse() }
+    }
+
+    private func updatePulse() {
+        if pulses {
+            withAnimation(Theme.batteryPulseAnimation) { isDimmed = true }
+        } else {
+            // A plain set ends the repeating animation.
+            withAnimation(nil) { isDimmed = false }
+        }
     }
 }

@@ -24,6 +24,7 @@ final class SettingsRecorder {
     var guideMoves: [GuideMove] = []
     var guideRemovals: [String] = []
     var groupHides: [GroupHide] = []
+    var teamPicks: [TeamPick] = []
     var unhiddenChannels: [String] = []
     var phoneRemote = PhoneRemoteSettingsStatus()
     var pairingCalls: [Bool] = []
@@ -62,6 +63,11 @@ final class SettingsRecorder {
 struct GuideMove: Equatable {
     var id: String
     var step: Int
+}
+
+struct TeamPick: Equatable {
+    var id: String
+    var picked: Bool
 }
 
 struct GroupHide: Equatable {
@@ -107,6 +113,7 @@ func makeSettingsModel(
         removeGuideSource: { recorder.guideRemovals.append($0) },
         setIPTVGroupHidden: { recorder.groupHides.append(GroupHide(name: $0, hidden: $1)) },
         unhideIPTVChannel: { recorder.unhiddenChannels.append($0) },
+        setTeamPicked: { recorder.teamPicks.append(TeamPick(id: $0, picked: $1)) },
         refreshIPTV: { recorder.iptvRefreshes += 1 },
         removeIPTVSource: { recorder.iptvRemovals += 1 },
         phoneRemoteStatus: { recorder.phoneRemote },

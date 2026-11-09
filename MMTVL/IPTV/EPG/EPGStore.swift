@@ -134,6 +134,33 @@ nonisolated final class EPGStore: Sendable {
             .filter { refs.contains($0.key) }
     }
 
+    /// M7f L12: programmes of these guide channels overlapping `interval` whose title contains every word
+    /// (SQLite `LIKE`: case-insensitive for ASCII), sorted by start, at most `limit`.
+    func searchProgrammes(words: [String], refs: Set<EPGRef>, interval: DateInterval, limit: Int) async throws -> [Programme] {
+        let words = words.filter { !$0.isEmpty }
+        guard !words.isEmpty, !refs.isEmpty, limit > 0 else { return [] }
+        let title = Column("title")
+        let refMatch = refs
+            .map { Programme.Columns.sourceID == $0.sourceID && Programme.Columns.channelID == $0.epgID }
+            .joined(operator: .or)
+        return try await writer.read { db in
+            var request = Programme
+                .filter(refMatch)
+                .filter(Programme.Columns.start < interval.end && Programme.Columns.stop > interval.start)
+            for word in words {
+                request = request.filter(title.like("%\(Self.likeEscaped(word))%", escape: "\\"))
+            }
+            return try request.order(Programme.Columns.start).limit(limit).fetchAll(db)
+        }
+    }
+
+    /// `%`, `_` and the escape character itself match literally.
+    static func likeEscaped(_ word: String) -> String {
+        word.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
+    }
+
     /// Programme rows per GuideSource.id.
     func programmeCounts() async throws -> [String: Int] {
         try await writer.read { db in

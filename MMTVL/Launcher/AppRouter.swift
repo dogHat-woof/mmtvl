@@ -55,6 +55,10 @@ final class AppRouter {
     @ObservationIgnored var carouselInterval: Duration = Theme.carouselInterval
     /// M7c L28: "Version 1.1.0 Build 2" under the home clock; nil = hidden. Set live by AppDelegate.
     var homeVersionLabel: String?
+    /// M7f L8: the lowest Siri Remote battery percent beside the home clock; nil = hidden. Set by AppDelegate.
+    var remoteBatteryLevel: Int?
+    /// M7f L8: AppDelegate reads the battery again (the home screen appeared or its minute ticked).
+    @ObservationIgnored var onRefreshRemoteBattery: (() -> Void)?
     /// M7c L15: `settings.json` `homeLivePreview`, set live by AppDelegate.
     @ObservationIgnored var livePreviewEnabled = true {
         didSet { if livePreviewEnabled != oldValue { updateLivePreview() } }
@@ -272,6 +276,14 @@ final class AppRouter {
             scheduledPreviewID = nil
             if wantedPreviewChannelID == wanted { liveTV.startPreview(channelID: wanted) }
         }
+    }
+
+    /// M7f L5: the playlist was re-fetched (`IPTVLibrary.onLineupChange`). A preview whose channel left it stops, and
+    /// the default channel (else the first favorite) takes over; the Live TV pages reload around it.
+    func playlistDidChange() {
+        liveTV.playlistDidChange()
+        if screen == .home { topShelf.refresh(focusing: focusedItem) }
+        updateLivePreview()
     }
 
     private func cancelScheduledPreview() {
@@ -892,10 +904,14 @@ struct LauncherRootView: View {
                 revealsLivePreview: router.revealsLivePreview,
                 isLeaving: router.isLeavingHome,
                 versionLabel: router.homeVersionLabel,
+                remoteBatteryLevel: router.remoteBatteryLevel,
                 entryGeneration: router.homeEntryGeneration,
                 onHoverCard: router.hoverShelfCard,
                 onActivateCard: router.activateShelfCard,
-                onRefreshShelf: { router.topShelf.refresh(focusing: router.focusedItem) },
+                onRefreshShelf: {
+                    router.topShelf.refresh(focusing: router.focusedItem)
+                    router.onRefreshRemoteBattery?()
+                },
                 shelfImages: router.shelfImages,
                 onHover: router.hover,
                 onActivate: router.activate

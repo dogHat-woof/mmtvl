@@ -6,6 +6,8 @@ nonisolated struct PlayerState: Equatable, Sendable {
     enum Phase: Equatable, Sendable { case idle, loading, playing, paused, failed }
     var phase: Phase = .idle
     var timeshift: Timeshift?
+    /// M7f L3: the stream's resolution and frame rate, once mpv knows them.
+    var videoFormat: VideoFormat? = nil
 }
 
 /// What `LiveTVModel` needs from a player; tests use a fake.
@@ -68,6 +70,8 @@ final class MPVPlayerController: LivePlayer {
     @ObservationIgnored private var holdsSleep = true
     @ObservationIgnored private var bufferProfile = BufferProfile.full
     @ObservationIgnored private var loggedDecoder = false
+    /// M7f L3: the first format of each channel is logged once.
+    @ObservationIgnored private var loggedFormat = false
     /// M7c L27: when the current load (or retry) started; nil once its first frame is logged.
     @ObservationIgnored private var loadStartedAt: ContinuousClock.Instant?
     @ObservationIgnored private let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "MPV")
@@ -108,6 +112,7 @@ final class MPVPlayerController: LivePlayer {
         retryTask?.cancel()
         retries = 0
         currentURL = url
+        loggedFormat = false
         state = PlayerState(phase: .loading, timeshift: nil)
         load(url)
     }
@@ -296,12 +301,27 @@ final class MPVPlayerController: LivePlayer {
     }
 
     private func pollTimeshift() {
-        guard let mpv, let position = mpv.double("time-pos"), let json = mpv.string("demuxer-cache-state"),
+        guard let mpv else { return }
+        pollFormat(mpv)
+        guard let position = mpv.double("time-pos"), let json = mpv.string("demuxer-cache-state"),
               var timeshift = Timeshift.parse(cacheStateJSON: json, timePos: position)
         else { return }
         timeshift.liveEdge = liveEdge.liveEdge(cacheEnd: timeshift.cacheEnd, position: position,
                                                now: ProcessInfo.processInfo.systemUptime,
                                                steady: state.phase == .playing)
         if timeshift != state.timeshift { state.timeshift = timeshift }
+    }
+
+    /// M7f L3: mpv's values as they are (no field/frame conversion); a variant change shows within one poll.
+    private func pollFormat(_ mpv: MPVHandle) {
+        let format = VideoFormat.parse(width: mpv.string("video-params/w"), height: mpv.string("video-params/h"),
+                                       fps: mpv.string("container-fps") ?? mpv.string("estimated-vf-fps"),
+                                       interlaced: mpv.string("video-frame-info/interlaced"))
+        if format != state.videoFormat { state.videoFormat = format }
+        if !loggedFormat, let format {
+            loggedFormat = true
+            // Notice, so M7f step 4 can read it with `log show`.
+            logger.notice("Format \(format.label, privacy: .public) (player \(self.index))")
+        }
     }
 }

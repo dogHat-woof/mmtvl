@@ -737,6 +737,63 @@ struct LiveTVPreviewTests {
         #expect(model.previewChannelID == Self.nfl)
     }
 
+    /// M7f L5: an open that adopts the preview checks the playlist too, without touching playback.
+    @Test func adoptingThePreviewRefreshesAStalePlaylist() async throws {
+        let (model, player, fixture) = try await makeModel()
+        defer { fixture.cleanUp() }
+        model.startPreview(channelID: Self.nfl)
+        player.state.phase = .playing
+        let fetches = fixture.network.fetchCount
+        fixture.clock.advance(IPTVLibrary.playlistStaleness + 60)
+        model.open()
+        await model.adoptRefreshTask?.value
+        #expect(fixture.network.fetchCount == fetches + 1)
+        #expect(model.mode == .player)
+        #expect(player.played.count == 1)
+        #expect(player.stops == 0)
+        #expect(model.currentChannel?.id == Self.nfl)
+    }
+
+    /// M7f L5: the last channel only while it's in the playlist; else the first favorite; else nil.
+    @Test func defaultFallsBackToTheFirstFavorite() async throws {
+        let (present, _, presentFixture) = try await makeModel()
+        defer { presentFixture.cleanUp() }
+        #expect(present.defaultPreviewChannelID == Self.nfl)
+
+        let gone = IPTVState(lastChannelID: "id:gone")
+        let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL, state: gone,
+                                      preferences: ChannelPreferences(favorites: [Self.nba]))
+        defer { fixture.cleanUp() }
+        await fixture.library.refreshPlaylist()
+        let model = LiveTVModel(player: FakePlayer(), makePlayer: { FakePlayer() }, library: fixture.library)
+        #expect(model.defaultPreviewChannelID == Self.nba)
+
+        let (none, _, noneFixture) = try await makeModel(state: gone)
+        defer { noneFixture.cleanUp() }
+        #expect(none.defaultPreviewChannelID == nil)
+    }
+
+    /// M7f L5: a re-fetch that drops the preview's channel (a game ended) stops it; one still there keeps playing.
+    @Test func aPreviewWhoseChannelLeftThePlaylistStops() async throws {
+        let (model, player, fixture) = try await makeModel()
+        defer { fixture.cleanUp() }
+        let game = "id:lakers @ celtics"
+        model.startPreview(channelID: game)
+        #expect(model.previewChannelID == game)
+        model.playlistDidChange()
+        #expect(model.previewChannelID == game)
+        #expect(player.stops == 0)
+
+        let withoutGames = IPTVFixtures.playlist.components(separatedBy: "\n").prefix(7).joined(separator: "\n")
+        fixture.network.setText(withoutGames, for: IPTVFixtures.playlistURL)
+        await fixture.library.refreshPlaylist()
+        #expect(!fixture.library.channels.contains { $0.id == game })
+        model.playlistDidChange()
+        #expect(model.previewChannelID == nil)
+        #expect(player.stops == 1)
+        #expect(player.audible)
+    }
+
     @Test func defaultPrefersMultiviewsHighlightedWindow() async throws {
         let (plain, _, plainFixture) = try await makeModel()
         defer { plainFixture.cleanUp() }

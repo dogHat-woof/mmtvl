@@ -114,7 +114,8 @@ final class KioskWindowController {
         presentationTask = nil
         guard !windowed else { return }
         NSApp.presentationOptions = []
-        Self.logger.notice("In the background; presentation options cleared")
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "none"
+        Self.logger.notice("In the background (front: \(front, privacy: .public)); presentation options cleared")
     }
 
     func appDidBecomeActive() {

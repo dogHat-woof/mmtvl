@@ -7,6 +7,8 @@ import os
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "AppDelegate")
     private static let phoneLogger = Logger(subsystem: "dev.mmtvl.launcher", category: "PhoneRemote")
+    /// M7f L1: display sleep and wake and screen changes (notice level, kept in the log store).
+    private static let displayLogger = Logger(subsystem: "dev.mmtvl.launcher", category: "Display")
 
     private let launcher = AppLauncher()
     private var youtube: YouTubeController?
@@ -17,12 +19,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsFile: JSONConfigFile<AppSettings>?
     private var bindingsFile: JSONConfigFile<[InputBinding]>?
     private var accessibilityWaitTask: Task<Void, Never>?
+    /// M7f L5 (D40): the playlist and guide check every 15 minutes.
+    private var iptvRefreshTask: Task<Void, Never>?
+    /// M7f L13: the Teams group's 5-minute tick (network channels follow the programme on now).
+    private var teamsRefreshTask: Task<Void, Never>?
+    /// M7f L8: reads the Siri Remote battery every 5 minutes.
+    private var remoteBatteryTask: Task<Void, Never>?
     private var inputRouter: InputRouter?
     private var router: AppRouter?
     private var windowController: KioskWindowController?
     private var eventTap: GlobalEventTap?
     private var controllers: ControllerInput?
     private var wakeObserver: NSObjectProtocol?
+    private var displayObservers: [NSObjectProtocol] = []
     private var remoteServer: RemoteServer?
     private var phoneRemote: PhoneRemote?
     private var volume: VolumeController?
@@ -76,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         let iptvLibrary = makeIPTVLibrary(directory: directory)
+        iptvLibrary.usePlaylistGuide = settings.usePlaylistGuide
         self.iptvLibrary = iptvLibrary
         let plex = PlexAccount(network: .live,
                                configFile: JSONConfigFile(url: directory.appending(path: PlexConfig.fileName),
@@ -129,6 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if router?.screen == .youtube { router?.goHomeToStartTile() }
         }
         iptvLibrary.onStatusChange = { [weak router] in router?.settings.refreshStatus() }
+        iptvLibrary.onLineupChange = { [weak router] in router?.playlistDidChange() }
         plex.onChange = { [weak router] in
             router?.settings.refreshStatus()
             router?.shelfContentChanged()
@@ -155,6 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         router.homeExitDelay = Theme.homeExitDuration
         router.isAppActive = NSApp.isActive
         observeScreensSleep()
+        observeScreenParameters()
         inputRouter.start()
 
         // L2: global input is off in -windowed mode, so the dev Mac keeps its Home key.
@@ -167,6 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if kiosk {
             LoginItem.apply(enabled: settings.launchAtLogin)
             observeWake()
+            observeDisplayWake()
             observePowerOff()
         }
         updateKioskLock()
@@ -183,6 +196,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await iptvLibrary.refreshGuideIfStale()
             }
         }
+        startIPTVRefreshTimer()
+        startRemoteBatteryPolling()
+    }
+
+    /// M7f L8: at launch, every 5 minutes, and when the home screen appears (`AppRouter.onRefreshRemoteBattery`).
+    private func startRemoteBatteryPolling() {
+        router?.onRefreshRemoteBattery = { [weak self] in self?.refreshRemoteBattery() }
+        refreshRemoteBattery()
+        remoteBatteryTask?.cancel()
+        remoteBatteryTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5 * 60))
+                guard !Task.isCancelled else { return }
+                self?.refreshRemoteBattery()
+            }
+        }
+    }
+
+    private func refreshRemoteBattery() {
+        let level = RemoteBattery.current()
+        if router?.remoteBatteryLevel != level { router?.remoteBatteryLevel = level }
+    }
+
+    /// M7f L5 (D40): every 15 minutes the playlist (10 min staleness), then the guides (12 h), in windowed mode too.
+    /// A source pasted later is picked up by the next tick.
+    private func startIPTVRefreshTimer() {
+        iptvRefreshTask?.cancel()
+        iptvRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(IPTVLibrary.autoRefreshInterval))
+                guard !Task.isCancelled, let library = self?.iptvLibrary else { return }
+                if library.hasPlaylist { await library.refreshIfStale() }
+            }
+        }
+        teamsRefreshTask?.cancel()
+        teamsRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(IPTVLibrary.teamsRefreshInterval))
+                guard !Task.isCancelled, let library = self?.iptvLibrary else { return }
+                if !library.preferences.teams.isEmpty { await library.updateTeams() }
+            }
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        iptvRefreshTask?.cancel()
+        teamsRefreshTask?.cancel()
+        remoteBatteryTask?.cancel()
     }
 
     /// M7 L7: an older `key-bindings.json` gets the defaults of the new commands once (only triggers not bound yet).
@@ -222,12 +283,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .media(let media): SyntheticInput.postMediaKey(media)
                 }
             },
-            typeEdit: { edit in
+            // M7f L11: in Live TV, phone text types into its search (no synthetic events); YouTube gets keys.
+            typeEdit: { [weak self, weak router] edit in
+                if router?.screen == .liveTV, NSApp.isActive {
+                    self?.liveTV?.typeText(edit)
+                    return
+                }
                 SyntheticInput.deleteBackward(edit.deletions)
                 SyntheticInput.type(edit.insertion)
             },
-            postReturn: { SyntheticInput.postKey(CGKeyCode(kVK_Return)) },
-            launcherAcceptsText: { [weak router] in router?.screen == .youtube },
+            postReturn: { [weak self, weak router] in
+                if router?.screen == .liveTV, NSApp.isActive {
+                    self?.liveTV?.submitText()
+                    return
+                }
+                SyntheticInput.postKey(CGKeyCode(kVK_Return))
+            },
+            launcherAcceptsText: { [weak router] in router?.screen == .youtube || router?.screen == .liveTV },
             frontAppName: { NSWorkspace.shared.frontmostApplication?.localizedName ?? "Mac" },
             volume: { [weak volume] action in volume?.perform(action) ?? .unavailable("Volume can't be changed here") },
             now: { Date() },
@@ -464,6 +536,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // M6b: one line per guide. Labels may show a guide's file name, never its query (L2).
+        // M7f L4: then the pasted guides kept while the playlist's guide is used.
+        let inUse = Set(library.guideSources.map(\.id))
+        let unused = library.customGuideSources.filter { !inUse.contains($0.id) }.map { source in
+            IPTVSettingsStatus.GuideSourceStatus(id: source.id, label: source.label, line: "Not in use (kept)",
+                                                 isFromPlaylist: false, isInUse: false)
+        }
+        status.playlistNamesGuide = library.playlistNamesGuide
         status.guideSources = library.guideSources.map { source in
             let info = library.guideSourceInfo[source.id] ?? IPTVLibrary.GuideSourceInfo()
             func summary(_ updated: String) -> String {
@@ -478,7 +557,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return IPTVSettingsStatus.GuideSourceStatus(id: source.id, label: source.label, line: line,
                                                         isFromPlaylist: source.isFromPlaylist)
-        }
+        } + unused
         status.customGuideCount = library.customGuideCount
         status.matchedChannelCount = library.matchedChannelCount
 
@@ -492,6 +571,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.hiddenChannels = library.channels.filter { hiddenChannels.contains($0.id) }.map { channel in
             IPTVSettingsStatus.HiddenChannelStatus(id: channel.id, number: channel.number, name: channel.name, group: channel.group)
         }
+        status.teams = library.preferences.teams
         return status
     }
 
@@ -543,6 +623,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// M7f L1: display wake only logs (no foreground repair, no Home; D18's go-home stays for system wake).
+    private func observeDisplayWake() {
+        displayObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main
+        ) { _ in
+            Self.displayLogger.notice("Displays woke")
+        })
+    }
+
+    /// M7f L1: logs screen changes; `KioskWindowController` still does the refit.
+    private func observeScreenParameters() {
+        displayObservers.append(NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                let screens = NSScreen.screens
+                let size = screens.first?.frame.size ?? .zero
+                Self.displayLogger.notice("Screen parameters changed: \(screens.count) screens, main \(Int(size.width))×\(Int(size.height))")
+            }
+        })
+    }
+
     private func systemDidWake() {
         Task {
             try? await Task.sleep(for: .seconds(2))
@@ -554,6 +656,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             castReceiver?.restart()
             reflector?.systemDidWake()
+            // M7f L5 (D40): the network may need a moment; a failure is logged and the next tick retries.
+            if let library = iptvLibrary, library.hasPlaylist { await library.refreshIfStale() }
         }
     }
 
@@ -576,6 +680,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let center = NSWorkspace.shared.notificationCenter
         screensSleepObservers = [NSWorkspace.screensDidSleepNotification, NSWorkspace.willSleepNotification].map { name in
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                if name == NSWorkspace.screensDidSleepNotification { Self.displayLogger.notice("Displays slept") }
                 MainActor.assumeIsolated { self?.router?.screensDidSleep() }
             }
         }
@@ -662,6 +767,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         router?.startTileID = new.homeStartTile
         router?.livePreviewEnabled = new.homeLivePreview
         router?.homeVersionLabel = new.showVersionOnHome ? AppVersion.current.label : nil
+        if new.usePlaylistGuide != old.usePlaylistGuide, let iptvLibrary {
+            Task { await iptvLibrary.applyUsePlaylistGuide(new.usePlaylistGuide) }
+        }
         updateKioskLock()
         if kiosk && new.launchAtLogin != old.launchAtLogin {
             LoginItem.apply(enabled: new.launchAtLogin)
@@ -796,6 +904,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             setIPTVGroupHidden: { [weak self] name, hidden in self?.iptvLibrary?.setGroupHidden(name, hidden) },
             unhideIPTVChannel: { [weak self] id in self?.iptvLibrary?.setChannelHidden(id, false) },
+            setTeamPicked: { [weak self] id, picked in self?.iptvLibrary?.setTeamPicked(id, picked) },
             refreshIPTV: { [weak self] in
                 guard let library = self?.iptvLibrary else { return }
                 Task { await library.refreshAll() }

@@ -172,18 +172,7 @@ final class ReflectorMonitor {
     private func poll() {
         guard let app = runningApplication else { return }
         let pid = app.processIdentifier
-        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
-            as? [[String: Any]] ?? []
-        let windows = list.compactMap { info -> WindowSnapshot? in
-            guard (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
-                  let boundsInfo = info[kCGWindowBounds as String] as? NSDictionary,
-                  let bounds = CGRect(dictionaryRepresentation: boundsInfo as CFDictionary)
-            else { return nil }
-            return WindowSnapshot(pid: pid,
-                                  layer: (info[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0,
-                                  alpha: (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1,
-                                  bounds: bounds)
-        }
+        let windows = WindowSnapshot.onScreen(pid: pid)
         let screen = Self.mainScreen
         switch detector.update(windows: windows, screen: screen) {
         case .began:

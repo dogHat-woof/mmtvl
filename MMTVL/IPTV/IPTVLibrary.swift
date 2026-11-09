@@ -16,6 +16,8 @@ final class IPTVLibrary {
 
     static let playlistStaleness: TimeInterval = 10 * 60
     static let guideStaleness: TimeInterval = 12 * 3600
+    /// M7f L5 (D40): while MMTVL runs, `refreshIfStale()` runs this often (and after wake).
+    static let autoRefreshInterval: TimeInterval = 15 * 60
     static let maxGuideSources = 6
 
     private(set) var channels: [Channel] = []
@@ -30,6 +32,11 @@ final class IPTVLibrary {
     private(set) var preferences: ChannelPreferences
     /// What Live TV lists show (M6b L11); recomputed when channels or preferences change.
     private(set) var lineup = ChannelLineup(channels: [])
+    /// M7f L13: the Teams group's channels (`TeamMatcher`), recomputed by `updateTeams()`.
+    @ObservationIgnored private(set) var teamChannelIDs: [Channel.ID] = []
+    /// M7f L13: the update started by picking a team; tests await it.
+    @ObservationIgnored private(set) var teamUpdateTask: Task<Void, Never>?
+    static let teamsRefreshInterval: TimeInterval = 5 * 60
     /// The guides in use, in priority order (M6b L1): the pasted ones, else the playlist's.
     private(set) var guideSources: [GuideSource] = []
     /// By GuideSource.id.
@@ -42,9 +49,16 @@ final class IPTVLibrary {
     @ObservationIgnored private var isImportingGuide = false
     /// AppDelegate → settings.refreshStatus().
     @ObservationIgnored var onStatusChange: (() -> Void)?
+    /// M7f L5: the lineup changed (a re-fetch, or favorites and hiding); AppDelegate → `AppRouter.playlistDidChange()`.
+    @ObservationIgnored var onLineupChange: (() -> Void)?
 
     private var playlistURL: URL?
     private var customGuideURLs: [URL] = []
+    /// M7f L4: `settings.json` `usePlaylistGuide`, set by AppDelegate at launch (live changes:
+    /// `applyUsePlaylistGuide`).
+    var usePlaylistGuide = false {
+        didSet { updateGuideSources() }
+    }
 
     @ObservationIgnored private let sources: IPTVSourceStore
     @ObservationIgnored private let store: EPGStore?
@@ -92,6 +106,12 @@ final class IPTVLibrary {
     /// Pasted guides (the playlist's don't count).
     var customGuideCount: Int { customGuideURLs.count }
 
+    /// M7f L4: every pasted guide, in priority order, whether in use or not.
+    var customGuideSources: [GuideSource] { customGuideURLs.map { GuideSource(url: $0, isFromPlaylist: false) } }
+
+    /// M7f L4: the playlist's header names a guide (`url-tvg` / `x-tvg-url`).
+    var playlistNamesGuide: Bool { !playlistGuideURLs.isEmpty }
+
     /// Playlist channels with guide data.
     var matchedChannelCount: Int { epgMatches.count }
 
@@ -129,7 +149,7 @@ final class IPTVLibrary {
             updateGuideSources()
             updateLineup()
             lastPlaylistFetch = now()
-            logger.info("Loaded \(self.channels.count) channels from \(url.host() ?? "?", privacy: .public)")
+            logger.notice("Loaded \(self.channels.count) channels from \(url.host() ?? "?", privacy: .public)")
             await rematch()
             setPlaylistStatus(.loaded(now()))
         } catch {
@@ -143,6 +163,13 @@ final class IPTVLibrary {
         if channels.isEmpty || lastPlaylistFetch.map({ now().timeIntervalSince($0) > Self.playlistStaleness }) ?? true {
             await refreshPlaylist()
         }
+    }
+
+    /// M7f L5 (D40): the timer's and wake's check. The playlist goes first, so a guide import never runs with no
+    /// channels.
+    func refreshIfStale() async {
+        await refreshPlaylistIfStale()
+        await refreshGuideIfStale()
     }
 
     /// Every guide (Refresh Now). Idle when there is no guide.
@@ -274,6 +301,20 @@ final class IPTVLibrary {
         }
     }
 
+    /// M7f L4: switches between the playlist's guide and the pasted ones. The guides no longer in use are pruned
+    /// (their URLs stay in the Keychain); the newly used ones import if stale.
+    func applyUsePlaylistGuide(_ use: Bool) async {
+        guard use != usePlaylistGuide else { return }
+        let before = guideSources
+        usePlaylistGuide = use
+        logger.info("Guide source: \(use ? "the playlist's guide" : "the pasted guides", privacy: .public)")
+        guard guideSources != before else { return }
+        await pruneUnusedGuides()
+        await rematch()
+        onStatusChange?()
+        await refreshGuideIfStale()
+    }
+
     /// Moves a pasted guide up (−1) or down (+1) in priority, and rematches (no download).
     func moveGuideSource(_ id: String, by step: Int) async {
         guard let index = customGuideURLs.firstIndex(where: { Self.hash($0) == id }) else { return }
@@ -306,6 +347,7 @@ final class IPTVLibrary {
         guideSources = []
         guideSourceInfo = [:]
         queuedSourceIDs = []
+        teamChannelIDs = []
         updateLineup()    // preferences are kept (M6b L5)
         lastPlaylistFetch = nil
         guideProgrammeCount = 0
@@ -471,11 +513,75 @@ final class IPTVLibrary {
         }
     }
 
+    /// M7f L12: programmes of these channels whose title has every word, overlapping `interval`, sorted by start;
+    /// one result per channel when a guide channel serves several. At most `limit`.
+    func searchProgrammes(words: [String], channels: [Channel], in interval: DateInterval,
+                          limit: Int) async -> [(channel: Channel, programme: Programme)] {
+        guard let store else { return [] }
+        var channelsByRef: [EPGRef: [Channel]] = [:]
+        for channel in channels {
+            if let ref = epgMatches[channel.id] { channelsByRef[ref, default: []].append(channel) }
+        }
+        guard !channelsByRef.isEmpty else { return [] }
+        do {
+            let programmes = try await store.searchProgrammes(words: words, refs: Set(channelsByRef.keys),
+                                                              interval: interval, limit: limit)
+            let results = programmes.flatMap { programme in
+                (channelsByRef[EPGRef(sourceID: programme.sourceID, epgID: programme.channelID)] ?? [])
+                    .map { (channel: $0, programme: programme) }
+            }
+            return Array(results.prefix(limit))
+        } catch is CancellationError {
+            return []
+        } catch {
+            logger.error("Guide search failed: \(error.localizedDescription, privacy: .public)")
+            return []
+        }
+    }
+
     func nowNext(for channel: Channel, at date: Date) async -> (now: Programme?, next: Programme?) {
         let programmes = await programmes(for: [channel], in: DateInterval(start: date, duration: 24 * 3600))[channel.id] ?? []
         let current = programmes.first { $0.start <= date && date < $0.stop }
         let next = programmes.first { $0.start >= (current?.stop ?? date) }
         return (current, next)
+    }
+
+    // MARK: - Teams (M7f L13)
+
+    func isTeamPicked(_ id: Team.ID) -> Bool {
+        preferences.teams.contains(id)
+    }
+
+    /// Picks or unpicks a team (Settings, the guide's channel menu); the Teams group follows.
+    func setTeamPicked(_ id: Team.ID, _ picked: Bool) {
+        guard picked != isTeamPicked(id), TeamCatalog.byID[id] != nil else { return }
+        updatePreferences { preferences in
+            if picked {
+                preferences.teams.append(id)
+            } else {
+                preferences.teams.removeAll { $0 == id }
+            }
+        }
+        teamUpdateTask = Task { await updateTeams() }
+    }
+
+    /// The Teams group: game entries by name, network channels by the programme on now. After each playlist
+    /// refresh, guide import or rematch, a team picked, and every 5 minutes (AppDelegate). Sets the lineup on change.
+    func updateTeams() async {
+        let picked = Set(preferences.teams)
+        var nowPlaying: [Channel.ID: Programme] = [:]
+        if !picked.isEmpty {
+            let date = now()
+            let networks = channels.filter { !TeamMatcher.isGameGroup($0.group) && epgMatches[$0.id] != nil }
+            let programmes = await programmes(for: networks, in: DateInterval(start: date, duration: 1))
+            for (id, list) in programmes {
+                nowPlaying[id] = list.first { $0.start <= date && date < $0.stop }
+            }
+        }
+        let ids = TeamMatcher.channelIDs(channels: channels, nowPlaying: nowPlaying, picked: picked)
+        guard ids != teamChannelIDs else { return }
+        teamChannelIDs = ids
+        updateLineup()
     }
 
     // MARK: - Private
@@ -499,6 +605,7 @@ final class IPTVLibrary {
             guideSourceInfo[source.id, default: GuideSourceInfo()].matchedChannels = matched[source.id] ?? 0
         }
         guideRevision += 1
+        await updateTeams()
     }
 
     /// Deletes the rows of guides no longer in use, and their bookkeeping.
@@ -531,10 +638,12 @@ final class IPTVLibrary {
     }
 
     /// M6b L1: the pasted guides when there are any, else the playlist's.
+    /// M7f L4: with `usePlaylistGuide`, the playlist's when it names one.
     private func updateGuideSources() {
-        guideSources = customGuideURLs.isEmpty
+        let usesPlaylist = customGuideURLs.isEmpty || (usePlaylistGuide && !playlistGuideURLs.isEmpty)
+        guideSources = usesPlaylist
             ? playlistGuideURLs.map { GuideSource(url: $0, isFromPlaylist: true) }
-            : customGuideURLs.map { GuideSource(url: $0, isFromPlaylist: false) }
+            : customGuideSources
     }
 
     private func updateProgrammeCount() {
@@ -554,8 +663,10 @@ final class IPTVLibrary {
     }
 
     private func updateLineup() {
-        let lineup = ChannelLineup(channels: channels, preferences: preferences)
-        if lineup != self.lineup { self.lineup = lineup }
+        let lineup = ChannelLineup(channels: channels, preferences: preferences, teamChannelIDs: teamChannelIDs)
+        guard lineup != self.lineup else { return }
+        self.lineup = lineup
+        onLineupChange?()
     }
 
     private func setPlaylistStatus(_ status: Status) {

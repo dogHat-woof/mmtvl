@@ -155,6 +155,69 @@ struct MultiviewModelTests {
         #expect(grid.focusedSlot == 1)
     }
 
+    // MARK: rotate (M7f L6)
+
+    @Test func rotateMovesEveryChannelThroughTheMainWindow() {
+        var right = MultiviewModel(layout: .onePlusFour, slots: ["a", "b", "c", "d", "e"])
+        let rotated1 = right.rotate(by: 1)
+        #expect(rotated1)
+        #expect(right.slots == ["b", "c", "d", "e", "a"])
+        #expect(right.focusedSlot == 0)
+        #expect(right.audioSlot == 0)
+        #expect(right.audioChannelID == "b")
+
+        var left = MultiviewModel(layout: .onePlusFour, slots: ["a", "b", "c", "d", "e"])
+        let rotated2 = left.rotate(by: -1)
+        #expect(rotated2)
+        #expect(left.slots == ["e", "a", "b", "c", "d"])
+        #expect(left.focusedSlot == 0)
+        #expect(left.audioChannelID == "e")
+
+        var pip = MultiviewModel(layout: .pictureInPicture, slots: ["a", "b"])
+        let rotated3 = pip.rotate(by: 1)
+        #expect(rotated3)
+        #expect(pip.slots == ["b", "a"])
+    }
+
+    @Test func rotateSkipsEmptyWindows() {
+        var model = MultiviewModel(layout: .onePlusFour, slots: ["a", "b", nil, "d", nil])
+        let rotated4 = model.rotate(by: 1)
+        #expect(rotated4)
+        #expect(model.slots == ["b", "d", nil, "a", nil])
+        let rotated5 = model.rotate(by: -1)
+        #expect(rotated5)
+        #expect(model.slots == ["a", "b", nil, "d", nil])
+    }
+
+    @Test func rotateNeedsAMainWindowAndTwoChannels() {
+        var grid = MultiviewModel(layout: .grid, slots: ["a", "b", "c", "d"])
+        let rotated6 = grid.rotate(by: 1)
+        #expect(rotated6 == false)
+        #expect(grid.slots == ["a", "b", "c", "d"])
+
+        var sideBySide = MultiviewModel(layout: .sideBySide, slots: ["a", "b"])
+        let rotated7 = sideBySide.rotate(by: -1)
+        #expect(rotated7 == false)
+        #expect(sideBySide.slots == ["a", "b"])
+
+        var single = MultiviewModel(layout: .onePlusFour, slots: ["a"])
+        let rotated8 = single.rotate(by: 1)
+        #expect(rotated8 == false)
+        #expect(single.slots == ["a", nil, nil, nil, nil])
+    }
+
+    @Test func focusSetsTheHighlightAndSoundFollowsAFilledWindow() {
+        var model = MultiviewModel(layout: .onePlusThree, slots: ["a", "b"])
+        model.focus(1)
+        #expect(model.focusedSlot == 1)
+        #expect(model.audioSlot == 1)
+        model.focus(2)
+        #expect(model.focusedSlot == 2)
+        #expect(model.audioSlot == 1)
+        model.focus(9)
+        #expect(model.focusedSlot == 2)
+    }
+
     // MARK: remove
 
     @Test func remove() {

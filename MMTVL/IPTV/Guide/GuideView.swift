@@ -26,9 +26,15 @@ struct GuideView: View {
                 rows(now: now)
                     .offset(x: Theme.sideMargin, y: Theme.guideGridTop + Theme.guideTimeHeaderHeight)
                 nowLine(now: now)
-                if case .groups(let index) = model.focus {
+                switch model.focus {
+                case .groups(let index):
                     groupPanel(focused: index)
                         .offset(x: Theme.sideMargin, y: Theme.guideGridTop)
+                case .search:
+                    groupPanel(focused: nil)
+                        .offset(x: Theme.sideMargin, y: Theme.guideGridTop)
+                case .grid, .channel:
+                    EmptyView()
                 }
                 Text(Self.hint(focus: model.focus, isPicking: isPicking))
                     .font(Theme.settingsHintFont)
@@ -48,6 +54,7 @@ struct GuideView: View {
         case (.channel, false): "Select: options · Left: groups · Right: programmes · Back: leave Live TV"
         case (.channel, true): "Select: show in window · Left: groups · Right: programmes · Back: cancel"
         case (.groups, _): "Select: show group · Back: close list"
+        case (.search, _): "Select: search channels and programmes · Back: close list"
         }
     }
 
@@ -208,16 +215,12 @@ struct GuideView: View {
 
     // MARK: Groups
 
-    private func groupPanel(focused: Int) -> some View {
+    /// `focused` nil: the Search row (M7f L12) is focused.
+    private func groupPanel(focused: Int?) -> some View {
         VStack(alignment: .leading, spacing: Theme.settingsRowSpacing) {
+            groupRow(Label("Search", systemImage: "magnifyingglass"), isFocused: focused == nil)
             ForEach(Array(model.groups.enumerated()), id: \.offset) { index, group in
-                Text(group)
-                    .font(Theme.guideChannelFont)
-                    .foregroundStyle(index == focused ? Theme.focusedRowText : Theme.primaryText)
-                    .padding(.horizontal, 20)
-                    .frame(width: Theme.guideGroupPanelWidth - 40, height: Theme.guideRowHeight - 16, alignment: .leading)
-                    .background(index == focused ? Theme.focusedRowFill : Color.clear,
-                                in: RoundedRectangle(cornerRadius: Theme.guideCellCornerRadius))
+                groupRow(Text(group), isFocused: index == focused)
             }
             Spacer(minLength: 0)
         }
@@ -226,5 +229,15 @@ struct GuideView: View {
                height: Theme.guideTimeHeaderHeight + CGFloat(GuideModel.visibleRows) * Theme.guideRowHeight,
                alignment: .topLeading)
         .glassPanel()
+    }
+
+    private func groupRow(_ label: some View, isFocused: Bool) -> some View {
+        label
+            .font(Theme.guideChannelFont)
+            .foregroundStyle(isFocused ? Theme.focusedRowText : Theme.primaryText)
+            .padding(.horizontal, 20)
+            .frame(width: Theme.guideGroupPanelWidth - 40, height: Theme.guideRowHeight - 16, alignment: .leading)
+            .background(isFocused ? Theme.focusedRowFill : Color.clear,
+                        in: RoundedRectangle(cornerRadius: Theme.guideCellCornerRadius))
     }
 }

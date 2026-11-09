@@ -15,6 +15,8 @@ extension SettingsModel {
         case .guideSource(let id): guideSourceSections(id: id)
         case .iptvGroups: iptvGroupsSections
         case .iptvHiddenChannels: iptvHiddenChannelsSections
+        case .iptvTeams: iptvTeamsSections
+        case .iptvLeague(let league): iptvLeagueSections(league)
         case .phoneRemote: phoneRemoteSections
         case .pairPhone: pairPhoneSections
         case .confirmForgetPhones: confirmForgetPhonesSections
@@ -46,6 +48,8 @@ extension SettingsModel {
         case .guideSource(let id): guideSource(id: id)?.label ?? "Guide"
         case .iptvGroups: "Groups"
         case .iptvHiddenChannels: "Hidden Channels"
+        case .iptvTeams: "Teams"
+        case .iptvLeague(let league): league.title
         case .phoneRemote: "Phone Remote"
         case .pairPhone: "Pair a Phone"
         case .confirmForgetPhones: "Forget All Phones?"
@@ -77,6 +81,7 @@ extension SettingsModel {
         case .guideSource: .symbol("list.bullet.rectangle")
         case .iptvGroups: .symbol("folder")
         case .iptvHiddenChannels: .symbol("eye.slash")
+        case .iptvTeams, .iptvLeague: .symbol("sportscourt")
         case .phoneRemote: .symbol("iphone")
         case .pairPhone: phoneRemote.pairingURL.map(RowImage.qrCode) ?? .symbol("iphone")
         case .confirmForgetPhones: .symbol("iphone.slash")
@@ -93,7 +98,7 @@ extension SettingsModel {
 
     var hint: String {
         switch page {
-        case .root, .tile, .liveTV, .phoneRemote, .guideSource, .iptvGroups, .iptvHiddenChannels,
+        case .root, .tile, .liveTV, .phoneRemote, .guideSource, .iptvGroups, .iptvHiddenChannels, .iptvTeams, .iptvLeague,
              .remoteButtons, .remoteCommand, .remoteBinding, .plex, .plexServers, .tileArt, .casting:
             "Select: choose · Back: return"
         case .plexLink: "Back: cancel"
@@ -450,10 +455,18 @@ extension SettingsModel {
 
     /// M6b L1: the guides in priority order; pasted ones open their own page.
     private var guidesSection: SettingsSection {
-        var rows = iptv.guideSources.enumerated().map { index, source in
+        var rows: [SettingsRow] = []
+        // M7f L4: a choice only when the playlist names a guide and one is pasted.
+        if iptv.playlistNamesGuide && iptv.customGuideCount > 0 {
+            rows.append(SettingsRow(id: "iptv.guideSource", title: "Guide Source",
+                                    value: settings.usePlaylistGuide ? "Playlist" : "Pasted Guides",
+                                    detail: "Your pasted guides are kept while the playlist's is used",
+                                    action: .toggle(.usePlaylistGuide)))
+        }
+        rows += iptv.guideSources.enumerated().map { index, source in
             SettingsRow(id: "iptv.guide.\(source.id)", title: source.label,
-                        value: source.isFromPlaylist ? "From Playlist" : "\(index + 1)", detail: source.line,
-                        showsDisclosure: !source.isFromPlaylist,
+                        value: source.isFromPlaylist ? "From Playlist" : source.isInUse ? "\(index + 1)" : "Off",
+                        detail: source.line, showsDisclosure: !source.isFromPlaylist, isDimmed: !source.isInUse,
                         action: source.isFromPlaylist ? nil : .push(.guideSource(id: source.id)))
         }
         if rows.isEmpty {
@@ -478,6 +491,9 @@ extension SettingsModel {
             SettingsRow(id: "iptv.hiddenChannels", title: "Hidden Channels",
                         value: iptv.hiddenChannels.isEmpty ? "None" : "\(iptv.hiddenChannels.count)",
                         showsDisclosure: true, action: .push(.iptvHiddenChannels)),
+            SettingsRow(id: "iptv.teams", title: "Teams", value: Self.teamCountLabel(iptv.teams.count),
+                        detail: "Live games and channels of your teams, in the guide's Teams group",
+                        showsDisclosure: true, action: .push(.iptvTeams)),
         ], footer: "To favorite, hide or match one channel: in the guide, press Left on the programme airing now, then Select.")
     }
 
@@ -489,6 +505,36 @@ extension SettingsModel {
         }
         return [SettingsSection(id: "groups", rows: rows,
                                 footer: "Hidden groups and their channels don't show in the guide or when changing channels.")]
+    }
+
+    /// M7f L13: "None", "1 Team", "3 Teams".
+    static func teamCountLabel(_ count: Int) -> String {
+        switch count {
+        case 0: "None"
+        case 1: "1 Team"
+        default: "\(count) Teams"
+        }
+    }
+
+    /// M7f L13: one row per league, with how many of its teams are picked.
+    private var iptvTeamsSections: [SettingsSection] {
+        let picked = Set(iptv.teams)
+        let rows = TeamLeague.allCases.map { league in
+            let count = TeamCatalog.teams(in: league).count { picked.contains($0.id) }
+            return SettingsRow(id: "league.\(league.rawValue)", title: league.title, value: count == 0 ? "None" : "\(count)",
+                               showsDisclosure: true, action: .push(.iptvLeague(league)))
+        }
+        return [SettingsSection(id: "leagues", rows: rows,
+                                footer: "The guide's Teams group shows your teams' live games (both feeds, your team's first) and channels showing them now. You can also add a team from a game: in the guide, press Left on the programme airing now, then Select.")]
+    }
+
+    private func iptvLeagueSections(_ league: TeamLeague) -> [SettingsSection] {
+        let picked = Set(iptv.teams)
+        let rows = TeamCatalog.teams(in: league).map { team in
+            SettingsRow(id: "team.\(team.id)", title: team.name, value: picked.contains(team.id) ? "On" : nil,
+                        action: .toggleTeam(id: team.id))
+        }
+        return [SettingsSection(id: "teams", rows: rows, footer: "Select a team to add or remove it.")]
     }
 
     private var iptvHiddenChannelsSections: [SettingsSection] {

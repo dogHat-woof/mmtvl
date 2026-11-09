@@ -164,13 +164,71 @@ struct MultiviewLiveTVTests {
         #expect(tile.audible == false)
         #expect(model.banner?.channel.name == "NFL Network")
 
+        // M7f L6: Down from the main window goes to the first small window.
         _ = model.handle(.down)
+        #expect(model.multiview?.focusedSlot == 1)
+        #expect(tile.audible)
+        #expect(setup.player.audible == false)
+        #expect(model.banner?.channel.name == "NBA TV")
+
+        // From a small window the arrows move the highlight as before; sound stays on a filled window.
+        _ = model.handle(.right)
         #expect(model.multiview?.focusedSlot == 2)
-        #expect(setup.player.audible)
+        #expect(tile.audible)
         #expect(model.banner == nil)
+    }
+
+    /// M7f L6: Left/Right on the main window rotate the channels through it, without a new player or stream.
+    @Test func leftRightOnTheMainWindowRotateTheChannels() async throws {
+        let setup = try await makeSetup()
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        fillOnePlusFour(setup)
+        for _ in 0..<3 where model.multiview?.focusedSlot != 0 { _ = model.handle(.up) }
+        #expect(model.multiview?.focusedSlot == 0)
+        let before = try #require(model.multiview?.slots.compactMap { $0 })
+        #expect(before.count == 5)
+        let made = setup.factory.made.count
+        let plays = allPlayers(setup).map(\.played.count)
 
         _ = model.handle(.right)
-        #expect(model.multiview?.focusedSlot == 3)
+        let rotated = Array(before.dropFirst()) + [before[0]]
+        #expect(model.multiview?.slots == rotated)
+        #expect(model.multiview?.focusedSlot == 0)
+        #expect(model.multiview?.audioSlot == 0)
+        #expect(setup.factory.made.count == made)
+        #expect(allPlayers(setup).map(\.played.count) == plays)
+        let main = try #require(model.tilePlayers[rotated[0]] as? FakePlayer)
+        #expect(main.audible)
+        #expect(model.tilePlayers.values.compactMap { $0 as? FakePlayer }.filter(\.audible).count == 1)
+        #expect(model.banner?.channel.id == rotated[0])
+        #expect(setup.fixture.library.state.multiview?.slots == rotated)
+
+        _ = model.handle(.left)
+        #expect(model.multiview?.slots == before)
+        #expect(allPlayers(setup).map(\.played.count) == plays)
+    }
+
+    /// M7f L6: in 1 + 3 (where Down from the main window used to do nothing) it reaches the first small window.
+    @Test func downFromTheMainWindowInOnePlusThree() async throws {
+        let setup = try await makeSetup()
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, Self.nba)
+        _ = model.handle(.select)
+        choose(model, "layout")
+        choose(model, "layout.onePlusThree")
+        #expect(model.multiview?.layout == .onePlusThree)
+        _ = model.handle(.left)
+        #expect(model.multiview?.focusedSlot == 0)
+        _ = model.handle(.down)
+        #expect(model.multiview?.focusedSlot == 1)
+        #expect(model.multiview?.audioChannelID == Self.nba)
+        // Up from the main window: nothing.
+        _ = model.handle(.left)
+        #expect(model.multiview?.focusedSlot == 0)
+        _ = model.handle(.up)
+        #expect(model.multiview?.focusedSlot == 0)
     }
 
     @Test func transportActsOnTheHighlightedWindow() async throws {

@@ -8,6 +8,22 @@ nonisolated struct WindowSnapshot: Equatable, Sendable {
     var alpha: Double
     /// CGWindowList coordinates (top-left origin).
     var bounds: CGRect
+
+    /// The on-screen windows of `pid`, all layers (M7f L1; moved out of `ReflectorMonitor.poll()`).
+    static func onScreen(pid: pid_t) -> [WindowSnapshot] {
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        return list.compactMap { info -> WindowSnapshot? in
+            guard (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
+                  let boundsInfo = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsInfo as CFDictionary)
+            else { return nil }
+            return WindowSnapshot(pid: pid,
+                                  layer: (info[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0,
+                                  alpha: (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1,
+                                  bounds: bounds)
+        }
+    }
 }
 
 /// Turns Reflector's windows into mirroring sessions (D32, L19). Pure; one `update` per poll.

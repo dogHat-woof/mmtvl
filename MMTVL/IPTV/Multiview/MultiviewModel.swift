@@ -77,6 +77,31 @@ nonisolated struct MultiviewModel: Equatable, Sendable {
         return true
     }
 
+    /// M7f L6: highlights `slot` (sound follows when it's filled), as an arrow would.
+    mutating func focus(_ slot: Int) {
+        guard slots.indices.contains(slot) else { return }
+        focusedSlot = slot
+        if slots[slot] != nil { audioSlot = slot }
+    }
+
+    /// M7f L6: Left/Right on the main window move every channel one window along the filled slots, in slot order
+    /// (empty windows stay empty). `+1`: `A | B C D E` → `B | C D E A`; `-1`: → `E | A B C D`. Focus and sound stay on
+    /// the main window. False (no change) without a main window or with fewer than 2 filled windows.
+    mutating func rotate(by step: Int) -> Bool {
+        guard let main = layout.mainSlot, step != 0 else { return false }
+        let filled = slots.indices.filter { slots[$0] != nil }
+        guard filled.count >= 2 else { return false }
+        let ids = filled.map { slots[$0] }
+        let count = ids.count
+        let shift = ((step % count) + count) % count
+        for (position, slot) in filled.enumerated() {
+            slots[slot] = ids[(position + shift) % count]
+        }
+        focusedSlot = main
+        if slots[main] != nil { audioSlot = main }
+        return true
+    }
+
     /// Returns the ids dropped because the new layout is smaller. The window with sound is never dropped.
     mutating func setLayout(_ layout: MultiviewLayout) -> [Channel.ID] {
         var ids = channelIDs
