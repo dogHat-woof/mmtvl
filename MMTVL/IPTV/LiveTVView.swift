@@ -36,8 +36,14 @@ struct LiveTVRootView: View {
                         LiveMenuView(menu: menu)
                             .transition(.opacity)
                     }
+                    // M7l L12: Choose Teams over the guide.
+                    if let menu = model.teamPickerMenu {
+                        LiveMenuView(menu: menu)
+                            .transition(.opacity)
+                    }
                 }
                     .animation(.easeInOut(duration: 0.2), value: model.menu)
+                    .animation(.easeInOut(duration: 0.2), value: model.teamPickerMenu)
                     .animation(.easeInOut(duration: 0.2), value: model.search == nil)
                     .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height)
                     .scaleEffect(Theme.scale(for: size))
@@ -138,7 +144,7 @@ private struct PlayerOverlayView: View {
                             .foregroundStyle(Theme.primaryText)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
-                            .glassPanel(in: Capsule())
+                            .glassPanel(in: Capsule(), role: .banner)
                     }
                     Spacer()
                 }
@@ -156,10 +162,10 @@ private struct PlayerOverlayView: View {
                         TimeshiftBarView(timeshift: state.timeshift, isPaused: state.phase == .paused)
                     }
                 }
-                // M7 L28: the banner and the bar sit on glass.
+                // M7 L28: the banner and the bar sit on glass; M7l L1: frosted and darker over the video.
                 .padding(32)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .glassPanel()
+                .glassPanel(role: .banner)
                 .padding(.horizontal, Theme.sideMargin)
                 .padding(.top, 120)
                 .padding(.bottom, 72)
@@ -192,7 +198,7 @@ private struct PlayerOverlayView: View {
                 .foregroundStyle(Theme.secondaryText)
         }
         .padding(60)
-        .glassPanel()
+        .glassPanel(role: .banner)
     }
 }
 

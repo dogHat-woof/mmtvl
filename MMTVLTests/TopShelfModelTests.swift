@@ -15,9 +15,11 @@ struct TopShelfModelTests {
 
     /// 12 channels; c1 has a programme on now (started 5 min ago, 25 min left).
     private func makeModel(favorites: [Channel.ID] = [], hidden: [Channel.ID] = [], recent: [Channel.ID] = [],
+                           teams: [Channel.ID] = [],
                            channels: [Channel]? = nil, defaultChannel: @escaping () -> Channel.ID? = { nil }) -> TopShelfModel {
         let all = channels ?? (1...12).map { channel($0) }
-        let lineup = ChannelLineup(channels: all, preferences: ChannelPreferences(favorites: favorites, hiddenChannels: hidden))
+        let lineup = ChannelLineup(channels: all, preferences: ChannelPreferences(favorites: favorites, hiddenChannels: hidden),
+                                   teamChannelIDs: teams)
         let source = LiveShelfSource(
             channels: { (lineup, recent) },
             nowNext: { channel in
@@ -65,6 +67,17 @@ struct TopShelfModelTests {
         model.refresh(focusing: liveTile)
         await model.pendingTask?.value
         #expect(model.liveCards.map(\.id) == ["live.id:c3"])
+    }
+
+    /// M7l 8b: live team games top the guide's Favorites group only; the On Now pages keep the saved favorites,
+    /// and recents when there are none.
+    @Test func teamGamesDontChangeTheLivePages() async {
+        let model = makeModel(favorites: ["id:c3", "id:c1"], recent: ["id:c5"], teams: ["id:c7", "id:c1"])
+        await model.reloadLive()
+        #expect(model.liveCards.map(\.id) == ["live.id:c3", "live.id:c1"])
+        let recents = makeModel(recent: ["id:c5"], teams: ["id:c7"])
+        await recents.reloadLive()
+        #expect(recents.liveCards.map(\.id) == ["live.id:c5"])
     }
 
     @Test func recentsWhenThereAreNoFavorites() async {

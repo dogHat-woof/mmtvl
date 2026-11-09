@@ -32,10 +32,18 @@ final class IPTVLibrary {
     private(set) var preferences: ChannelPreferences
     /// What Live TV lists show (M6b L11); recomputed when channels or preferences change.
     private(set) var lineup = ChannelLineup(channels: [])
-    /// M7f L13: the Teams group's channels (`TeamMatcher`), recomputed by `updateTeams()`.
+    /// M7f L13: the My Teams group's live channels (`TeamMatcher`), recomputed by `updateTeams()`.
     @ObservationIgnored private(set) var teamChannelIDs: [Channel.ID] = []
+    /// M7l 8c: My Teams' upcoming games (`TeamMatcher.upcomingGames`, every channel), recomputed with it.
+    @ObservationIgnored private(set) var upcomingTeamGames: [UpcomingTeamGame] = []
+    /// QA (8c): the network part of `teamChannelIDs`, kept when an update's read is cancelled or fails.
+    @ObservationIgnored private var teamNetworkChannelIDs: [Channel.ID] = []
     /// M7f L13: the update started by picking a team; tests await it.
     @ObservationIgnored private(set) var teamUpdateTask: Task<Void, Never>?
+    /// Tests only: runs in `updateTeams()` after the programmes on now are read (a slow fetch).
+    @ObservationIgnored var afterTeamProgrammesFetch: (() async -> Void)?
+    /// Tests only: runs in `updateTeams()` just before the store read (cancel the update there to cancel the read).
+    @ObservationIgnored var beforeTeamProgrammesFetch: (() async -> Void)?
     static let teamsRefreshInterval: TimeInterval = 5 * 60
     /// The guides in use, in priority order (M6b L1): the pasted ones, else the playlist's.
     private(set) var guideSources: [GuideSource] = []
@@ -377,9 +385,10 @@ final class IPTVLibrary {
         }
     }
 
-    /// Swaps with the neighbor among the visible favorites; past either end does nothing.
+    /// Swaps, in the saved list, with the neighbor among the visible favorites below the team channels
+    /// (`lineup.movableFavorites`, M7l 8b); past either end, or for a Teams channel, does nothing.
     func moveFavorite(_ id: Channel.ID, by step: Int) {
-        let visible = lineup.favorites.map(\.id)
+        let visible = lineup.movableFavorites.map(\.id)
         guard let index = visible.firstIndex(of: id), visible.indices.contains(index + step),
               let from = preferences.favorites.firstIndex(of: id),
               let to = preferences.favorites.firstIndex(of: visible[index + step])
@@ -495,6 +504,12 @@ final class IPTVLibrary {
 
     /// Keyed by Channel.ID; channels without an EPG match are absent.
     func programmes(for channels: [Channel], in interval: DateInterval) async -> [Channel.ID: [Programme]] {
+        await programmesIfRead(for: channels, in: interval) ?? [:]
+    }
+
+    /// `programmes(for:in:)`, but nil when the read was cancelled or failed (M7l 8c: `updateTeams()` then keeps what
+    /// it had). No guide storage or no matched channel is [:], not a failure.
+    private func programmesIfRead(for channels: [Channel], in interval: DateInterval) async -> [Channel.ID: [Programme]]? {
         guard let store else { return [:] }
         let pairs = channels.compactMap { channel in epgMatches[channel.id].map { (channel.id, $0) } }
         guard !pairs.isEmpty else { return [:] }
@@ -506,10 +521,10 @@ final class IPTVLibrary {
             }
             return result
         } catch is CancellationError {
-            return [:]
+            return nil
         } catch {
             logger.error("Guide query failed: \(error.localizedDescription, privacy: .public)")
-            return [:]
+            return nil
         }
     }
 
@@ -552,7 +567,7 @@ final class IPTVLibrary {
         preferences.teams.contains(id)
     }
 
-    /// Picks or unpicks a team (Settings, the guide's channel menu); the Teams group follows.
+    /// Picks or unpicks a team (Settings, the guide's channel menu); the My Teams group follows.
     func setTeamPicked(_ id: Team.ID, _ picked: Bool) {
         guard picked != isTeamPicked(id), TeamCatalog.byID[id] != nil else { return }
         updatePreferences { preferences in
@@ -562,25 +577,54 @@ final class IPTVLibrary {
                 preferences.teams.removeAll { $0 == id }
             }
         }
+        // M7l: the newer pick decides; an older update finishing late must not set a stale group.
+        teamUpdateTask?.cancel()
         teamUpdateTask = Task { await updateTeams() }
     }
 
-    /// The Teams group: game entries by name, network channels by the programme on now. After each playlist
-    /// refresh, guide import or rematch, a team picked, and every 5 minutes (AppDelegate). Sets the lineup on change.
+    /// The My Teams group: game entries by name, network channels by the programme on now, and (M7l 8c) the
+    /// upcoming games on network channels in the next 72 h. After each playlist refresh, guide import or rematch, a
+    /// team picked, and every 5 minutes (AppDelegate). Sets the lineup on change.
     func updateTeams() async {
         let picked = Set(preferences.teams)
         var nowPlaying: [Channel.ID: Programme] = [:]
+        var upcoming: [UpcomingTeamGame] = []
+        // QA (8c): a read that was cancelled or failed keeps the network channels and upcoming games from before.
+        var didRead = true
         if !picked.isEmpty {
             let date = now()
-            let networks = channels.filter { !TeamMatcher.isGameGroup($0.group) && epgMatches[$0.id] != nil }
-            let programmes = await programmes(for: networks, in: DateInterval(start: date, duration: 1))
-            for (id, list) in programmes {
-                nowPlaying[id] = list.first { $0.start <= date && date < $0.stop }
+            let networks = channels.filter { !TeamMatcher.isGameEntry($0) && epgMatches[$0.id] != nil }
+            await beforeTeamProgrammesFetch?()
+            // One read for both: the programme on now and the next 72 h.
+            if let programmes = await programmesIfRead(for: networks,
+                                                       in: DateInterval(start: date, duration: TeamMatcher.upcomingWindow)) {
+                for (id, list) in programmes {
+                    nowPlaying[id] = list.first { $0.start <= date && date < $0.stop }
+                }
+                // M7l 8c: matching three days of programmes stays off the main actor.
+                upcoming = await Task.detached(priority: .utility) {
+                    TeamMatcher.upcomingGames(channels: networks, programmes: programmes, picked: picked, now: date)
+                }.value
+            } else {
+                didRead = false
             }
+            await afterTeamProgrammesFetch?()
         }
-        let ids = TeamMatcher.channelIDs(channels: channels, nowPlaying: nowPlaying, picked: picked)
-        guard ids != teamChannelIDs else { return }
+        // M7l: a team was picked or unpicked meanwhile; its own update sets the group. (Not `Task.isCancelled`: a
+        // cancelled 5-minute refresh, restarted by AppDelegate, must still set it.)
+        guard Set(preferences.teams) == picked else { return }
+        let games = TeamMatcher.gameChannelIDs(channels: channels, picked: picked)
+        let networks = didRead
+            ? TeamMatcher.networkChannelIDs(channels: channels, nowPlaying: nowPlaying, picked: picked)
+            : teamNetworkChannelIDs
+        if !didRead { upcoming = upcomingTeamGames }
+        let ids = games + networks
+        guard ids != teamChannelIDs || upcoming != upcomingTeamGames else { return }
+        // M7l L14: counts only, never team or channel names.
+        logger.notice("Teams: \(ids.count) channels (\(games.count) game entries, \(networks.count) network), \(upcoming.count) upcoming")
         teamChannelIDs = ids
+        teamNetworkChannelIDs = networks
+        upcomingTeamGames = upcoming
         updateLineup()
     }
 
@@ -663,7 +707,8 @@ final class IPTVLibrary {
     }
 
     private func updateLineup() {
-        let lineup = ChannelLineup(channels: channels, preferences: preferences, teamChannelIDs: teamChannelIDs)
+        let lineup = ChannelLineup(channels: channels, preferences: preferences, teamChannelIDs: teamChannelIDs,
+                                   upcomingTeamGames: upcomingTeamGames)
         guard lineup != self.lineup else { return }
         self.lineup = lineup
         onLineupChange?()

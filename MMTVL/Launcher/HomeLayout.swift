@@ -28,6 +28,12 @@ enum HomeLayout {
         focusedRow == 0 ? 1 : 0
     }
 
+    /// M7l L5 (D47): the dock panel shows only with row 0 focused; in the grid it fades out as it scrolls
+    /// away, so nothing suggests focus is still in the dock. Row 0's tiles stay.
+    static func dockOpacity(focusedRow: Int) -> Double {
+        focusedRow == 0 ? 1 : 0
+    }
+
     /// The dock panel behind row 0, before scrolling.
     static var dockFrame: CGRect {
         CGRect(x: Theme.homeDockInset, y: rowTop(0) - Theme.homeDockPadding,

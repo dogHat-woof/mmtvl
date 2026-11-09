@@ -194,6 +194,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         router.startTileID = settings.homeStartTile
         router.focusStartTile(id: router.startTileID)
         router.livePreviewEnabled = settings.homeLivePreview
+        router.glassStyle = settings.glassStyle
+        OverlayToast.shared.glassStyle = settings.glassStyle
         router.homeVersionLabel = settings.showVersionOnHome ? AppVersion.current.label : nil
         router.homeExitDelay = Theme.homeExitDuration
         router.isAppActive = NSApp.isActive
@@ -322,6 +324,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "receiverConnection": .receiverConnection
         case "receiverAddress": .addressEntry(.receiver)
         case "tvAddress": .addressEntry(.tv)
+        case "system": .system
+        case "glassStyle": .glassStyle
         default: nil
         }
     }
@@ -1223,6 +1227,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reflector?.autoStart = new.reflectorAutoStart
         router?.startTileID = new.homeStartTile
         router?.livePreviewEnabled = new.homeLivePreview
+        router?.glassStyle = new.glassStyle
+        OverlayToast.shared.glassStyle = new.glassStyle
         router?.homeVersionLabel = new.showVersionOnHome ? AppVersion.current.label : nil
         if new.usePlaylistGuide != old.usePlaylistGuide, let iptvLibrary {
             Task { await iptvLibrary.applyUsePlaylistGuide(new.usePlaylistGuide) }

@@ -71,10 +71,12 @@ struct HomeView: View {
             .opacity(isLeaving ? 0 : 1)
 
             // M7c L19 (D38): the glass dock behind row 0; it scrolls away with the row.
+            // M7l L5 (D47): and fades out while focus is in the grid (the tiles of row 0 stay, without a panel).
             Color.clear
                 .glassPanel(in: RoundedRectangle(cornerRadius: Theme.homeDockCornerRadius, style: .continuous))
                 .frame(width: HomeLayout.dockFrame.width, height: HomeLayout.dockFrame.height)
                 .offset(x: HomeLayout.dockFrame.minX, y: HomeLayout.dockFrame.minY - scrollOffset)
+                .opacity(HomeLayout.dockOpacity(focusedRow: focus.position.row))
                 .animation(Theme.focusAnimation, value: focus.position.row)
                 .allowsHitTesting(false)
                 .modifier(HomeExitMotion(isAway: isLeaving || isEntering))

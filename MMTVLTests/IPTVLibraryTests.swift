@@ -458,11 +458,11 @@ struct IPTVLibraryTests {
         #expect(!library.lineup.isVisible("name:red zone"))
         #expect(fixture.preferencesFile.load().hiddenChannels == ["name:red zone"])
         library.setGroupHidden("NBA Games", true)
-        #expect(library.lineup.groups == ["Favorites", "Live Channels"])
+        #expect(library.lineup.groups == ["Favorites", "My Teams", "Live Channels"])
         #expect(fixture.preferencesFile.load().hiddenGroups == ["NBA Games"])
         library.setGroupHidden("NBA Games", false)
         library.setChannelHidden("name:red zone", false)
-        #expect(library.lineup.groups == ["Favorites", "All Channels", "Live Channels", "NBA Games"])
+        #expect(library.lineup.groups == ["Favorites", "My Teams", "All Channels", "Live Channels", "NBA Games"])
         #expect(fixture.preferencesFile.load() == ChannelPreferences(favorites: ["name:red zone", "id:nflnetwork.us"]))
     }
 
@@ -472,7 +472,7 @@ struct IPTVLibraryTests {
         defer { fixture.cleanUp() }
         let library = fixture.library
         await library.refreshPlaylist()
-        #expect(library.lineup.groups == ["Favorites", "Live Channels"])
+        #expect(library.lineup.groups == ["Favorites", "My Teams", "Live Channels"])
         await library.removeSource()
         #expect(library.preferences == preferences)
         #expect(fixture.preferencesFile.load() == preferences)

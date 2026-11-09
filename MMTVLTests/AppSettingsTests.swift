@@ -366,4 +366,28 @@ struct AppSettingsTests {
         let tvMode = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"phoneRemoteVolume": "tv"}"#.utf8))
         #expect(tvMode.volumeMode == .tv)
     }
+
+    /// M7l step 2: `glassStyle`; missing, unknown or of another type reads as `clear`, and the rest of the file is
+    /// kept (no `.bak`).
+    @Test func glassStyleDecodes() throws {
+        let missing = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(missing.glassStyle == .clear)
+        #expect(AppSettings().glassStyle == .clear)
+        let frosted = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"glassStyle": "frosted"}"#.utf8))
+        #expect(frosted.glassStyle == .frosted)
+        #expect(try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(frosted)) == frosted)
+        let encoded = try String(decoding: JSONEncoder().encode(frosted), as: UTF8.self)
+        #expect(encoded.contains(#""glassStyle":"frosted""#))
+        for style in GlassStyle.allCases {
+            let one = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"glassStyle": "\#(style.rawValue)"}"#.utf8))
+            #expect(one.glassStyle == style)
+        }
+        for value in [#""bogus""#, #""Frosted""#, "12", "true", "null", #"["frosted"]"#, #"{"a": "frosted"}"#] {
+            let json = #"{"glassStyle": \#(value), "launchAtLogin": true, "kioskLock": false}"#
+            let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+            #expect(settings.glassStyle == .clear, "\(value)")
+            #expect(settings.launchAtLogin, "\(value)")
+            #expect(!settings.kioskLock, "\(value)")
+        }
+    }
 }

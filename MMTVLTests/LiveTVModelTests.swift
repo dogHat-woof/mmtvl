@@ -352,8 +352,8 @@ struct LiveTVModelTests {
         defer { fixture.cleanUp() }
         openGuide(model)
         _ = model.handle(.left)                 // the now-cell → the channel cell
-        _ = model.handle(.left)                 // → groups
-        #expect(model.guide?.focus == .groups(0))
+        _ = model.handle(.left)                 // → groups (All Channels; My Teams is above it, M7l 8c)
+        #expect(model.guide?.focus == .groups(1))
         _ = model.handle(.down)
         _ = model.handle(.down)
         _ = model.handle(.select)
@@ -464,6 +464,23 @@ struct LiveTVModelTests {
         #expect(Array(menu.items.map(\.id).prefix(2)) == ["match.automatic", "match.none"])
         #expect(menu.focusedItem?.id == "match.automatic")
         #expect(menu.focusedItem?.value == "Selected")
+    }
+
+    /// M7l (QA): options that load after Choose Teams opened don't draw a second menu over it.
+    @Test func matchGuideOptionsDontOpenOverChooseTeams() async throws {
+        let (model, _, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        openNFLMenu(model)
+        choose("matchGuide", in: model)
+        #expect(model.menu == nil)
+        // Opening My Teams loads its programmes in a new task; wait for the options' own.
+        let options = model.pendingTask
+        // The options haven't loaded yet: the channel cell → groups → My Teams → Choose Teams (M7l 8c).
+        openChooseTeams(model)
+        #expect(model.teamPickerMenu != nil)
+        await options?.value
+        #expect(model.menu == nil)
+        #expect(model.teamPickerMenu?.title == "Choose Teams")
     }
 
     @Test func choosingACandidateMatches() async throws {
@@ -587,6 +604,68 @@ struct LiveTVModelTests {
         #expect(player.played == [IPTVFixtures.streamURL(2)])
     }
 
+    // MARK: Choose Teams (M7l L12, 8c)
+
+    /// From the channel cell: Left to the groups, up to My Teams, open it; Select on its first row, Choose Teams.
+    private func openChooseTeams(_ model: LiveTVModel) {
+        _ = model.handle(.left)   // → groups
+        for _ in 0..<20 where model.guide?.focus != .groups(0) { _ = model.handle(.up) }
+        #expect(model.guide?.groups.first == "My Teams")
+        _ = model.handle(.select)   // My Teams
+        #expect(model.guide?.focusedRow == .chooseTeams)
+        #expect(model.handle(.select) == .handled)
+    }
+
+    @Test func chooseTeamsFromTheGuideTogglesATeamAndBackReturnsToTheRow() async throws {
+        let (model, _, fixture) = try makeModel()
+        defer { fixture.cleanUp() }
+        await open(model)
+        #expect(model.mode == .guide)
+        _ = model.handle(.left)   // the now-cell → the channel cell
+        openChooseTeams(model)
+        #expect(model.guide?.selectedGroup == "My Teams")
+        #expect(model.guide?.focusedRow == .chooseTeams)
+        #expect(model.teamPickerMenu?.title == "Choose Teams")
+
+        // College Basketball → its first conference → its first team.
+        let league = TeamLeague.allCases.firstIndex(of: .ncaam)!
+        for _ in 0..<league { _ = model.handle(.down) }
+        _ = model.handle(.select)
+        #expect(model.teamPicker?.level == .league(.ncaam))
+        #expect(model.teamPickerMenu?.title == "College Basketball")
+        let conference = TeamCatalog.conferences(in: .ncaam)[0]
+        _ = model.handle(.select)
+        #expect(model.teamPickerMenu?.title == conference)
+        let team = TeamCatalog.teams(in: .ncaam, conference: conference)[1]
+        _ = model.handle(.down)
+        #expect(model.handle(.select) == .handled)
+        #expect(fixture.library.isTeamPicked(team.id))
+        // The level is rebuilt with the value and the focus kept.
+        #expect(model.teamPickerMenu?.focusedIndex == 1)
+        #expect(model.teamPickerMenu?.focusedItem?.value == "In My Teams")
+
+        // Back: the conferences, focused on the one left, now "1 On".
+        _ = model.handle(.back)
+        #expect(model.teamPickerMenu?.title == "College Basketball")
+        #expect(model.teamPickerMenu?.focusedIndex == 0)
+        #expect(model.teamPickerMenu?.focusedItem?.value == "1 On")
+        // Back: the leagues, on College Basketball; Home still leaves.
+        _ = model.handle(.back)
+        #expect(model.teamPickerMenu?.title == "Choose Teams")
+        #expect(model.teamPickerMenu?.focusedIndex == league)
+        #expect(model.teamPickerMenu?.focusedItem?.value == "1 On")
+        // Back on level 1: the guide, on My Teams' Choose Teams row.
+        _ = model.handle(.back)
+        #expect(model.teamPicker == nil)
+        #expect(model.teamPickerMenu == nil)
+        #expect(model.mode == .guide)
+        #expect(model.guide?.focus == .grid)
+        #expect(model.guide?.selectedGroup == "My Teams")
+        #expect(model.guide?.focusedRow == .chooseTeams)
+        #expect(fixture.library.isTeamPicked(team.id))
+        _ = model.handle(.select)
+        #expect(model.handle(.home) == .leave)
+    }
 }
 
 /// M7c L15, L16: the home screen's muted preview and Select adopting it.
@@ -805,4 +884,5 @@ struct LiveTVPreviewTests {
         defer { fixture.cleanUp() }
         #expect(model.defaultPreviewChannelID == Self.nba)
     }
+
 }

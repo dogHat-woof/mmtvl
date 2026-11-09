@@ -149,6 +149,36 @@ struct SettingsModelTests {
         #expect(recorder.relaunches == 1)
         #expect(recorder.exits == 1)
     }
+
+    /// M7l step 2 (L3): System → Glass shows the step, its page lists the five, and a choice saves at once.
+    @Test func glassRowChoosesTheGlassStyle() {
+        let (model, recorder) = makeSettingsModel()
+        model.open(.system)
+        let row = model.row(id: "glass")
+        #expect(row?.value == "Clear")
+        #expect(row?.action == .push(.glassStyle))
+        #expect(row?.description == "How see-through MMTVL's glass panels are.")
+        model.activate(rowID: "glass")
+        #expect(model.page == .glassStyle)
+        #expect(model.title(for: .glassStyle) == "Glass")
+        #expect(model.focusableRowIDs == GlassStyle.allCases.map { "glass.\($0.rawValue)" })
+        #expect(model.row(id: "glass.frosted")?.title == "Frosted")
+        #expect(model.row(id: "glass.clear")?.value == "Selected")
+        #expect(model.row(id: "glass.frosted")?.value == nil)
+        #expect(model.sections.first?.footer == "Changes every glass panel in MMTVL. Reduce Transparency in macOS's Accessibility settings always uses Solid.")
+
+        model.activate(rowID: "glass.frosted")
+        #expect(recorder.appliedSettings.count == 1)
+        #expect(recorder.appliedSettings.last?.glassStyle == .frosted)
+        #expect(model.settings.glassStyle == .frosted)
+        #expect(model.page == .system)
+        #expect(model.row(id: "glass")?.value == "Frosted")
+
+        // The same step again saves nothing.
+        model.activate(rowID: "glass")
+        model.activate(rowID: "glass.frosted")
+        #expect(recorder.appliedSettings.count == 1)
+    }
 }
 
 struct SettingsHomeScreenTests {
@@ -682,10 +712,12 @@ struct SettingsLiveTVTests {
         #expect(SettingsModel.teamCountLabel(1) == "1 Team")
 
         model.perform(.push(.iptvTeams))
-        #expect(model.pageTitle == "Teams")
-        #expect(model.focusableRowIDs == ["league.nfl", "league.nba", "league.nhl", "league.mlb"])
-        #expect(model.row(id: "league.nba")?.value == "2")
-        #expect(model.row(id: "league.nfl")?.value == "None")
+        #expect(model.pageTitle == "My Teams")
+        #expect(model.focusableRowIDs == ["league.nfl", "league.nba", "league.nhl", "league.mlb",
+                                          "league.ncaaf", "league.ncaam", "league.ncaaw", "league.ncaabase"])
+        #expect(model.sections.map(\.title) == ["Pro", "College"])
+        #expect(model.row(id: "league.nba")?.value == "2 On")
+        #expect(model.row(id: "league.nfl")?.value == nil)
 
         model.press(.down, .select)
         #expect(model.page == .iptvLeague(.nba))
@@ -697,6 +729,54 @@ struct SettingsLiveTVTests {
         model.press(.select)
         model.perform(.toggleTeam(id: "nba.lal"))
         #expect(recorder.teamPicks == [TeamPick(id: "nba.atl", picked: true), TeamPick(id: "nba.lal", picked: false)])
+    }
+
+    /// M7l L13: College leagues push conferences, then the conference's teams.
+    @Test func collegeTeamsPages() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = Self.status
+        model.refreshStatus()
+        model.perform(.push(.liveTV))
+        #expect(model.row(id: "iptv.teams")?.description == "Your teams' live and upcoming games, pro and college, in the guide's My Teams group.")
+        #expect(model.row(id: "iptv.teams")?.title == "My Teams")
+        model.perform(.push(.iptvTeams))
+        #expect(model.sections.first { $0.title == "College" }?.footer
+                == "The guide's My Teams group shows your teams' live games, the channels showing them now, and their games in the next 3 days.")
+        #expect(model.sections.first { $0.title == "College" }?.rows.map(\.id)
+            == ["league.ncaaf", "league.ncaam", "league.ncaaw", "league.ncaabase"])
+        #expect(model.row(id: "league.ncaaf")?.title == "College Football")
+
+        model.perform(.push(.iptvLeague(.ncaaf)))
+        #expect(model.pageTitle == "College Football")
+        let conferences = TeamCatalog.conferences(in: .ncaaf)
+        #expect(model.focusableRowIDs == conferences.map { "conference.ncaaf.\($0)" })
+        #expect(model.row(id: "conference.ncaaf.ACC")?.value == nil)
+        // FBS conferences come before FCS ones.
+        #expect(!TeamCatalog.isFCS(conferences[0]))
+        #expect(TeamCatalog.isFCS(conferences[conferences.count - 1]))
+
+        model.perform(.push(.iptvConference(.ncaaf, "ACC")))
+        #expect(model.pageTitle == "ACC")
+        let acc = TeamCatalog.teams(in: .ncaaf, conference: "ACC")
+        #expect(!acc.isEmpty)
+        #expect(model.focusableRowIDs == acc.map { "team.\($0.id)" })
+        let first = acc[0]
+        #expect(first.id.hasPrefix("ncaaf."))
+        #expect(model.row(id: "team.\(first.id)")?.value == nil)
+        model.press(.select)
+        #expect(recorder.teamPicks == [TeamPick(id: first.id, picked: true)])
+
+        // The library now has it: the team, its conference and its league show it.
+        recorder.iptv.teams = [first.id]
+        model.refreshStatus()
+        #expect(model.row(id: "team.\(first.id)")?.value == "On")
+        #expect(model.sections(for: .iptvLeague(.ncaaf)).flatMap(\.rows)
+            .first { $0.id == "conference.ncaaf.ACC" }?.value == "1 On")
+        #expect(model.sections(for: .iptvTeams).flatMap(\.rows).first { $0.id == "league.ncaaf" }?.value == "1 On")
+        #expect(model.sections(for: .iptvTeams).flatMap(\.rows).first { $0.id == "league.ncaam" }?.value == nil)
+        // Selecting it again removes it.
+        model.press(.select)
+        #expect(recorder.teamPicks.last == TeamPick(id: first.id, picked: false))
     }
 
     @Test func hiddenChannelsPage() {

@@ -59,6 +59,8 @@ final class AppRouter {
     var remoteBatteryLevel: Int?
     /// M7f L8: AppDelegate reads the battery again (the home screen appeared or its minute ticked).
     @ObservationIgnored var onRefreshRemoteBattery: (() -> Void)?
+    /// M7l L4: `settings.json` `glassStyle`, set live by AppDelegate; the root view puts it in the environment.
+    var glassStyle = GlassStyle.clear
     /// M7c L15: `settings.json` `homeLivePreview`, set live by AppDelegate.
     @ObservationIgnored var livePreviewEnabled = true {
         didSet { if livePreviewEnabled != oldValue { updateLivePreview() } }
@@ -996,6 +998,8 @@ struct LauncherRootView: View {
             // M7h L15: above every screen, YouTube and Live TV (outside the canvas) included.
             powerMenuOverlay
         }
+        // M7l L4: every glass panel and tile rim below, the canvas, Live TV and the power menu alike.
+        .environment(\.glassStyle, router.glassStyle)
     }
 
     /// Fades in and out by itself; screen changes underneath aren't animated with it (QA Q4).

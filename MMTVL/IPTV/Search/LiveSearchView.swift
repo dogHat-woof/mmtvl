@@ -29,8 +29,19 @@ struct LiveSearchView: View {
     private var hint: String {
         switch model.focus {
         case .keyboard: "Select: type · Play/Pause: delete · Right: results · Back: close search"
-        case .results: "Select: watch · Left: keyboard · Back: keyboard"
+        case .results(let index):
+            // M7l L12: a team row adds or removes the team.
+            if model.results.indices.contains(index), case .team(let team) = model.results[index] {
+                Self.teamHint(isPicked: model.isTeamPicked(team))
+            } else {
+                "Select: watch · Left: keyboard · Back: keyboard"
+            }
         }
+    }
+
+    /// M7l L12, 8c: the hint on a team result.
+    nonisolated static func teamHint(isPicked: Bool) -> String {
+        isPicked ? "Select: remove from My Teams · Left: keyboard" : "Select: add to My Teams · Left: keyboard"
     }
 
     @ViewBuilder
@@ -61,11 +72,11 @@ struct LiveSearchView: View {
 
     private func row(_ result: LiveSearchModel.Result, isFocused: Bool) -> some View {
         HStack(spacing: 20) {
-            if let logo = result.channel.logoURL {
+            if let logo = result.channel?.logoURL {
                 ChannelLogoView(url: logo)
                     .frame(width: Theme.guideLogoSize, height: Theme.guideLogoSize)
             } else {
-                Image(systemName: "tv")
+                Image(systemName: result.channel == nil ? "sportscourt" : "tv")
                     .font(Theme.searchRowTitleFont)
                     .frame(width: Theme.guideLogoSize, height: Theme.guideLogoSize)
             }
@@ -82,6 +93,11 @@ struct LiveSearchView: View {
                 }
             }
             Spacer(minLength: 0)
+            if case .team(let team) = result, model.isTeamPicked(team) {
+                Text(TeamPicker.pickedValue)
+                    .font(Theme.searchRowDetailFont)
+                    .foregroundStyle(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText)
+            }
         }
         .foregroundStyle(isFocused ? Theme.focusedRowText : Theme.primaryText)
         .padding(.horizontal, 20)
@@ -100,6 +116,8 @@ struct LiveSearchView: View {
         case .programme(let channel, let programme):
             let when = model.isOnNow(programme) ? "On Now" : Self.startLabel(programme.start)
             return [when, channel.name, programme.title].joined(separator: " · ")
+        case .team(let team):
+            return team.pickTitle
         }
     }
 
@@ -109,6 +127,9 @@ struct LiveSearchView: View {
             return channel.group.isEmpty ? "Channel" : "Channel · \(channel.group)"
         case .programme(_, let programme):
             return programme.subtitle ?? programme.episode
+        case .team(let team):
+            // A pro team has no conference: its league.
+            return team.conference ?? team.league.title
         }
     }
 

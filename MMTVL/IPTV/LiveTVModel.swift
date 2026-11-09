@@ -67,6 +67,9 @@ final class LiveTVModel: LiveTVHosting {
     private(set) var menu: LiveMenu?
     /// M7f L12: search over Live TV (the guide, the player or Multiview); it takes every command but Home while open.
     private(set) var search: LiveSearchModel?
+    /// M7l L12: Choose Teams over the guide, and its top level's menu; it takes every command but Home while open.
+    private(set) var teamPicker: TeamPicker?
+    private(set) var teamPickerMenu: LiveMenu?
     /// The full-screen player. Multiview hands it between pool players (M6 L12).
     private(set) var player: any LivePlayer
     private(set) var guidePurpose: GuidePurpose = .watch
@@ -300,6 +303,7 @@ final class LiveTVModel: LiveTVHosting {
         guide = nil
         menu = nil
         closeSearch()
+        closeTeamPicker()
         banner = nil
         showsTimeshiftBar = false
         playbackError = nil
@@ -316,6 +320,10 @@ final class LiveTVModel: LiveTVHosting {
 
     func handle(_ command: RemoteCommand) -> LiveTVOutcome {
         if command == .home { return .leave }
+        if teamPicker != nil {
+            handleTeamPicker(command)
+            return .handled
+        }
         if var menu {
             let outcome = menu.handle(command)
             self.menu = menu
@@ -335,6 +343,10 @@ final class LiveTVModel: LiveTVHosting {
             case .none: break
             case .close: closeSearch()
             case .choose(let result): choose(result)
+            case .toggleTeam(let id):
+                // M7l L12: search stays open; the row shows "In My Teams".
+                library.setTeamPicked(id, !library.isTeamPicked(id))
+                channelsChanged()
             }
             return .handled
         }
@@ -527,6 +539,8 @@ final class LiveTVModel: LiveTVHosting {
             loadProgrammes()
         case .openSearch:
             openSearch()
+        case .openTeamPicker:
+            openTeamPicker()
         case .close:
             if case .pick = guidePurpose {
                 closePicker()
@@ -573,6 +587,7 @@ final class LiveTVModel: LiveTVHosting {
     func typeText(_ edit: TextEdit) {
         guard mode == .player || mode == .guide || mode == .multiview else { return }
         menu = nil
+        closeTeamPicker()
         if search == nil { openSearch() }
         search?.apply(edit)
     }
@@ -599,8 +614,8 @@ final class LiveTVModel: LiveTVHosting {
     /// In the Multiview picker the channel goes in the window instead. From Multiview, the windows are left
     /// (the layout is kept, as Watch from a top shelf card does).
     private func choose(_ result: LiveSearchModel.Result) {
+        guard let channel = result.channel else { return }
         closeSearch()
-        let channel = result.channel
         let later: Programme? = if case .programme(_, let programme) = result, programme.start > now() { programme } else { nil }
         if case .pick(let slot) = guidePurpose, mode == .guide {
             if let later {
@@ -628,6 +643,61 @@ final class LiveTVModel: LiveTVHosting {
         scheduleGuideWarm()
     }
 
+    // MARK: - Choose Teams (M7l L12)
+
+    private func openTeamPicker() {
+        guard mode == .guide else { return }
+        let picker = TeamPicker()
+        teamPicker = picker
+        teamPickerMenu = picker.menu(picked: Set(library.preferences.teams))
+    }
+
+    /// Closing from level 1 returns to the guide, whose focus stayed on My Teams' Choose Teams row (M7l 8c).
+    private func closeTeamPicker() {
+        teamPicker = nil
+        teamPickerMenu = nil
+    }
+
+    /// Select on a league or conference opens it; on a team toggles it (the level is rebuilt, focus kept);
+    /// Back and Menu go up a level, and close the picker from level 1.
+    private func handleTeamPicker(_ command: RemoteCommand) {
+        guard mode == .guide, var picker = teamPicker, var menu = teamPickerMenu else {
+            closeTeamPicker()
+            return
+        }
+        switch menu.handle(command) {
+        case .none:
+            teamPickerMenu = menu
+        case .choose(.openTeamLeague(let league)):
+            picker.push(.league(league))
+            teamPicker = picker
+            teamPickerMenu = picker.menu(picked: Set(library.preferences.teams))
+        case .choose(.openTeamConference(let league, let conference)):
+            picker.push(.conference(league, conference))
+            teamPicker = picker
+            teamPickerMenu = picker.menu(picked: Set(library.preferences.teams))
+        case .choose(.toggleTeam(let id)):
+            library.setTeamPicked(id, !library.isTeamPicked(id))
+            channelsChanged()
+            // Same rows, new values: the focus and the visible rows stay.
+            menu.items = picker.menu(picked: Set(library.preferences.teams), focusedIndex: menu.focusedIndex).items
+            teamPickerMenu = menu
+        case .choose:
+            teamPickerMenu = menu
+        case .close:
+            let left = picker.level
+            guard picker.pop() else {
+                closeTeamPicker()
+                return
+            }
+            teamPicker = picker
+            // Focus on the league or conference just left.
+            let parent = picker.menu(picked: Set(library.preferences.teams))
+            let index = parent.items.firstIndex { $0.action == left.openAction } ?? 0
+            teamPickerMenu = LiveMenu(title: parent.title, items: parent.items, focusedIndex: index)
+        }
+    }
+
     /// M7f L12: every window stops and the snapshot stays (inactive), so Live TV can show one channel.
     private func leaveMultiviewKeepingLayout() {
         saveSnapshot(false)
@@ -653,19 +723,20 @@ final class LiveTVModel: LiveTVHosting {
             .init(id: "addToMultiview", title: isShown ? "Show in Multiview" : "Add to Multiview", action: .addToMultiview(id)),
             .init(id: "favorite", title: isFavorite ? "Remove from Favorites" : "Add to Favorites", action: .toggleFavorite(id)),
         ]
+        // M7l 8b: only the saved favorites below the team channels move, among themselves.
         if guide?.selectedGroup == ChannelLineup.favoritesGroup,
-           let position = library.lineup.favorites.firstIndex(where: { $0.id == id }) {
+           let position = library.lineup.movableFavorites.firstIndex(where: { $0.id == id }) {
             if position > 0 {
                 items.append(.init(id: "moveUp", title: "Move Up", action: .moveFavorite(id, by: -1)))
             }
-            if position < library.lineup.favorites.count - 1 {
+            if position < library.lineup.movableFavorites.count - 1 {
                 items.append(.init(id: "moveDown", title: "Move Down", action: .moveFavorite(id, by: 1)))
             }
         }
         for team in teams(shownOn: channel).prefix(2) {
             let picked = library.isTeamPicked(team.id)
             items.append(.init(id: "team.\(team.id)",
-                               title: picked ? "Remove \(team.name) from Teams" : "Add \(team.name) to Teams",
+                               title: picked ? "Remove \(team.pickTitle) from My Teams" : "Add \(team.pickTitle) to My Teams",
                                action: .toggleTeam(team.id)))
         }
         let guideLabel = library.epgMatches[id].flatMap(library.guideLabel(for:)) ?? "None"
@@ -725,14 +796,20 @@ final class LiveTVModel: LiveTVHosting {
         case .toggleTeam(let teamID):
             library.setTeamPicked(teamID, !library.isTeamPicked(teamID))
             channelsChanged()
+        case .openTeamLeague, .openTeamConference:
+            // M7l L12: Choose Teams' own; never in these menus.
+            break
         case .openMatchGuide(let id):
             // Opens once its options load (M6b L9); nothing shows meanwhile.
             guard let channel = channel(id) else { return }
             let library = library
+            let mode = mode
             pendingTask = Task {
                 let options = await library.guideMatchOptions(for: channel)
-                // M7: also from the player's channel menu (Menu in the player).
-                guard !Task.isCancelled, self.mode == .guide || self.mode == .player, self.menu == nil else { return }
+                // M7: also from the player's channel menu (Menu in the player). M7l: not over Choose Teams or
+                // search opened meanwhile, nor in another mode.
+                guard !Task.isCancelled, self.mode == mode, mode == .guide || mode == .player, self.menu == nil,
+                      self.teamPicker == nil, self.search == nil else { return }
                 self.menu = self.matchMenu(channel, options)
             }
         case .matchGuide(let id, let choice):
@@ -750,7 +827,7 @@ final class LiveTVModel: LiveTVHosting {
         let date = now()
         let programme = guide?.programmes[channel.id]?.first { $0.start <= date && date < $0.stop }
             ?? (banner?.channel.id == channel.id ? banner?.now : nil)
-        return programme.map(TeamMatcher.teams(in:)) ?? []
+        return programme.map { TeamMatcher.teams(in: $0) } ?? []
     }
 
     /// M6b L9: Automatic, No Guide, then the current match and the suggestions. Focus on the selected row.
@@ -1083,9 +1160,10 @@ final class LiveTVModel: LiveTVHosting {
         guard let guide else { return }
         let group = guide.selectedGroup
         let channels = guide.channels
-        // M7c L24: the logos around the focused row first.
-        let around = max(guide.row - Self.logoPrefetchRows, 0)..<min(guide.row + Self.logoPrefetchRows, channels.count)
-        prefetchLogos(channels[around].compactMap(\.logoURL))
+        // M7c L24: the logos around the focused row first (M7l 8c: upcoming games' channels too).
+        let rows = guide.rows
+        let around = max(guide.row - Self.logoPrefetchRows, 0)..<min(guide.row + Self.logoPrefetchRows, rows.count)
+        prefetchLogos(rows[around.clamped(to: rows.indices)].compactMap { $0.channel?.logoURL })
         let date = now()
         let library = library
         pendingTask = Task {
@@ -1121,7 +1199,7 @@ final class LiveTVModel: LiveTVHosting {
     /// The list zapping steps through from `current` (see `zap`).
     private func zapList(around current: Channel) -> [Channel] {
         let lineup = library.lineup
-        if let group = library.state.lastGroup {
+        if let group = lineup.resolvedGroup(library.state.lastGroup) {
             let remembered = lineup.channels(in: group)
             if remembered.contains(where: { $0.id == current.id }) { return remembered }
         }

@@ -506,6 +506,15 @@ final class SettingsModel {
                 environment.applySettings(new)
             }
             if page == .receiverMaxVolume { pop() }
+        case .setGlassStyle(let style):
+            // M7l L3: saved and applied at once; Settings is glass, so the change shows here too.
+            if settings.glassStyle != style {
+                var new = settings
+                new.glassStyle = style
+                settings = new
+                environment.applySettings(new)
+            }
+            if page == .glassStyle { pop() }
         case .useFoundReceiver(let found):
             useFoundReceiver(found)
         case .setTVBrand(let brand):

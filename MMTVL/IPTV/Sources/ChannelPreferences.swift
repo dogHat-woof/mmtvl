@@ -31,24 +31,58 @@ nonisolated struct ChannelPreferences: Codable, Equatable, Sendable {
     }
 }
 
+/// M7l 8c: a picked team's game in the guide that starts within `TeamMatcher.upcomingWindow`: one row of the guide's
+/// My Teams group, below the live channels. Select tunes `channel`.
+nonisolated struct UpcomingTeamGame: Equatable, Hashable, Sendable {
+    var channel: Channel
+    var programme: Programme
+
+    /// The row's text: the programme's subtitle ("Tampa Bay Buccaneers at Chicago Bears"), else its title.
+    var label: String {
+        if let subtitle = programme.subtitle?.trimmingCharacters(in: .whitespaces), !subtitle.isEmpty { return subtitle }
+        return programme.title
+    }
+
+    /// "Sun 1:00 PM" (the user's locale).
+    var dayTime: String {
+        programme.start.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+    }
+}
+
 /// What every Live TV list shows after favorites and hiding (M6b L11): the guide's groups and rows, zapping,
 /// and the Multiview picker guide.
 nonisolated struct ChannelLineup: Equatable, Sendable {
     static let favoritesGroup = "Favorites"
-    /// M7f L13: live games and channels of the picked teams, right after Favorites.
-    static let teamsGroup = "Teams"
+    /// M7f L13: live games and channels of the picked teams, right after Favorites. M7l 8c: "My Teams", always shown
+    /// (with any visible channel), with Choose Teams and the upcoming games in the guide.
+    static let teamsGroup = "My Teams"
+    /// M7l 8c: the group's name before 8c; a remembered `lastGroup` of it reads as `teamsGroup`.
+    static let legacyTeamsGroup = "Teams"
+    /// M7l 8c: at most this many upcoming games in My Teams.
+    static let maxUpcomingTeamGames = 30
 
-    /// ["Favorites"] when there are visible favorites, ["Teams"] when a picked team is on,
-    /// then `ChannelList.guideGroups(of: visibleChannels)`.
+    /// ["Favorites"] when there are visible favorites or a picked team is on (M7l 8b), ["My Teams"] whenever a channel
+    /// is visible (M7l 8c), then `ChannelList.guideGroups(of: visibleChannels)`.
     private(set) var groups: [String]
     /// Playlist order, without hidden channels and hidden groups.
     private(set) var visibleChannels: [Channel]
-    /// `preferences.favorites` order, visible only.
+    /// `preferences.favorites` order, visible only: the saved favorites (the home screen's Live TV pages and On Now
+    /// shelf, the channel menu's Move Up/Down). Never includes the team channels.
     private(set) var favorites: [Channel]
-    /// M7f L13: `TeamMatcher`'s order, visible only.
+    /// M7l 8b: the guide's Favorites group: `teams` (same order, every feed) first, then `favorites` not already
+    /// listed, so a channel in both shows once, at the top.
+    private(set) var favoritesGroupChannels: [Channel]
+    /// M7l 8b: the saved favorites shown below the team channels in the Favorites group (`favorites` without the
+    /// Teams channels), in saved order. Move Up/Down step among these, so each move visibly moves the row.
+    private(set) var movableFavorites: [Channel]
+    /// M7f L13: `TeamMatcher`'s order, visible only. The live games: My Teams' channels for zapping and Favorites.
     private(set) var teams: [Channel]
+    /// M7l 8c: the upcoming games on visible channels, soonest first, at most `maxUpcomingTeamGames`. Only the
+    /// guide's My Teams rows; never zapped through, never in Favorites.
+    private(set) var upcomingTeamGames: [UpcomingTeamGame]
 
-    init(channels: [Channel], preferences: ChannelPreferences = ChannelPreferences(), teamChannelIDs: [Channel.ID] = []) {
+    init(channels: [Channel], preferences: ChannelPreferences = ChannelPreferences(), teamChannelIDs: [Channel.ID] = [],
+         upcomingTeamGames: [UpcomingTeamGame] = []) {
         let hiddenChannels = Set(preferences.hiddenChannels)
         let hiddenGroups = Set(preferences.hiddenGroups)
         visibleChannels = channels.filter { !hiddenChannels.contains($0.id) && !hiddenGroups.contains($0.group) }
@@ -57,16 +91,31 @@ nonisolated struct ChannelLineup: Equatable, Sendable {
         favorites = preferences.favorites.compactMap { id in seen.insert(id).inserted ? byID[id] : nil }
         var seenTeams: Set<Channel.ID> = []
         teams = teamChannelIDs.compactMap { id in seenTeams.insert(id).inserted ? byID[id] : nil }
-        groups = (favorites.isEmpty ? [] : [Self.favoritesGroup]) + (teams.isEmpty ? [] : [Self.teamsGroup])
+        let teamIDs = Set(teams.map(\.id))
+        movableFavorites = favorites.filter { !teamIDs.contains($0.id) }
+        favoritesGroupChannels = teams + movableFavorites
+        self.upcomingTeamGames = Array(upcomingTeamGames.compactMap { game in
+            byID[game.channel.id].map { UpcomingTeamGame(channel: $0, programme: game.programme) }
+        }.prefix(Self.maxUpcomingTeamGames))
+        groups = (favoritesGroupChannels.isEmpty ? [] : [Self.favoritesGroup])
+            + (visibleChannels.isEmpty ? [] : [Self.teamsGroup])
             + ChannelList.guideGroups(of: visibleChannels)
     }
 
-    /// Favorites, All Channels, a group's visible channels; [] for an unknown group.
+    /// Favorites (team channels first, M7l 8b), My Teams' live channels, All Channels, a group's visible channels;
+    /// [] for an unknown group.
     func channels(in group: String) -> [Channel] {
-        if group == Self.favoritesGroup { return favorites }
-        if group == Self.teamsGroup, !teams.isEmpty { return teams }
+        if group == Self.favoritesGroup { return favoritesGroupChannels }
+        if group == Self.teamsGroup { return teams }
         guard groups.contains(group) else { return [] }
         return ChannelList.channels(in: group, of: visibleChannels)
+    }
+
+    /// M7l 8c: a remembered group name as the lineup knows it: "Teams" (before 8c) is "My Teams", unless the playlist
+    /// has a group of that name.
+    func resolvedGroup(_ name: String?) -> String? {
+        guard name == Self.legacyTeamsGroup, !groups.contains(Self.legacyTeamsGroup) else { return name }
+        return Self.teamsGroup
     }
 
     func isVisible(_ id: Channel.ID) -> Bool {

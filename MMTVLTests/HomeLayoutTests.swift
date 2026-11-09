@@ -43,4 +43,11 @@ struct HomeLayoutTests {
         #expect(HomeLayout.heroOpacity(focusedRow: 1) == Theme.homeGridHeroOpacity)
         #expect(HomeLayout.shelfOpacity(focusedRow: 2) == 0)
     }
+
+    /// M7l L5 (D47): the dock shows with row 0 focused and fades out in the grid.
+    @Test func theDockFadesInTheGrid() {
+        #expect(HomeLayout.dockOpacity(focusedRow: 0) == 1)
+        #expect(HomeLayout.dockOpacity(focusedRow: 1) == 0)
+        #expect(HomeLayout.dockOpacity(focusedRow: 2) == 0)
+    }
 }

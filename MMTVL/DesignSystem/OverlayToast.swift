@@ -19,6 +19,12 @@ final class OverlayToast {
     /// The message showing (nil once it has started to fade).
     var message: ToastState.Message? { state.message }
 
+    /// M7l L4: `settings.json` `glassStyle`, set by AppDelegate; the toast's own window has its own SwiftUI root.
+    var glassStyle: GlassStyle {
+        get { content.glassStyle }
+        set { content.glassStyle = newValue }
+    }
+
     func show(_ text: String, symbol: String) {
         let generation = state.show(ToastState.Message(text: text, symbol: symbol))
         Self.logger.info("Toast \(text, privacy: .public)")
@@ -134,6 +140,7 @@ private final class OverlayToastPanel: NSPanel {
 private final class OverlayToastContent {
     var text = ""
     var symbol = ""
+    var glassStyle = GlassStyle.clear
 }
 
 /// The capsule on a canvas-wide band, scaled like the rest of the UI (`Theme.scale(for:)`).
@@ -149,6 +156,7 @@ private struct OverlayToastView: View {
                 .frame(width: geometry.size.width, height: geometry.size.height)
         }
         .ignoresSafeArea()
+        .environment(\.glassStyle, content.glassStyle)
     }
 
     private var capsule: some View {

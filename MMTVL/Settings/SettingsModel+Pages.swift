@@ -24,6 +24,7 @@ extension SettingsModel {
         case .iptvHiddenChannels: iptvHiddenChannelsSections
         case .iptvTeams: iptvTeamsSections
         case .iptvLeague(let league): iptvLeagueSections(league)
+        case .iptvConference(let league, let conference): iptvConferenceSections(league, conference)
         case .phoneRemote: phoneRemoteSections
         case .pairPhone: pairPhoneSections
         case .confirmForgetPhones: confirmForgetPhonesSections
@@ -55,6 +56,7 @@ extension SettingsModel {
         case .tvBrand: tvBrandSections
         case .receiverConnection: receiverConnectionSections
         case .addressEntry(let field): addressEntrySections(field)
+        case .glassStyle: glassStyleSections
         }
     }
 
@@ -71,8 +73,9 @@ extension SettingsModel {
         case .guideSource(let id): guideSource(id: id)?.label ?? "Guide"
         case .iptvGroups: "Groups"
         case .iptvHiddenChannels: "Hidden Channels"
-        case .iptvTeams: "Teams"
+        case .iptvTeams: "My Teams"
         case .iptvLeague(let league): league.title
+        case .iptvConference(_, let conference): conference
         case .phoneRemote: "Phone Remote"
         case .pairPhone: "Pair a Phone"
         case .confirmForgetPhones: "Forget All Phones?"
@@ -105,6 +108,7 @@ extension SettingsModel {
         case .receiverConnection: "Connection"
         case .addressEntry(.receiver): "Receiver Address"
         case .addressEntry(.tv): "TV Address"
+        case .glassStyle: "Glass"
         }
     }
 
@@ -256,6 +260,12 @@ extension SettingsModel {
                             description: "Needed for Home in other apps, the media keys, full-screen apps and the phone remote in other apps."),
             ]),
             SettingsSection(id: "startup", title: "Startup", rows: startupRows),
+            // M7l L3: app-wide, so on System rather than one screen's page.
+            SettingsSection(id: "appearance", title: "Appearance", rows: [
+                SettingsRow(id: "glass", title: "Glass", value: settings.glassStyle.title, showsDisclosure: true,
+                            action: .push(.glassStyle),
+                            description: "How see-through MMTVL's glass panels are."),
+            ]),
             SettingsSection(id: "mmtvl", title: "MMTVL", rows: [
                 SettingsRow(id: "relaunch", title: "Relaunch MMTVL", action: .relaunch,
                             description: "Quits and reopens MMTVL. Picks up changes made by hand to its settings files."),
@@ -570,9 +580,9 @@ extension SettingsModel {
                         value: iptv.hiddenChannels.isEmpty ? "None" : "\(iptv.hiddenChannels.count)",
                         showsDisclosure: true, action: .push(.iptvHiddenChannels),
                         description: "Channels hidden from the guide."),
-            SettingsRow(id: "iptv.teams", title: "Teams", value: Self.teamCountLabel(iptv.teams.count),
+            SettingsRow(id: "iptv.teams", title: "My Teams", value: Self.teamCountLabel(iptv.teams.count),
                         showsDisclosure: true, action: .push(.iptvTeams),
-                        description: "Your teams' live games, in the guide's Teams group."),
+                        description: "Your teams' live and upcoming games, pro and college, in the guide's My Teams group."),
         ], footer: "To favorite, hide or match one channel: in the guide, press Left on the programme airing now, then Select.")
     }
 
@@ -595,25 +605,56 @@ extension SettingsModel {
         }
     }
 
-    /// M7f L13: one row per league, with how many of its teams are picked.
+    /// M7f L13, M7l L13: Pro and College sections, one row per league, with how many of its teams are picked.
     private var iptvTeamsSections: [SettingsSection] {
         let picked = Set(iptv.teams)
-        let rows = TeamLeague.allCases.map { league in
-            let count = TeamCatalog.teams(in: league).count { picked.contains($0.id) }
-            return SettingsRow(id: "league.\(league.rawValue)", title: league.title, value: count == 0 ? "None" : "\(count)",
-                               showsDisclosure: true, action: .push(.iptvLeague(league)))
+        func rows(_ leagues: [TeamLeague]) -> [SettingsRow] {
+            leagues.map { league in
+                let count = TeamCatalog.teams(in: league).count { picked.contains($0.id) }
+                return SettingsRow(id: "league.\(league.rawValue)", title: league.title, value: Self.onCountLabel(count),
+                                   showsDisclosure: true, action: .push(.iptvLeague(league)))
+            }
         }
-        return [SettingsSection(id: "leagues", rows: rows,
-                                footer: "The guide's Teams group shows your teams' live games and the channels showing them now.")]
+        return [
+            SettingsSection(id: "leagues.pro", title: "Pro", rows: rows(TeamLeague.allCases.filter { !$0.isCollege })),
+            SettingsSection(id: "leagues.college", title: "College", rows: rows(TeamLeague.allCases.filter(\.isCollege)),
+                            footer: "The guide's My Teams group shows your teams' live games, the channels showing them now, and their games in the next 3 days."),
+        ]
     }
 
+    /// M7l L13: "3 On" when any are picked, else nothing.
+    static func onCountLabel(_ count: Int) -> String? {
+        count == 0 ? nil : "\(count) On"
+    }
+
+    /// A pro league's teams; a college league's conferences (M7l L13).
     private func iptvLeagueSections(_ league: TeamLeague) -> [SettingsSection] {
         let picked = Set(iptv.teams)
-        let rows = TeamCatalog.teams(in: league).map { team in
+        guard league.isCollege else {
+            return [SettingsSection(id: "teams", rows: teamRows(TeamCatalog.teams(in: league), picked: picked),
+                                    footer: "Select a team to add or remove it.")]
+        }
+        let rows = TeamCatalog.conferences(in: league).map { conference in
+            let count = TeamCatalog.teams(in: league, conference: conference).count { picked.contains($0.id) }
+            return SettingsRow(id: "conference.\(league.rawValue).\(conference)", title: conference,
+                               value: Self.onCountLabel(count), showsDisclosure: true,
+                               action: .push(.iptvConference(league, conference)))
+        }
+        return [SettingsSection(id: "conferences", rows: rows)]
+    }
+
+    /// M7l L13: one college conference's teams.
+    private func iptvConferenceSections(_ league: TeamLeague, _ conference: String) -> [SettingsSection] {
+        let teams = TeamCatalog.teams(in: league, conference: conference)
+        return [SettingsSection(id: "teams", rows: teamRows(teams, picked: Set(iptv.teams)),
+                                footer: "Select a team to add or remove it.")]
+    }
+
+    private func teamRows(_ teams: [Team], picked: Set<Team.ID>) -> [SettingsRow] {
+        teams.map { team in
             SettingsRow(id: "team.\(team.id)", title: team.name, value: picked.contains(team.id) ? "On" : nil,
                         action: .toggleTeam(id: team.id))
         }
-        return [SettingsSection(id: "teams", rows: rows, footer: "Select a team to add or remove it.")]
     }
 
     private var iptvHiddenChannelsSections: [SettingsSection] {
@@ -1238,6 +1279,17 @@ extension SettingsModel {
             footer += " \(settings.receiverBrand.shortTitle) receivers don't report dB, so there's no limit."
         }
         return [SettingsSection(id: "maxVolume", rows: rows, footer: footer)]
+    }
+
+    /// M7l L3: the five steps, the current one "Selected" (as Maximum Volume does).
+    private var glassStyleSections: [SettingsSection] {
+        let current = settings.glassStyle
+        let rows = GlassStyle.allCases.map { style in
+            SettingsRow(id: "glass.\(style.rawValue)", title: style.title, value: style == current ? "Selected" : nil,
+                        action: .setGlassStyle(style))
+        }
+        return [SettingsSection(id: "glass", rows: rows,
+                                footer: "Changes every glass panel in MMTVL. Reduce Transparency in macOS's Accessibility settings always uses Solid.")]
     }
 
     private var receiverFoundSections: [SettingsSection] {

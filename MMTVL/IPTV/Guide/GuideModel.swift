@@ -5,12 +5,50 @@ nonisolated struct GuideModel: Equatable, Sendable {
     static let visibleRows = 6
 
     /// `.channel`: the channel cell of the focused row (M6 L8), between the grid and the groups.
-    /// `.search` (M7f L12): the Search row above the groups.
+    /// `.search` (M7f L12): the Search row above the groups. On a row that isn't a channel's (M7l 8c), `.grid` and
+    /// `.channel` both mean the whole row.
     enum Focus: Equatable, Sendable { case grid, channel, groups(Int), search }
     enum Action: Equatable, Sendable {
         case none, play(Channel.ID), close, groupChanged(String), channelMenu(Channel.ID)
         /// M7f L12: Select on the Search row.
         case openSearch
+        /// M7l L12, 8c: Select on My Teams' Choose Teams row.
+        case openTeamPicker
+    }
+    /// One row of the selected group. M7l 8c: My Teams has Choose Teams first, then its live channels, then the
+    /// upcoming games.
+    enum Row: Equatable, Sendable {
+        case channel(Channel)
+        case chooseTeams
+        case upcoming(UpcomingTeamGame)
+
+        enum Kind: Equatable, Sendable { case channel, chooseTeams, upcoming }
+
+        var kind: Kind {
+            switch self {
+            case .channel: .channel
+            case .chooseTeams: .chooseTeams
+            case .upcoming: .upcoming
+            }
+        }
+
+        /// What Select plays: the row's channel, or an upcoming game's.
+        var channel: Channel? {
+            switch self {
+            case .channel(let channel): channel
+            case .chooseTeams: nil
+            case .upcoming(let game): game.channel
+            }
+        }
+
+        /// Kept across lineup changes (`setLineup`).
+        var id: String {
+            switch self {
+            case .channel(let channel): "channel.\(channel.id)"
+            case .chooseTeams: "chooseTeams"
+            case .upcoming(let game): "upcoming.\(game.channel.id).\(game.programme.start.timeIntervalSinceReferenceDate)"
+            }
+        }
     }
     /// One focusable cell: a programme, or a placeholder spanning the window when a row has no data.
     struct Cell: Equatable, Sendable {
@@ -21,8 +59,8 @@ nonisolated struct GuideModel: Equatable, Sendable {
 
     private(set) var groups: [String]
     private(set) var groupIndex: Int
-    /// The selected group's.
-    private(set) var channels: [Channel]
+    /// The selected group's rows.
+    private(set) var rows: [Row]
     /// Set by LiveTVModel after loading.
     var programmes: [Channel.ID: [Programme]] = [:]
     private(set) var focus: Focus = .grid
@@ -33,38 +71,48 @@ nonisolated struct GuideModel: Equatable, Sendable {
     private(set) var timeline: GuideTimeline
     private var lineup: ChannelLineup
 
-    /// The default group (no remembered one) is the first: Favorites when it exists (M6b L11).
+    /// The default group (no remembered one) is the first: Favorites when it exists (M6b L11). M7l 8c: never My Teams
+    /// (always there), unless it's the only group.
     init(lineup: ChannelLineup, group: String?, focusedChannelID: Channel.ID?, now: Date) {
         self.lineup = lineup
         let groups = lineup.groups
         self.groups = groups
-        groupIndex = group.flatMap { groups.firstIndex(of: $0) } ?? 0
-        channels = []
+        groupIndex = lineup.resolvedGroup(group).flatMap { groups.firstIndex(of: $0) } ?? Self.defaultGroupIndex(groups)
+        rows = []
         focusTime = now
         timeline = GuideTimeline(now: now)
-        channels = channelsOfSelectedGroup()
-        if let focusedChannelID, !channels.contains(where: { $0.id == focusedChannelID }) {
+        rows = rowsOfSelectedGroup()
+        if let focusedChannelID, Self.channelRowIndex(of: focusedChannelID, in: rows) == nil {
             // Show the focused channel: All Channels if there is one, else its own group.
             let channelGroup = lineup.visibleChannels.first { $0.id == focusedChannelID }?.group
             if let index = groups.firstIndex(of: ChannelList.allChannelsGroup)
                 ?? channelGroup.flatMap({ groups.firstIndex(of: $0) }) {
                 groupIndex = index
-                channels = channelsOfSelectedGroup()
+                rows = rowsOfSelectedGroup()
             }
         }
-        row = focusedChannelID.flatMap { id in channels.firstIndex { $0.id == id } } ?? 0
-        firstVisibleRow = min(row, max(0, channels.count - Self.visibleRows))
+        row = focusedChannelID.flatMap { Self.channelRowIndex(of: $0, in: rows) } ?? 0
+        firstVisibleRow = min(row, max(0, rows.count - Self.visibleRows))
     }
 
     var selectedGroup: String? { groups.indices.contains(groupIndex) ? groups[groupIndex] : nil }
 
-    var focusedChannel: Channel? { channels.indices.contains(row) ? channels[row] : nil }
+    /// The selected group's channel rows, in order (not Choose Teams or the upcoming games, M7l 8c).
+    var channels: [Channel] {
+        rows.compactMap { if case .channel(let channel) = $0 { channel } else { nil } }
+    }
+
+    var focusedRow: Row? { rows.indices.contains(row) ? rows[row] : nil }
+
+    /// The focused row's channel: a channel row's, or an upcoming game's (M7l 8c); nil on Choose Teams.
+    var focusedChannel: Channel? { focusedRow?.channel }
 
     /// Cells of `row` overlapping [now, now + horizon), sorted; one placeholder cell [now, now + horizon) when none.
+    /// [] for a row that isn't a channel's (M7l 8c).
     func cells(row: Int, now: Date) -> [Cell] {
         let end = now + GuideTimeline.horizon
-        guard channels.indices.contains(row) else { return [] }
-        let cells = (programmes[channels[row].id] ?? [])
+        guard rows.indices.contains(row), case .channel(let channel) = rows[row] else { return [] }
+        let cells = (programmes[channel.id] ?? [])
             .filter { $0.start < end && $0.stop > now }
             .sorted { $0.start < $1.start }
             .map { Cell(programme: $0, start: $0.start, stop: $0.stop) }
@@ -79,10 +127,11 @@ nonisolated struct GuideModel: Equatable, Sendable {
 
     mutating func handle(_ command: RemoteCommand, now: Date) -> Action {
         switch focus {
-        case .grid: handleGrid(command, now: now)
-        case .channel: handleChannel(command)
-        case .groups(let index): handleGroups(command, index: index, now: now)
-        case .search: handleSearchRow(command)
+        case .grid, .channel:
+            if let focusedRow, focusedRow.kind != .channel { return handleActionRow(command, focusedRow) }
+            return focus == .grid ? handleGrid(command, now: now) : handleChannel(command)
+        case .groups(let index): return handleGroups(command, index: index, now: now)
+        case .search: return handleSearchRow(command)
         }
     }
 
@@ -90,7 +139,7 @@ nonisolated struct GuideModel: Equatable, Sendable {
     /// selected group, else its own group) at `date`. False when the channel isn't in the lineup.
     @discardableResult
     mutating func focus(channelID: Channel.ID, at date: Date, now: Date) -> Bool {
-        if !channels.contains(where: { $0.id == channelID }) {
+        if Self.channelRowIndex(of: channelID, in: rows) == nil {
             guard lineup.visibleChannels.contains(where: { $0.id == channelID }) else { return false }
             let channelGroup = lineup.visibleChannels.first { $0.id == channelID }?.group
             let candidates = [ChannelList.allChannelsGroup] + [channelGroup].compactMap { $0 }
@@ -99,10 +148,10 @@ nonisolated struct GuideModel: Equatable, Sendable {
                 .first(where: { lineup.channels(in: groups[$0]).contains { $0.id == channelID } })
             else { return false }
             groupIndex = index
-            channels = channelsOfSelectedGroup()
+            rows = rowsOfSelectedGroup()
             firstVisibleRow = 0
         }
-        guard let index = channels.firstIndex(where: { $0.id == channelID }) else { return false }
+        guard let index = Self.channelRowIndex(of: channelID, in: rows) else { return false }
         row = index
         keepRowVisible()
         focus = .grid
@@ -122,26 +171,46 @@ nonisolated struct GuideModel: Equatable, Sendable {
     }
 
     /// After a playlist refresh or a favorites/hiding change: keep group/row by id where possible, else the row index.
+    /// M7l 8c: a focused group-list row keeps its group (by name) when groups appear or go above it.
     mutating func setLineup(_ lineup: ChannelLineup) {
-        let focusedID = focusedChannel?.id
+        let focusedRowID = focusedRow?.id
+        let focusedChannelID = focusedRow.flatMap { if case .channel(let channel) = $0 { channel.id } else { nil } }
         let group = selectedGroup
+        let focusedGroup: String? = if case .groups(let index) = focus, groups.indices.contains(index) {
+            groups[index]
+        } else {
+            nil
+        }
         self.lineup = lineup
         groups = lineup.groups
-        groupIndex = group.flatMap { groups.firstIndex(of: $0) } ?? 0
-        channels = channelsOfSelectedGroup()
-        row = focusedID.flatMap { id in channels.firstIndex { $0.id == id } } ?? min(row, max(0, channels.count - 1))
-        firstVisibleRow = min(firstVisibleRow, max(0, channels.count - Self.visibleRows))
+        groupIndex = group.flatMap { groups.firstIndex(of: $0) } ?? Self.defaultGroupIndex(groups)
+        rows = rowsOfSelectedGroup()
+        row = focusedRowID.flatMap { id in rows.firstIndex { $0.id == id } }
+            ?? focusedChannelID.flatMap { Self.channelRowIndex(of: $0, in: rows) }
+            ?? min(row, max(0, rows.count - 1))
+        firstVisibleRow = min(firstVisibleRow, max(0, rows.count - Self.visibleRows))
         keepRowVisible()
         if case .groups(let index) = focus {
-            focus = .groups(min(index, max(0, groups.count - 1)))
+            focus = .groups(focusedGroup.flatMap { groups.firstIndex(of: $0) } ?? min(index, max(0, groups.count - 1)))
         }
     }
 
     // MARK: - Private
 
-    private func channelsOfSelectedGroup() -> [Channel] {
+    /// M7l 8c: the first group that isn't My Teams, else 0.
+    private static func defaultGroupIndex(_ groups: [String]) -> Int {
+        groups.firstIndex { $0 != ChannelLineup.teamsGroup } ?? 0
+    }
+
+    private static func channelRowIndex(of id: Channel.ID, in rows: [Row]) -> Int? {
+        rows.firstIndex { if case .channel(let channel) = $0 { channel.id == id } else { false } }
+    }
+
+    private func rowsOfSelectedGroup() -> [Row] {
         guard let group = selectedGroup else { return [] }
-        return lineup.channels(in: group)
+        let channels = lineup.channels(in: group).map(Row.channel)
+        guard group == ChannelLineup.teamsGroup else { return channels }
+        return [.chooseTeams] + channels + lineup.upcomingTeamGames.map(Row.upcoming)
     }
 
     private func focusedCellIndex(in cells: [Cell]) -> Int? {
@@ -224,7 +293,7 @@ nonisolated struct GuideModel: Equatable, Sendable {
         case .select, .right:
             guard groups.indices.contains(index) else { return .none }
             groupIndex = index
-            channels = channelsOfSelectedGroup()
+            rows = rowsOfSelectedGroup()
             row = 0
             firstVisibleRow = 0
             focusTime = now
@@ -244,7 +313,7 @@ nonisolated struct GuideModel: Equatable, Sendable {
         }
     }
 
-    /// M7f L12: the Search row; Down returns to the first group.
+    /// M7f L12: the Search row; Down goes to the first group.
     private mutating func handleSearchRow(_ command: RemoteCommand) -> Action {
         switch command {
         case .select, .right:
@@ -262,14 +331,41 @@ nonisolated struct GuideModel: Equatable, Sendable {
         }
     }
 
+    /// M7l 8c: My Teams' Choose Teams and upcoming rows, focused as a whole (no channel cell, no programmes).
+    /// Select opens the picker (focus stays, so closing it comes back here) or plays the game's channel; Left goes
+    /// to the groups; Menu does nothing.
+    private mutating func handleActionRow(_ command: RemoteCommand, _ focusedRow: Row) -> Action {
+        switch command {
+        case .up, .down:
+            moveRow(command)
+            return .none
+        case .select:
+            if case .upcoming(let game) = focusedRow { return .play(game.channel.id) }
+            return .openTeamPicker
+        case .left, .rewind:
+            focus = .groups(groupIndex)
+            return .none
+        case .right, .fastForward:
+            focus = .grid
+            return .none
+        case .back:
+            return .close
+        case .channelUp, .channelDown:
+            moveRow(by: command == .channelUp ? -Self.visibleRows : Self.visibleRows)
+            return .none
+        case .menu, .playPause, .home, .volumeUp, .volumeDown, .mute, .power, .powerMenu:
+            return .none
+        }
+    }
+
     private mutating func moveRow(_ command: RemoteCommand) {
         moveRow(by: command == .up ? -1 : 1)
     }
 
     /// Clamped; M7 L5 pages with Channel Up/Down.
     private mutating func moveRow(by step: Int) {
-        guard !channels.isEmpty else { return }
-        row = min(max(row + step, 0), channels.count - 1)
+        guard !rows.isEmpty else { return }
+        row = min(max(row + step, 0), rows.count - 1)
         keepRowVisible()
     }
 

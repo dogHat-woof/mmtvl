@@ -3,8 +3,10 @@ import Foundation
 nonisolated enum SettingsPage: Hashable, Sendable {
     case root, homeScreen, tile(id: String), addTile, confirmRestoreDefaults, confirmClearYouTube
     case liveTV, confirmRemoveIPTV, guideSource(id: String), iptvGroups, iptvHiddenChannels
-    /// M7f L13: Settings → Live TV → Teams, and one league's teams.
+    /// M7f L13: Settings → Live TV → Teams, and one league's teams (a pro league) or conferences (a college league).
     case iptvTeams, iptvLeague(TeamLeague)
+    /// M7l L13: one college conference's teams.
+    case iptvConference(TeamLeague, String)
     case phoneRemote, pairPhone, confirmForgetPhones
     /// M7: Settings → Remote Buttons (D27).
     case remoteButtons, remoteCommand(RemoteCommand), remoteBinding(RemoteCommand, InputBinding.Trigger)
@@ -25,6 +27,8 @@ nonisolated enum SettingsPage: Hashable, Sendable {
     case audioTV, tv
     /// M7h step 11 (D41): an address typed with the on-screen keyboard.
     case addressEntry(AddressField)
+    /// M7l L3: System → Glass, the five glass steps.
+    case glassStyle
 }
 
 /// M7h step 11: which address the keyboard page edits.
@@ -297,6 +301,8 @@ nonisolated enum SettingsAction: Hashable, Sendable {
     /// nil = Automatic (the first USB serial port).
     case setReceiverPort(String?)
     case setReceiverMaxDB(Double)
+    /// M7l L3: System → Glass (`settings.json` `glassStyle`).
+    case setGlassStyle(GlassStyle)
     /// Find on Network's choice: brand, network, host, and the port when it isn't the brand's own.
     case useFoundReceiver(FoundReceiver)
     case setTVBrand(TVBrand)

@@ -38,7 +38,7 @@ struct GuideModelTests {
 
     @Test func initFocusesTheChannelInTheRememberedGroup() {
         let model = model(group: "Live", focused: "id:c3")
-        #expect(model.groups == ["All Channels", "Live", "NBA", "NHL"])
+        #expect(model.groups == ["My Teams", "All Channels", "Live", "NBA", "NHL"])
         #expect(model.selectedGroup == "Live")
         #expect(model.row == 2)
         #expect(model.focusedChannel?.id == "id:c3")
@@ -56,7 +56,7 @@ struct GuideModelTests {
     @Test func favoritesAreTheDefaultGroup() {
         let lineup = ChannelLineup(channels: channels, preferences: ChannelPreferences(favorites: ["id:c9", "id:c2"]))
         let model = GuideModel(lineup: lineup, group: nil, focusedChannelID: "id:c2", now: now)
-        #expect(model.groups == ["Favorites", "All Channels", "Live", "NBA", "NHL"])
+        #expect(model.groups == ["Favorites", "My Teams", "All Channels", "Live", "NBA", "NHL"])
         #expect(model.selectedGroup == "Favorites")
         #expect(model.channels.map(\.id) == ["id:c9", "id:c2"])
         #expect(model.row == 1)
@@ -72,7 +72,7 @@ struct GuideModelTests {
         let oneGroup = ChannelLineup(channels: channels,
                                      preferences: ChannelPreferences(favorites: ["id:c1"], hiddenGroups: ["NBA", "NHL"]))
         let other = GuideModel(lineup: oneGroup, group: nil, focusedChannelID: "id:c4", now: now)
-        #expect(other.groups == ["Favorites", "Live"])
+        #expect(other.groups == ["Favorites", "My Teams", "Live"])
         #expect(other.selectedGroup == "Live")
         #expect(other.focusedChannel?.id == "id:c4")
     }
@@ -131,7 +131,7 @@ struct GuideModelTests {
 
         _ = model.handle(.left, now: now)   // the now-cell → the channel cell
         _ = model.handle(.left, now: now)
-        #expect(model.focus == .groups(1))
+        #expect(model.focus == .groups(2))
     }
 
     @Test func groups() {
@@ -139,9 +139,9 @@ struct GuideModelTests {
         _ = model.handle(.down, now: now)
         _ = model.handle(.left, now: now)   // the now-cell → the channel cell
         _ = model.handle(.left, now: now)
-        #expect(model.focus == .groups(1))
-        _ = model.handle(.down, now: now)
         #expect(model.focus == .groups(2))
+        _ = model.handle(.down, now: now)
+        #expect(model.focus == .groups(3))
         #expect(model.handle(.select, now: now) == .groupChanged("NBA"))
         #expect(model.focus == .grid)
         #expect(model.row == 0)
@@ -155,13 +155,15 @@ struct GuideModelTests {
         #expect(model.focus == .grid)
         #expect(model.selectedGroup == "NBA")
 
-        // Right applies too; Up stops at the Search row (M7f L12), Down from it returns to the first group.
+        // Right applies too; Up stops at the Search row (M7f L12), Down from it goes to the first group (M7l 8c: My
+        // Teams), then All Channels.
         _ = model.handle(.left, now: now)   // the now-cell → the channel cell
         _ = model.handle(.left, now: now)
         for _ in 0..<6 { _ = model.handle(.up, now: now) }
         #expect(model.focus == .search)
         _ = model.handle(.down, now: now)
         #expect(model.focus == .groups(0))
+        _ = model.handle(.down, now: now)
         #expect(model.handle(.right, now: now) == .groupChanged("All Channels"))
         #expect(model.channels.count == 10)
     }
@@ -221,7 +223,7 @@ struct GuideModelTests {
         #expect(model.handle(.left, now: now) == .none)
         #expect(model.focus == .channel)
         _ = model.handle(.left, now: now)
-        #expect(model.focus == .groups(1))
+        #expect(model.focus == .groups(2))
     }
 
     @Test func rightFromTheChannelReturnsToTheSameCell() {
@@ -315,9 +317,10 @@ struct GuideModelTests {
         var model = model(group: "NBA", focused: "id:c8")
         _ = model.handle(.left, now: now)   // the channel cell
         _ = model.handle(.left, now: now)   // groups, on NBA
-        #expect(model.focus == .groups(2))
+        #expect(model.focus == .groups(3))
         _ = model.handle(.up, now: now)
         _ = model.handle(.up, now: now)
+        _ = model.handle(.up, now: now)   // My Teams (M7l 8c)
         _ = model.handle(.up, now: now)
         #expect(model.focus == .search)
         #expect(model.handle(.up, now: now) == .none)
@@ -329,6 +332,141 @@ struct GuideModelTests {
         #expect(model.handle(.right, now: now) == .openSearch)
         #expect(model.handle(.back, now: now) == .none)
         #expect(model.focus == .grid)
+    }
+
+    // MARK: M7l 8c: My Teams
+
+    /// Up from the first group is Search again; Down from Search is the first group (no Choose Teams row there).
+    @Test func searchAndTheFirstGroupAreNeighbours() {
+        var model = model(group: "NBA", focused: "id:c8")
+        _ = model.handle(.left, now: now)   // the channel cell
+        _ = model.handle(.left, now: now)   // groups, on NBA
+        for _ in 0..<3 { _ = model.handle(.up, now: now) }
+        #expect(model.focus == .groups(0))
+        #expect(model.groups.first == "My Teams")
+        #expect(model.handle(.up, now: now) == .none)
+        #expect(model.focus == .search)
+        #expect(model.handle(.down, now: now) == .none)
+        #expect(model.focus == .groups(0))
+    }
+
+    /// A lineup with c9 and c10 live team games, and two upcoming games (c2 at 18:00, c3 at 16:00, given late first).
+    private var teamsLineup: ChannelLineup {
+        let channels = channels
+        let upcoming = [
+            UpcomingTeamGame(channel: channels[2], programme: programme("c3", 16, 0, minutes: 180, "NFL Football")),
+            UpcomingTeamGame(channel: channels[1], programme: programme("c2", 18, 0, minutes: 180, "NFL Football")),
+        ]
+        return ChannelLineup(channels: channels, teamChannelIDs: ["id:c9", "id:c10"], upcomingTeamGames: upcoming)
+    }
+
+    @Test func myTeamsShowsWithNoTeamsPickedAndIsNotTheDefault() {
+        let lineup = ChannelLineup(channels: channels)
+        #expect(lineup.groups == ["My Teams", "All Channels", "Live", "NBA", "NHL"])
+        // No remembered group: All Channels, as before My Teams.
+        let model = GuideModel(lineup: lineup, group: nil, focusedChannelID: nil, now: now)
+        #expect(model.selectedGroup == "All Channels")
+        // With favorites, My Teams comes right after them.
+        let favorites = ChannelLineup(channels: channels, preferences: ChannelPreferences(favorites: ["id:c1"]))
+        #expect(Array(favorites.groups.prefix(3)) == ["Favorites", "My Teams", "All Channels"])
+        // Nothing picked: only Choose Teams.
+        let empty = GuideModel(lineup: lineup, group: "My Teams", focusedChannelID: nil, now: now)
+        #expect(empty.rows == [.chooseTeams])
+        #expect(empty.channels.isEmpty)
+    }
+
+    @Test func myTeamsRowsAreChooseTeamsThenLiveThenUpcoming() {
+        let model = GuideModel(lineup: teamsLineup, group: "My Teams", focusedChannelID: nil, now: now)
+        #expect(model.rows.map(\.kind) == [.chooseTeams, .channel, .channel, .upcoming, .upcoming])
+        #expect(model.rows.map { $0.channel?.id } == [nil, "id:c9", "id:c10", "id:c3", "id:c2"])
+        // Only the live games are channel rows (programmes, zapping).
+        #expect(model.channels.map(\.id) == ["id:c9", "id:c10"])
+        #expect(model.cells(row: 0, now: now).isEmpty)
+        #expect(model.cells(row: 3, now: now).isEmpty)
+        #expect(model.cells(row: 1, now: now).count == 1)
+        #expect(model.focusedRow == .chooseTeams)
+        #expect(model.focusedChannel == nil)
+    }
+
+    @Test func selectOnChooseTeamsOpensThePickerAndKeepsTheRow() {
+        var model = GuideModel(lineup: teamsLineup, group: "My Teams", focusedChannelID: nil, now: now)
+        #expect(model.handle(.select, now: now) == .openTeamPicker)
+        #expect(model.focus == .grid)
+        #expect(model.focusedRow == .chooseTeams)
+        // No channel menu, no programmes to the right; Left goes to the groups, on My Teams.
+        #expect(model.handle(.menu, now: now) == .none)
+        #expect(model.handle(.right, now: now) == .none)
+        #expect(model.focusedRow == .chooseTeams)
+        _ = model.handle(.left, now: now)
+        #expect(model.focus == .groups(1))   // Favorites (the live games) is first
+    }
+
+    @Test func selectOnAnUpcomingGamePlaysItsChannel() {
+        var model = GuideModel(lineup: teamsLineup, group: "My Teams", focusedChannelID: nil, now: now)
+        for _ in 0..<3 { _ = model.handle(.down, now: now) }
+        guard case .upcoming(let game) = model.focusedRow else {
+            Issue.record("Not on an upcoming game")
+            return
+        }
+        #expect(game.channel.id == "id:c3")
+        #expect(model.focusedChannel?.id == "id:c3")
+        #expect(model.handle(.menu, now: now) == .none)
+        #expect(model.handle(.select, now: now) == .play("id:c3"))
+        // From the channel cell of a live row, Down onto an upcoming row still selects the whole row.
+        _ = model.handle(.up, now: now)
+        _ = model.handle(.left, now: now)
+        #expect(model.focus == .channel)
+        _ = model.handle(.down, now: now)
+        #expect(model.handle(.select, now: now) == .play("id:c3"))
+        _ = model.handle(.left, now: now)
+        #expect(model.focus == .groups(1))
+    }
+
+    @Test func aRefreshKeepsTheFocusedUpcomingGame() {
+        var model = GuideModel(lineup: teamsLineup, group: "My Teams", focusedChannelID: nil, now: now)
+        for _ in 0..<4 { _ = model.handle(.down, now: now) }
+        #expect(model.focusedChannel?.id == "id:c2")
+        // The c10 game ends: the row moves up and stays focused.
+        let channels = channels
+        let upcoming = teamsLineup.upcomingTeamGames
+        model.setLineup(ChannelLineup(channels: channels, teamChannelIDs: ["id:c9"], upcomingTeamGames: upcoming))
+        #expect(model.row == 3)
+        #expect(model.focusedChannel?.id == "id:c2")
+        if case .upcoming = model.focusedRow {} else { Issue.record("Not on the upcoming game") }
+    }
+
+    /// QA minor from 8b: a group appearing above the focused group-list row keeps the same group focused.
+    @Test func groupsAppearingAboveKeepTheFocusedGroup() {
+        var model = model(group: "Live", focused: "id:c1")
+        _ = model.handle(.left, now: now)
+        _ = model.handle(.left, now: now)
+        #expect(model.focus == .groups(2))
+        #expect(model.groups[2] == "Live")
+        // A game starts with no saved favorites: Favorites appears at the top.
+        model.setLineup(ChannelLineup(channels: channels, teamChannelIDs: ["id:c9"]))
+        #expect(model.groups.prefix(2) == ["Favorites", "My Teams"])
+        #expect(model.focus == .groups(3))
+        #expect(model.groups[3] == "Live")
+        // And goes again.
+        model.setLineup(ChannelLineup(channels: channels))
+        #expect(model.focus == .groups(2))
+        // A focused group that goes away: the same position, clamped.
+        _ = model.handle(.down, now: now)
+        _ = model.handle(.down, now: now)
+        #expect(model.focus == .groups(4))
+        model.setLineup(ChannelLineup(channels: channels, preferences: ChannelPreferences(hiddenGroups: ["NHL"])))
+        #expect(model.focus == .groups(3))
+    }
+
+    @Test func aRememberedTeamsGroupReadsAsMyTeams() {
+        let model = GuideModel(lineup: teamsLineup, group: "Teams", focusedChannelID: nil, now: now)
+        #expect(model.selectedGroup == "My Teams")
+        #expect(teamsLineup.resolvedGroup("Teams") == "My Teams")
+        #expect(teamsLineup.resolvedGroup("Live") == "Live")
+        #expect(teamsLineup.resolvedGroup(nil) == nil)
+        // A playlist group really named "Teams" stays itself.
+        let named = ChannelLineup(channels: [channel(1, group: "Teams"), channel(2, group: "Live")])
+        #expect(named.resolvedGroup("Teams") == "Teams")
     }
 
     @Test func focusOnALaterProgramme() {

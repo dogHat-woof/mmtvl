@@ -199,6 +199,36 @@ enum Theme {
     /// Reduce Transparency: panels without see-through.
     static let solidPanelFill = Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1E / 255).opacity(0.92)
 
+    // MARK: Glass steps (M7l L2, D46)
+
+    // Settings → System → Glass. Clear is `panelGlass` and the rim tokens above, unscaled.
+    // Solid has no panel glass (`solidPanelFill`); its scales are for tile rims.
+    // Tuned on the TV: change the numbers, never the steps.
+    static let glassLightTint: Double = 0.35
+    static let glassLightPanel = Glass.clear.tint(.black.opacity(glassLightTint))
+    static let glassLightRimScale: Double = 0.8
+    static let glassLightSheenScale: Double = 0.7
+    static let glassFrostedTint: Double = 0.22
+    static let glassFrostedPanel = Glass.regular.tint(.black.opacity(glassFrostedTint))
+    static let glassFrostedRimScale: Double = 0.6
+    static let glassFrostedSheenScale: Double = 0.5
+    static let glassDarkFrostedTint: Double = 0.45
+    static let glassDarkFrostedPanel = Glass.regular.tint(.black.opacity(glassDarkFrostedTint))
+    static let glassDarkFrostedRimScale: Double = 0.4
+    static let glassDarkFrostedSheenScale: Double = 0.0
+    static let glassSolidRimScale: Double = 0.3
+    static let glassSolidSheenScale: Double = 0.0
+
+    // MARK: Banner glass (M7l L1)
+
+    /// The player's overlays (banner + timeshift bar, behind-live badge, error panel) sit over moving video:
+    /// frosted and darker with a faint rim, never less so than Dark Frosted (tint ≥ `glassDarkFrostedTint`,
+    /// rim ≤ `glassDarkFrostedRimScale`). Tuned on the TV (M7l step 8).
+    static let bannerGlassTint: Double = 0.45
+    static let bannerPanelGlass = Glass.regular.tint(.black.opacity(bannerGlassTint))
+    static let bannerRimScale: Double = 0.4
+    static let bannerSheenScale: Double = 0.0
+
     // MARK: Full-screen top shelf (M7 L27)
 
     /// The scrim over the art: transparent until this fraction of the height, then down to `shelfScrimOpacity`.
@@ -357,6 +387,13 @@ enum Theme {
     static let guideLogoSize: CGFloat = 48
     /// The star after a favorite's name in the channel cell (M6b).
     static let guideFavoriteSymbolSize: CGFloat = 20
+    /// M7l 8c: the channel number's slot in the channel cell; the Choose Teams row puts its symbol after it, where
+    /// channel logos sit, so its title lines up with the channel names.
+    static let guideChannelNumberWidth: CGFloat = 44
+    /// M7l 8c: the day and time slot that starts an upcoming game's cell ("Wed 12:30 PM" at `guideCellFont`).
+    static let guideUpcomingTimeWidth: CGFloat = 220
+    /// M7l 8c: the symbols in My Teams' Choose Teams and upcoming rows.
+    static let guideRowSymbolSize: CGFloat = 26
 
     // MARK: Multiview (M6)
 

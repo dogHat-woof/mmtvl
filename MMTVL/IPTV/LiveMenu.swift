@@ -12,8 +12,11 @@ nonisolated enum LiveMenuAction: Hashable, Sendable {
     case openMatchGuide(Channel.ID)
     case matchGuide(Channel.ID, GuideMatchChoice)
     case hideChannel(Channel.ID)
-    /// M7f L13: add or remove a team of this game or programme.
+    /// M7f L13: add or remove a team of this game or programme. M7l L12: also a team in Choose Teams.
     case toggleTeam(Team.ID)
+    /// M7l L12: Choose Teams opens a league (its teams, or a college league's conferences), or a conference.
+    case openTeamLeague(TeamLeague)
+    case openTeamConference(TeamLeague, String)
 }
 
 /// A menu drawn over Live TV: the guide's channel menu, Multiview's window menu and layout menu (M6 L10). Pure.

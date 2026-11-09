@@ -75,6 +75,9 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
     /// M7h step 9c (user decision 2026-11-08): with no receiver ready, the volume buttons change the TV's own volume
     /// (HDMI-CEC or a network VIERA; Settings → Audio & TV → TV → Volume Buttons Change TV Volume).
     var tvVolumeEnabled = false
+    /// M7l L2 (D46): how see-through every glass panel and tile rim is (Settings → System → Glass). Unknown values
+    /// read as `clear`.
+    var glassStyle = GlassStyle.clear
 
     var volumeMode: VolumeMode { VolumeMode(rawValue: phoneRemoteVolume) ?? .auto }
     /// Step 9c (build 25 security L2): a receiver is set up in Settings (a brand, or HDMI-CEC), whether or not its
@@ -146,5 +149,8 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
         // Step 13e: likewise.
         siriRemoteSwipes = ((try? container.decodeIfPresent(Bool.self, forKey: .siriRemoteSwipes)) ?? nil)
             ?? defaults.siriRemoteSwipes
+        // M7l step 2: like `receiverBrand`, an unknown step or a value of another type reads as the default (S6).
+        glassStyle = ((try? container.decodeIfPresent(String.self, forKey: .glassStyle)) ?? nil)
+            .flatMap(GlassStyle.init(rawValue:)) ?? defaults.glassStyle
     }
 }
