@@ -62,8 +62,10 @@ nonisolated enum EPGMatcher {
 
         var result: [Channel.ID: EPGRef] = [:]
         channelLoop: for channel in channels {
-            // 1. An override by name, then by tvg-id, whose target exists in a guide. "" = no guide.
-            let overrideTarget = lowerOverrides[channel.name.lowercased()]
+            // 1. An override by the channel's own key (M7j L12: an antenna channel's id, else the name), then by
+            // name, then by tvg-id, whose target exists in a guide. "" = no guide.
+            let overrideTarget = lowerOverrides[channel.overrideKey.lowercased()]
+                ?? lowerOverrides[channel.name.lowercased()]
                 ?? channel.tvgID.flatMap { lowerOverrides[$0.lowercased()] }
             if let target = overrideTarget {
                 if target.isEmpty { continue }

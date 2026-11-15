@@ -416,4 +416,29 @@ struct AppSettingsTests {
             #expect(!settings.kioskLock, "\(value)")
         }
     }
+
+    /// M7j L14: Use Antenna and Guide from SiliconDust; missing or of another type reads as true, and the rest of the
+    /// file is kept.
+    @Test func antennaKeysDecode() throws {
+        let missing = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(missing.antennaEnabled)
+        #expect(missing.antennaGuide)
+        #expect(AppSettings().antennaEnabled)
+        #expect(AppSettings().antennaGuide)
+        let off = try JSONDecoder().decode(AppSettings.self,
+                                           from: Data(#"{"antennaEnabled": false, "antennaGuide": false}"#.utf8))
+        #expect(!off.antennaEnabled)
+        #expect(!off.antennaGuide)
+        #expect(try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(off)) == off)
+        let encoded = try String(decoding: JSONEncoder().encode(off), as: UTF8.self)
+        #expect(encoded.contains(#""antennaEnabled":false"#))
+        #expect(encoded.contains(#""antennaGuide":false"#))
+        for value in ["0", #""false""#, "null", "[false]"] {
+            let json = #"{"antennaEnabled": \#(value), "antennaGuide": \#(value), "launchAtLogin": true}"#
+            let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+            #expect(settings.antennaEnabled, "\(value)")
+            #expect(settings.antennaGuide, "\(value)")
+            #expect(settings.launchAtLogin, "\(value)")
+        }
+    }
 }

@@ -29,9 +29,10 @@ struct MultiviewLiveTVTests {
                            playlist: String = IPTVFixtures.playlist,
                            guideIdleReturn: Duration = .seconds(180),
                            multiviewHighlightDuration: Duration = .seconds(5),
-                           pausedOverlayDuration: Duration = .seconds(15)) async throws -> Setup {
+                           pausedOverlayDuration: Duration = .seconds(15),
+                           tuner: FakeTuner? = nil) async throws -> Setup {
         let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL, texts: [IPTVFixtures.playlistURL: playlist],
-                                      state: state)
+                                      state: state, tuner: tuner)
         let player = FakePlayer()
         let factory = PlayerFactory()
         let model = LiveTVModel(player: player, makePlayer: factory.make, library: fixture.library,
@@ -87,6 +88,290 @@ struct MultiviewLiveTVTests {
     }
 
     // MARK: Entering
+
+    /// M7j L6: antenna windows play direct, playlist windows don't (All Channels: the playlist, then 2.1, 5.1, 11.1).
+    @Test func antennaWindowsPlayDirect() async throws {
+        let setup = try await makeSetup(state: IPTVState(lastChannelID: "antenna:2.1", lastGroup: "All Channels"),
+                                        tuner: FakeTuner())
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        #expect(setup.player.played == [AntennaFixtures.streamURL("2.1")])
+        #expect(setup.player.playedDirect == [true])
+        addToMultiview(model, "antenna:5.1")
+        addToMultiview(model, setup.id("Knicks @ Heat"))
+        #expect(model.multiview?.slots == ["antenna:2.1", "antenna:5.1", "id:knicks @ heat", nil, nil])
+        #expect(setup.factory.made.map(\.played) == [[AntennaFixtures.streamURL("5.1")], [IPTVFixtures.streamURL(5)]])
+        #expect(setup.factory.made.map(\.playedDirect) == [[true], [false]])
+        // Every load on every pool player (Back to full screen and in again reloads 2.1): direct iff antenna.
+        for player in allPlayers(setup) {
+            #expect(player.playedDirect == player.played.map { $0.host() == AntennaFixtures.host })
+        }
+    }
+
+    // MARK: M7j L8: the tuner budget
+
+    /// 2.1 full screen, then 5.1 and 11.1 added: the third antenna window is over the fake tuner's two.
+    private func makeThreeAntennaWindows(tuner: FakeTuner = FakeTuner()) async throws -> Setup {
+        let setup = try await makeSetup(state: IPTVState(lastChannelID: "antenna:2.1", lastGroup: "Antenna"),
+                                        tuner: tuner)
+        addToMultiview(setup.model, "antenna:5.1")
+        addToMultiview(setup.model, "antenna:11.1")
+        return setup
+    }
+
+    /// Pool players holding an antenna stream (loading, playing or paused).
+    private func antennaStreams(_ setup: Setup) -> Int {
+        allPlayers(setup).count { player in
+            [.loading, .playing, .paused].contains(player.state.phase)
+                && player.played.last?.host() == AntennaFixtures.host
+        }
+    }
+
+    @Test func thirdAntennaWindowSaysBothTunersAreInUse() async throws {
+        let setup = try await makeThreeAntennaWindows()
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        #expect(model.multiview?.slots == ["antenna:2.1", "antenna:5.1", "antenna:11.1", nil, nil])
+        // (Each add goes back to full screen and in again, which reloads the windows.)
+        #expect(setup.player.played.last == AntennaFixtures.streamURL("2.1"))
+        #expect(setup.player.state.phase == .loading)
+        #expect(setup.factory.made.count == 2)
+        #expect(setup.factory.made[0].played.last == AntennaFixtures.streamURL("5.1"))
+        #expect(setup.factory.made[0].state.phase == .loading)
+        // No `play` for the third window: its player waits, idle, with the message.
+        let third = try #require(model.tilePlayers["antenna:11.1"] as? FakePlayer)
+        #expect(third === setup.factory.made[1])
+        #expect(third.played.isEmpty)
+        #expect(third.state.phase == .idle)
+        #expect(model.windowErrors == ["antenna:11.1": "Both antenna tuners are in use"])
+        #expect(model.failedWindows == ["antenna:11.1"])
+        // Nothing failed, so the tuner wasn't asked.
+        #expect(setup.fixture.tuner?.statusFetchCount == 0)
+        // Its menu offers Retry; with both tuners still MMTVL's, Retry doesn't play either.
+        #expect(model.multiview?.focusedChannelID == "antenna:11.1")
+        _ = model.handle(.select)
+        #expect(model.menu?.items.map(\.id).contains("retry") == true)
+        choose(model, "retry")
+        #expect(third.played.isEmpty)
+        #expect(model.windowErrors["antenna:11.1"] == "Both antenna tuners are in use")
+    }
+
+    @Test func playlistWindowsDontCountAgainstTheTuners() async throws {
+        let setup = try await makeSetup(state: IPTVState(lastChannelID: "antenna:2.1", lastGroup: "All Channels"),
+                                        tuner: FakeTuner())
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, setup.id("NBA TV"))
+        addToMultiview(model, setup.id("Red Zone"))
+        addToMultiview(model, "antenna:5.1")
+        #expect(model.multiview?.slots == ["antenna:2.1", Self.nba, setup.id("Red Zone"), "antenna:5.1", nil])
+        // (Each add goes back to full screen and in again, which reloads the windows.)
+        #expect(setup.factory.made.map(\.played.last) == [IPTVFixtures.streamURL(2), IPTVFixtures.streamURL(3),
+                                                          AntennaFixtures.streamURL("5.1")])
+        #expect(model.windowErrors.isEmpty)
+        // A third antenna window is over the budget even with playlist windows playing.
+        addToMultiview(model, "antenna:11.1")
+        #expect(model.multiview?.slots.last == "antenna:11.1")
+        #expect(setup.factory.made.count == 4)
+        #expect(setup.factory.made[3].played.isEmpty)
+        #expect(model.windowErrors == ["antenna:11.1": "Both antenna tuners are in use"])
+    }
+
+    /// A window whose stream ended frees its tuner too; that doesn't start anything, but Retry on the waiting
+    /// window plays it.
+    @Test func releasingAnAntennaWindowFreesATuner() async throws {
+        let tuner = FakeTuner()
+        tuner.setStatus(AntennaFixtures.statusJSON(busy: 1))
+        tuner.setLineupStatus(AntennaFixtures.lineupStatusJSON(scanning: false))
+        let setup = try await makeThreeAntennaWindows(tuner: tuner)
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        let third = try #require(model.tilePlayers["antenna:11.1"] as? FakePlayer)
+        #expect(third.played.isEmpty)
+
+        // 5.1 has no signal: its tuner is free, and 11.1 still waits.
+        let second = setup.factory.made[0]
+        second.state.httpStatus = 503
+        second.fail()
+        await model.pendingTask?.value
+        #expect(model.windowErrors["antenna:5.1"] == "No signal on this channel")
+        #expect(third.played.isEmpty)
+
+        // 11.1's Retry now plays it.
+        #expect(model.multiview?.focusedChannelID == "antenna:11.1")
+        _ = model.handle(.select)
+        choose(model, "retry")
+        #expect(third.played == [AntennaFixtures.streamURL("11.1")])
+        #expect(third.playedDirect == [true])
+        #expect(model.windowErrors == ["antenna:5.1": "No signal on this channel"])
+    }
+
+    /// Orchestrator decision 2026-11-15: removing an antenna window starts the first window waiting for a tuner.
+    @Test func removingAnAntennaWindowStartsTheBlockedOne() async throws {
+        let setup = try await makeThreeAntennaWindows()
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        let third = try #require(model.tilePlayers["antenna:11.1"] as? FakePlayer)
+        // Remove 5.1's window (slot 1, left of 11.1's).
+        _ = model.handle(.left)
+        #expect(model.multiview?.focusedChannelID == "antenna:5.1")
+        _ = model.handle(.select)
+        choose(model, "remove")
+        #expect(model.tilePlayers["antenna:5.1"] == nil)
+        #expect(setup.factory.made[0].state.phase == .idle)
+        #expect(third.played == [AntennaFixtures.streamURL("11.1")])
+        #expect(third.playedDirect == [true])
+        #expect(model.windowErrors.isEmpty)
+        #expect(antennaStreams(setup) == 2)
+    }
+
+    /// Only windows waiting for a tuner start when one frees; a window with no signal stays as it is.
+    @Test func aFailedNoSignalWindowIsNotStartedWhenATunerFrees() async throws {
+        let tuner = FakeTuner()
+        tuner.setStatus(AntennaFixtures.statusJSON(busy: 1))
+        tuner.setLineupStatus(AntennaFixtures.lineupStatusJSON(scanning: false))
+        let setup = try await makeThreeAntennaWindows(tuner: tuner)
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        let second = setup.factory.made[0]
+        let third = try #require(model.tilePlayers["antenna:11.1"] as? FakePlayer)
+        second.state.httpStatus = 503
+        second.fail()
+        await model.pendingTask?.value
+        #expect(model.windowErrors["antenna:5.1"] == "No signal on this channel")
+        let secondLoads = second.played.count
+
+        // Remove 2.1's window: 11.1 (waiting) starts, 5.1 (no signal) doesn't.
+        for _ in 0..<4 where model.multiview?.focusedChannelID != "antenna:2.1" { _ = model.handle(.up) }
+        for _ in 0..<4 where model.multiview?.focusedChannelID != "antenna:2.1" { _ = model.handle(.left) }
+        #expect(model.multiview?.focusedChannelID == "antenna:2.1")
+        _ = model.handle(.select)
+        choose(model, "remove")
+        #expect(model.tilePlayers["antenna:2.1"] == nil)
+        #expect(third.played == [AntennaFixtures.streamURL("11.1")])
+        #expect(second.played.count == secondLoads)
+        #expect(second.state.phase == .failed)
+        #expect(model.windowErrors == ["antenna:5.1": "No signal on this channel"])
+    }
+
+    /// Orchestrator decision 2026-11-15 (step 11.5): picking a waiting channel for a playing antenna window swaps
+    /// them, and the picked channel gets the tuner.
+    @Test func pickingABlockedChannelForAPlayingWindowPlaysIt() async throws {
+        let device = AntennaFixtures.device()
+        let tuner = FakeTuner(lineups: [device.lineupURL: AntennaFixtures.lineupJSON(
+            [("5.1", "WAGA-HD"), ("11.1", "WXIA-TV"), ("17.1", "WPCH-TV")])])
+        let setup = try await makeSetup(state: IPTVState(lastChannelID: "antenna:5.1", lastGroup: "Antenna"),
+                                        tuner: tuner)
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, "antenna:11.1")
+        addToMultiview(model, "antenna:17.1")
+        #expect(model.multiview?.slots == ["antenna:5.1", "antenna:11.1", "antenna:17.1", nil, nil])
+        let eleven = try #require(model.tilePlayers["antenna:11.1"] as? FakePlayer)
+        let seventeen = try #require(model.tilePlayers["antenna:17.1"] as? FakePlayer)
+        #expect(seventeen.played.isEmpty)
+        #expect(model.windowErrors == ["antenna:17.1": "Both antenna tuners are in use"])
+
+        // 11.1's window → Change Channel → 17.1.
+        _ = model.handle(.left)
+        #expect(model.multiview?.focusedChannelID == "antenna:11.1")
+        _ = model.handle(.select)
+        choose(model, "changeChannel")
+        #expect(model.guidePurpose == .pick(slot: 1))
+        pick(model, "antenna:17.1")
+        #expect(model.mode == .multiview)
+        #expect(model.multiview?.slots == ["antenna:5.1", "antenna:17.1", "antenna:11.1", nil, nil])
+        #expect(seventeen.played == [AntennaFixtures.streamURL("17.1")])
+        #expect(seventeen.state.phase == .loading)
+        #expect(eleven.state.phase == .idle)
+        #expect(model.windowErrors == ["antenna:11.1": "Both antenna tuners are in use"])
+        #expect(antennaStreams(setup) == 2)
+    }
+
+    /// QA minor: a window whose diagnosis retry the budget blocked (its player `.failed`, the busy text) plays on
+    /// Back, now that the other windows are gone.
+    @Test func backOnAWindowWhoseRetryWasBlockedPlaysIt() async throws {
+        let tuner = FakeTuner()
+        tuner.setStatus(AntennaFixtures.statusJSON(busy: 1))
+        tuner.setLineupStatus(AntennaFixtures.lineupStatusJSON(scanning: false))
+        let setup = try await makeThreeAntennaWindows(tuner: tuner)
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        let second = setup.factory.made[0]
+        let third = try #require(model.tilePlayers["antenna:11.1"] as? FakePlayer)
+        let secondLoads = second.played.count
+        // 5.1 fails with a 404; while the lineup is read again, 11.1's Retry takes the free tuner.
+        second.state.httpStatus = 404
+        second.fail()
+        #expect(model.multiview?.focusedChannelID == "antenna:11.1")
+        _ = model.handle(.select)
+        choose(model, "retry")
+        #expect(third.played == [AntennaFixtures.streamURL("11.1")])
+        await model.pendingTask?.value
+        // The retry of 5.1 was over the budget.
+        #expect(second.state.phase == .failed)
+        #expect(second.played.count == secondLoads)
+        #expect(model.windowErrors == ["antenna:5.1": "Both antenna tuners are in use"])
+
+        _ = model.handle(.left)
+        #expect(model.multiview?.focusedChannelID == "antenna:5.1")
+        _ = model.handle(.back)
+        #expect(model.mode == .player)
+        #expect(model.player === second)
+        #expect(model.currentChannel?.id == "antenna:5.1")
+        #expect(second.played.last == AntennaFixtures.streamURL("5.1"))
+        #expect(second.state.phase == .loading)
+        #expect(model.playbackError == nil)
+    }
+
+    /// A zap in a window replaces its stream: the same tuner, not one more.
+    @Test func zappingAnAntennaWindowDoesntCountTwice() async throws {
+        let setup = try await makeSetup(state: IPTVState(lastChannelID: "antenna:2.1", lastGroup: "Antenna"),
+                                        tuner: FakeTuner())
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, "antenna:5.1")
+        #expect(model.multiview?.focusedChannelID == "antenna:5.1")
+        _ = model.handle(.channelDown)   // 5.1 → 11.1 (2.1 is in the other window)
+        #expect(model.multiview?.slots == ["antenna:2.1", "antenna:11.1", nil, nil, nil])
+        #expect(model.windowErrors.isEmpty)
+        let played = (model.tilePlayers["antenna:11.1"] as? FakePlayer)?.played
+        #expect(played?.last == AntennaFixtures.streamURL("11.1"))
+    }
+
+    /// Back on the window the budget never started: full screen plays it (the other windows are gone).
+    @Test func fullScreenOnAWindowOverTheBudgetPlaysIt() async throws {
+        let setup = try await makeThreeAntennaWindows()
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        let third = try #require(model.tilePlayers["antenna:11.1"] as? FakePlayer)
+        _ = model.handle(.back)
+        #expect(model.mode == .player)
+        #expect(model.currentChannel?.id == "antenna:11.1")
+        #expect(model.player === third)
+        #expect(third.played == [AntennaFixtures.streamURL("11.1")])
+        #expect(model.playbackError == nil)
+    }
+
+    /// L9 in a window: the tuner's answer is the window's text, without a playlist refresh.
+    @Test func aFailedAntennaWindowSaysWhy() async throws {
+        let tuner = FakeTuner()
+        tuner.setStatus(AntennaFixtures.statusJSON(busy: 1))
+        tuner.setLineupStatus(AntennaFixtures.lineupStatusJSON(scanning: false))
+        let setup = try await makeSetup(state: IPTVState(lastChannelID: "antenna:2.1", lastGroup: "Antenna"),
+                                        tuner: tuner)
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, "antenna:5.1")
+        let tile = setup.factory.made[0]
+        let fetches = setup.fixture.network.fetchCount
+        tile.state.httpStatus = 503
+        tile.fail()
+        await model.pendingTask?.value
+        #expect(model.windowErrors == ["antenna:5.1": "No signal on this channel"])
+        #expect(setup.fixture.network.fetchCount == fetches)
+        #expect(tile.played.count == 1)
+    }
 
     @Test func addWhilePlaying() async throws {
         let setup = try await makeSetup()

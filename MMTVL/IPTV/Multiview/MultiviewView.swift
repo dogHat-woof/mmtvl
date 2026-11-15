@@ -31,18 +31,21 @@ struct MultiviewOverlayView: View {
         let state = id.flatMap { model.tilePlayers[$0] }?.state
         // L14: the windows' own text, bright only around a press (always on the focused window).
         let showsText = model.multiviewHighlightVisible || isFocused
-        let isFailed = id.map(model.failedWindows.contains) ?? false
+        // M7j L8, L9: the window's own text ("Can't play this channel", "Both antenna tuners are in use", …).
+        let failure = id.flatMap { model.windowErrors[$0] }
+        let isFailed = failure != nil
         // L15: these two change only when they show or hide, so their fades don't ride on every press.
         let showsPause = id != nil && !isFailed && state?.phase == .paused && model.pausedOverlayVisible
         let showsLabel = isFocused && id != nil
             && (model.showsTimeshiftBar || (state?.phase == .paused && model.pausedOverlayVisible))
         ZStack {
             if id != nil {
-                if isFailed {
+                if let failure {
                     ZStack {
                         Color.black.opacity(0.6)
-                        Text(LiveTVModel.playbackErrorMessage)
+                        Text(failure)
                             .font(Theme.multiviewChipDetailFont)
+                            .multilineTextAlignment(.center)
                             .foregroundStyle(Theme.primaryText)
                             .opacity(showsText ? 1 : 0)
                             .animation(Theme.multiviewHighlightFade, value: showsText)

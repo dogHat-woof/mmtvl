@@ -57,6 +57,9 @@ extension SettingsModel {
         case .receiverConnection: receiverConnectionSections
         case .addressEntry(let field): addressEntrySections(field)
         case .glassStyle: glassStyleSections
+        case .antenna: antennaSections
+        case .antennaChannels: antennaChannelsSections
+        case .confirmAntennaScan: confirmAntennaScanSections
         }
     }
 
@@ -109,6 +112,9 @@ extension SettingsModel {
         case .addressEntry(.receiver): "Receiver Address"
         case .addressEntry(.tv): "TV Address"
         case .glassStyle: "Glass"
+        case .antenna: "Antenna"
+        case .antennaChannels: "Channels"
+        case .confirmAntennaScan: "Scan for Channels?"
         }
     }
 
@@ -147,9 +153,11 @@ extension SettingsModel {
                 SettingsRow(id: "homeScreen", title: "Home Screen", showsDisclosure: true, action: .push(.homeScreen),
                             description: "Arrange, hide and add tiles, and choose each tile's art and the tile MMTVL opens on."),
                 SettingsRow(id: "liveTV", title: "Live TV",
-                            value: iptv.hasPlaylist ? Self.channelCount(iptv.channelCount) : "Not Set Up",
+                            // M7j: a tuner that was found counts as set up; its channels count too.
+                            value: iptv.hasLiveSource ? Self.channelCount(iptv.channelCount + iptv.antennaChannels.count)
+                                : "Not Set Up",
                             showsDisclosure: true, action: .push(.liveTV),
-                            description: "The playlist and guides, channel groups, hidden channels, teams and the Home screen preview."),
+                            description: "The playlist, antenna and guides, channel groups, hidden channels, teams and the Home screen preview."),
                 SettingsRow(id: "plex", title: "Plex", value: plex.isSignedIn ? "Signed In" : "Not Signed In",
                             showsDisclosure: true, action: .push(.plex),
                             description: "Continue Watching from your Plex server on the Home screen."),
@@ -499,8 +507,9 @@ extension SettingsModel {
         ]
     }
 
+    /// "1 Channel", "185 Channels".
     private static func channelCount(_ count: Int) -> String {
-        "\(count.formatted()) Channels"
+        count == 1 ? "1 Channel" : "\(count.formatted()) Channels"
     }
 
     /// M4: the playlist and guide addresses come from the clipboard (L2).
@@ -515,8 +524,18 @@ extension SettingsModel {
                                         detail: pasteMessage(for: .playlist) ?? "Copy the M3U address on this Mac or your iPhone first",
                                         action: .pasteIPTVURL(.playlist)))
         var sections = [SettingsSection(id: "playlist", title: "Playlist", rows: playlistRows)]
-        guard iptv.hasPlaylist else { return sections }
+        // M7j L13, L14: the antenna alone. The Antenna row always shows, so the antenna can be turned back on.
+        guard iptv.hasLiveSource || settings.antennaEnabled else {
+            sections.append(SettingsSection(id: "channels", title: "Channels", rows: [antennaRow]))
+            return sections
+        }
+        // The antenna on, no playlist and no tuner found yet: the Channels section only.
+        guard iptv.hasLiveSource else {
+            sections.append(channelsSection)
+            return sections
+        }
 
+        // M7j L11, L13: the guides, the preview and Refresh Now with a tuner alone too; only Remove is the playlist's.
         sections.append(guidesSection)
         sections.append(channelsSection)
         sections.append(SettingsSection(id: "homePreview", rows: [
@@ -524,12 +543,17 @@ extension SettingsModel {
                         action: .toggle(.homeLivePreview),
                         description: "Loads the channel, muted, while the Home screen shows; you see it when Live TV is focused."),
         ]))
-        sections.append(SettingsSection(id: "manage", rows: [
+        var manageRows = [
             SettingsRow(id: "iptv.refresh", title: "Refresh Now", action: .refreshIPTV,
-                        description: "Downloads the playlist and the guides again now."),
-            SettingsRow(id: "iptv.remove", title: "Remove Live TV Source", showsDisclosure: true,
-                        action: .push(.confirmRemoveIPTV)),
-        ], footer: "Addresses are kept in the Keychain. The first paste may ask for permission; choose Allow."))
+                        description: iptv.hasPlaylist ? "Downloads the playlist and the guides again now."
+                            : "Reads the tuner's channels and downloads the guides again now."),
+        ]
+        if iptv.hasPlaylist {
+            manageRows.append(SettingsRow(id: "iptv.remove", title: "Remove Live TV Source", showsDisclosure: true,
+                                          action: .push(.confirmRemoveIPTV)))
+        }
+        sections.append(SettingsSection(id: "manage", rows: manageRows,
+                                        footer: "Addresses are kept in the Keychain. The first paste may ask for permission; choose Allow."))
         return sections
     }
 
@@ -566,16 +590,19 @@ extension SettingsModel {
                                     detail: pasteMessage(for: .guide) ?? "Copy an XMLTV address on this Mac or your iPhone first",
                                     action: .pasteIPTVURL(.guide)))
         }
+        // M7j: the count is the playlist's (step 8); a tuner alone has its own guide line on the Antenna page.
+        let count = iptv.hasPlaylist ? "Guide data for \(iptv.matchedChannelCount) of \(iptv.channelCount) channels. " : ""
         return SettingsSection(id: "guides", title: "Guides", rows: rows,
-                               footer: "Guide data for \(iptv.matchedChannelCount) of \(iptv.channelCount) channels. A channel uses the first guide in this list that has it.")
+                               footer: count + "A channel uses the first guide in this list that has it.")
     }
 
     /// M6b L5: groups and hidden channels; favorites and single channels are managed from the guide.
     private var channelsSection: SettingsSection {
         let hiddenGroups = iptv.groups.filter(\.isHidden).count
         return SettingsSection(id: "channels", title: "Channels", rows: [
+            antennaRow,
             SettingsRow(id: "iptv.groups", title: "Groups", value: hiddenGroups == 0 ? "All Shown" : "\(hiddenGroups) Hidden",
-                        showsDisclosure: true, action: .push(.iptvGroups), description: "Which playlist groups show."),
+                        showsDisclosure: true, action: .push(.iptvGroups), description: "Which groups show in the guide."),
             SettingsRow(id: "iptv.hiddenChannels", title: "Hidden Channels",
                         value: iptv.hiddenChannels.isEmpty ? "None" : "\(iptv.hiddenChannels.count)",
                         showsDisclosure: true, action: .push(.iptvHiddenChannels),
@@ -584,6 +611,133 @@ extension SettingsModel {
                         showsDisclosure: true, action: .push(.iptvTeams),
                         description: "Your teams' live and upcoming games, pro and college, in the guide's My Teams group."),
         ], footer: "To favorite, hide or match one channel: in the guide, press Left on the programme airing now, then Select.")
+    }
+
+    // MARK: - Antenna (M7j L14)
+
+    /// Live TV → Antenna: "1 Tuner · 185 Channels", "Searching…", "No Tuner Found", "Off".
+    private var antennaRow: SettingsRow {
+        let value: String
+        if !settings.antennaEnabled {
+            value = "Off"
+        } else if !iptv.antennaTuners.isEmpty {
+            let tuners = iptv.antennaTuners.count
+            value = "\(tuners) \(tuners == 1 ? "Tuner" : "Tuners") · \(Self.channelCount(iptv.antennaChannels.count))"
+        } else if iptv.antennaSearching {
+            value = "Searching…"
+        } else {
+            value = "No Tuner Found"
+        }
+        return SettingsRow(id: "iptv.antenna", title: "Antenna", value: value, showsDisclosure: true,
+                           action: .push(.antenna), description: "Channels from an HDHomeRun tuner on your network.")
+    }
+
+    /// The tuners, Find Tuners, the antenna guide and the channels; only the switch while the antenna is off. Never a
+    /// DeviceID, address or token: the status has none.
+    private var antennaSections: [SettingsSection] {
+        var sections = [SettingsSection(id: "antenna", title: "Antenna", rows: [
+            SettingsRow(id: "antenna.enabled", title: "Use Antenna", value: Self.onOff(settings.antennaEnabled),
+                        action: .toggle(.antennaEnabled),
+                        description: "Finds HDHomeRun tuners on your network and adds their channels to Live TV's Antenna group."),
+        ])]
+        guard settings.antennaEnabled else { return sections }
+
+        var tunerRows = iptv.antennaTuners.enumerated().map { index, tuner in
+            SettingsRow(id: "antenna.tuner.\(index)", title: tuner.name,
+                        value: tuner.tunerCount == 1 ? "1 tuner" : "\(tuner.tunerCount) tuners",
+                        detail: "\(tuner.model) · \(iptv.antennaLineupLine ?? Self.antennaChannelCount(tuner.channelCount))")
+        }
+        let searchLine = iptv.antennaTuners.isEmpty
+            ? (iptv.antennaSearching ? "Searching…" : SettingsModel.antennaFindLine(.noneFound)) : nil
+        tunerRows.append(SettingsRow(id: "antenna.find", title: "Find Tuners",
+                                     detail: probeLines[.findAntennaTuners] ?? searchLine, action: .findAntennaTuners,
+                                     description: "Looks for HDHomeRun tuners on your network again."))
+        if !iptv.antennaTuners.isEmpty { tunerRows.append(antennaScanRow) }
+        sections.append(SettingsSection(id: "antennaTuners", title: "Tuners", rows: tunerRows))
+
+        sections.append(SettingsSection(id: "antennaGuide", title: "Guide", rows: [
+            SettingsRow(id: "antenna.guide", title: "Guide from SiliconDust", value: Self.onOff(settings.antennaGuide),
+                        action: .toggle(.antennaGuide),
+                        description: "Downloads 2 days of listings from SiliconDust (api.hdhomerun.com) about once a day, signed in with your tuner. Off: antenna channels use your pasted guides."),
+            SettingsRow(id: "antenna.guide.status", title: "Status",
+                        detail: settings.antennaGuide ? iptv.antennaGuideLine : "Off"),
+        ]))
+
+        let hidden = iptv.antennaChannels.count(where: \.isHidden)
+        var footer = "Channels come from the tuner's lineup. After moving the antenna, Scan for Channels finds them again."
+        switch iptv.antennaLeftOut {
+        case 0: break
+        case 1: footer += " 1 protected channel can't play and is left out."
+        case let count: footer += " \(count) protected channels can't play and are left out."
+        }
+        sections.append(SettingsSection(id: "antennaChannels", title: "Channels", rows: [
+            SettingsRow(id: "antenna.channels", title: "Channels",
+                        value: hidden == 0 ? "\(iptv.antennaChannels.count) Shown" : "\(hidden) Hidden",
+                        showsDisclosure: true, action: .push(.antennaChannels),
+                        description: "Show or hide each antenna channel."),
+        ], footer: footer))
+        return sections
+    }
+
+    /// M7j L18: Scan for Channels (the confirm page), or Stop Scan while a scan runs ("45 %", "Scanning… 120 found").
+    /// Dimmed with "The tuner can't scan now" when no tuner can: then an info row, Select does nothing (security L2).
+    private var antennaScanRow: SettingsRow {
+        if case .running(let progress, let found) = iptv.antennaScan {
+            return SettingsRow(id: "antenna.scan", title: "Stop Scan", value: "\(progress) %",
+                               detail: "Scanning… \(found.formatted()) found", action: .stopAntennaScan,
+                               description: "Stops the tuner's channel scan now.")
+        }
+        return SettingsRow(id: "antenna.scan", title: "Scan for Channels",
+                           detail: Self.antennaScanLine(iptv.antennaScan, canScan: iptv.antennaCanScan),
+                           showsDisclosure: iptv.antennaCanScan, isDimmed: !iptv.antennaCanScan,
+                           action: iptv.antennaCanScan ? .push(.confirmAntennaScan) : nil,
+                           description: "Has the tuner look for channels again, for a few minutes.")
+    }
+
+    /// M7j L18: the Scan for Channels row's detail when no scan runs.
+    static func antennaScanLine(_ scan: AntennaScanState?, canScan: Bool) -> String? {
+        if !canScan { return "The tuner can't scan now" }
+        switch scan {
+        case .finished(let found, let added, let removed):
+            let channels = found == 1 ? "1 channel" : "\(found.formatted()) channels"
+            return "Found \(channels): \(added.formatted()) new, \(removed.formatted()) gone"
+        case .stopped: return "Scan stopped"
+        case .failed: return "Scan failed"
+        case .running, nil: return nil
+        }
+    }
+
+    /// M7j L18: like Remove Live TV Source, Cancel first.
+    private var confirmAntennaScanSections: [SettingsSection] {
+        [
+            SettingsSection(id: "confirm", rows: [
+                SettingsRow(id: "confirm.cancel", title: "Cancel", action: .pop),
+                SettingsRow(id: "confirm.scan", title: "Scan", action: .startAntennaScan),
+            ], footer: "The tuner looks for channels for a few minutes. Antenna channels can't play meanwhile, here or on other devices. Channels it doesn't find are removed from the tuner's lineup."),
+        ]
+    }
+
+    /// "1 channel", "185 channels".
+    private static func antennaChannelCount(_ count: Int) -> String {
+        count == 1 ? "1 channel" : "\(count.formatted()) channels"
+    }
+
+    /// One row per antenna channel: "5.1  WAGA-HD", Shown or Hidden, "HD · Signal 100 %" (the parts the tuner gives).
+    private var antennaChannelsSections: [SettingsSection] {
+        var rows = iptv.antennaChannels.map { channel in
+            let parts = [channel.isHD ? "HD" : nil, channel.signalQuality.map { "Signal \($0) %" }].compactMap { $0 }
+            return SettingsRow(id: "antennaChannel.\(channel.id)", title: "\(channel.displayNumber)  \(channel.name)",
+                               value: channel.isHidden ? "Hidden" : "Shown",
+                               detail: parts.isEmpty ? nil : parts.joined(separator: " · "), isDimmed: channel.isHidden,
+                               action: .toggleChannelHidden(id: channel.id))
+        }
+        if rows.isEmpty {
+            rows.append(SettingsRow(id: "antennaChannel.none", title: "No antenna channels"))
+        }
+        // QA 3: each row keeps its own Shown/Hidden; the footer says the whole group is hidden.
+        let groupHidden = iptv.groups.contains { $0.name == AntennaLineup.group && $0.isHidden }
+        return [SettingsSection(id: "antennaChannelList", rows: rows,
+                                footer: groupHidden ? "The Antenna group is hidden in Live TV → Groups, so none of these channels show." : nil)]
     }
 
     private var iptvGroupsSections: [SettingsSection] {
@@ -668,7 +822,7 @@ extension SettingsModel {
 
     private var iptvHiddenChannelsSections: [SettingsSection] {
         var rows = iptv.hiddenChannels.map { channel in
-            SettingsRow(id: "hidden.\(channel.id)", title: "\(channel.number)  \(channel.name)", value: "Show",
+            SettingsRow(id: "hidden.\(channel.id)", title: "\(channel.displayNumber)  \(channel.name)", value: "Show",
                         detail: channel.group, action: .unhideIPTVChannel(id: channel.id))
         }
         if rows.isEmpty {

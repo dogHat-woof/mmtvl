@@ -34,4 +34,14 @@ struct GuideSourceTests {
         #expect(source.label == "guide.example · custom.xml")
         #expect(source.shortLabel == "custom")
     }
+
+    /// M7j L10: SiliconDust's guide URL (its query is a token) labels as the host only, and its id is the bare
+    /// endpoint's hash, never the tokened URL's.
+    @Test func antennaGuideURLShowsTheHostOnly() {
+        let source = GuideSource(url: AntennaFixtures.guideURL, isFromPlaylist: false)
+        #expect(source.label == "api.hdhomerun.com")
+        #expect(source.shortLabel == "api.hdhomerun.com")
+        #expect(source.id != AntennaGuide.sourceID)
+        #expect(GuideSource(url: AntennaGuide.endpoint, isFromPlaylist: false).id == AntennaGuide.sourceID)
+    }
 }

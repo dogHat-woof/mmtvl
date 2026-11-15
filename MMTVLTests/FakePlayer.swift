@@ -6,6 +6,8 @@ final class FakePlayer: LivePlayer {
     var state = PlayerState()
     var onFailure: (() -> Void)?
     var played: [URL] = []
+    /// M7j L6: `direct` of each `play`, in the same order as `played`.
+    var playedDirect: [Bool] = []
     var stops = 0
     var pauses = 0
     var seeks: [Double] = []
@@ -15,8 +17,9 @@ final class FakePlayer: LivePlayer {
     var bufferProfile = BufferProfile.full
     var holdsSleepAssertion = true
 
-    func play(_ url: URL) {
+    func play(_ url: URL, direct: Bool) {
         played.append(url)
+        playedDirect.append(direct)
         state = PlayerState(phase: .loading)
     }
 

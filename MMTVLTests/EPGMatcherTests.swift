@@ -125,4 +125,25 @@ struct EPGMatcherTests {
         #expect(EPGMatcher.tokens("NBA TV TV") == ["nba", "tv"])
         #expect(EPGMatcher.normalize("NBA TV TV") == "nbatvtv")
     }
+
+    // MARK: - M7j L12
+
+    /// An antenna channel's override is under its id (`antenna:5.1`), which wins over one under its name (names repeat
+    /// on the tuner); a playlist channel's key is its name, as before.
+    @Test func overrideKeyComesBeforeName() {
+        let antenna = Channel(id: "antenna:5.1", number: 9, name: "WYGA-CD", group: "Antenna", tvgID: nil, tvgName: nil,
+                              logoURL: nil, streamURL: URL(string: "http://10.0.0.9:5004/auto/v5.1")!,
+                              source: .antenna(deviceID: "1234ABCD"), guideNumber: "5.1")
+        let other = Channel(id: "antenna:26.1", number: 10, name: "WYGA-CD", group: "Antenna", tvgID: nil, tvgName: nil,
+                            logoURL: nil, streamURL: URL(string: "http://10.0.0.9:5004/auto/v26.1")!,
+                            source: .antenna(deviceID: "1234ABCD"), guideNumber: "26.1")
+        let guide = [epg("by.id", "Something"), epg("by.name", "Else")]
+        let overrides = ["ANTENNA:5.1": "BY.ID", "wyga-cd": "by.name"]
+        let result = EPGMatcher.match([antenna, other], to: guide, overrides: overrides)
+        #expect(result == [antenna.id: "by.id", other.id: "by.name"])
+
+        let playlist = channel("NBA TV", tvgID: "nbatv.us")
+        #expect(playlist.overrideKey == "NBA TV")
+        #expect(EPGMatcher.match([playlist], to: guide, overrides: ["nba tv": "by.id"]) == [playlist.id: "by.id"])
+    }
 }

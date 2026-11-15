@@ -8,6 +8,14 @@ nonisolated struct PlayerState: Equatable, Sendable {
     var timeshift: Timeshift?
     /// M7f L3: the stream's resolution and frame rate, once mpv knows them.
     var videoFormat: VideoFormat? = nil
+    /// M7j L9: the last "HTTP error NNN" mpv logged for the current load (nil: none, or not yet).
+    var httpStatus: Int? = nil
+
+    /// A load that failed for good: no timeshift or format, but the load's HTTP status stays for L9's diagnosis,
+    /// which `onFailure` runs right after (QA, step 5). `play` and each `loadFile` reset it.
+    static func failed(from state: PlayerState) -> PlayerState {
+        PlayerState(phase: .failed, timeshift: nil, httpStatus: state.httpStatus)
+    }
 }
 
 /// What `LiveTVModel` needs from a player; tests use a fake.
@@ -15,7 +23,8 @@ protocol LivePlayer: AnyObject {
     var state: PlayerState { get }
     /// After retries are exhausted (L13). Set by LiveTVModel.
     var onFailure: (() -> Void)? { get set }
-    func play(_ url: URL)
+    /// `direct`: an antenna stream (M7j L6): no resolver or relay, MPEG-TS only, deinterlaced, at most one reconnect.
+    func play(_ url: URL, direct: Bool)
     func stop()
     func togglePause()
     func seek(by seconds: Double)
@@ -30,10 +39,17 @@ protocol LivePlayer: AnyObject {
     func setHoldsSleepAssertion(_ holds: Bool)
 }
 
+extension LivePlayer {
+    /// A playlist stream (through the resolver and the relay).
+    func play(_ url: URL) { play(url, direct: false) }
+}
+
 /// One mpv core and its video view. Live TV pools up to five (M6 L2).
 @Observable
 final class MPVPlayerController: LivePlayer {
-    static let maxRetries = 2
+    nonisolated static let maxRetries = 2
+    /// M7j L6: an antenna stream that was playing is reconnected once; one that never played fails at once.
+    nonisolated static let directReconnects = 1
     static let retryDelay: Duration = .seconds(2)
     private static var nextIndex = 1
 
@@ -56,6 +72,8 @@ final class MPVPlayerController: LivePlayer {
 
     @ObservationIgnored private var mpv: MPVHandle?
     @ObservationIgnored private var currentURL: URL?
+    /// M7j L6: the current stream is an antenna stream.
+    @ObservationIgnored private var isDirect = false
     @ObservationIgnored private var pendingURL: URL?
     @ObservationIgnored private var retries = 0
     @ObservationIgnored private var retryTask: Task<Void, Never>?
@@ -74,6 +92,8 @@ final class MPVPlayerController: LivePlayer {
     @ObservationIgnored private var loggedFormat = false
     /// M7c L27: when the current load (or retry) started; nil once its first frame is logged.
     @ObservationIgnored private var loadStartedAt: ContinuousClock.Instant?
+    /// M7j Q2: the current load's decoder warnings before its first frame, logged at debug and counted.
+    @ObservationIgnored private var preFrameNoise = MPVLogText.PreFrameNoise()
     @ObservationIgnored private let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "MPV")
 
     init() {
@@ -103,7 +123,7 @@ final class MPVPlayerController: LivePlayer {
         }
     }
 
-    func play(_ url: URL) {
+    func play(_ url: URL, direct: Bool) {
         prepare()
         guard mpv != nil else {
             onFailure?()
@@ -112,12 +132,14 @@ final class MPVPlayerController: LivePlayer {
         retryTask?.cancel()
         retries = 0
         currentURL = url
+        isDirect = direct
         loggedFormat = false
         state = PlayerState(phase: .loading, timeshift: nil)
         load(url)
     }
 
     func stop() {
+        reportPreFrameNoise()
         loadStartedAt = nil
         resolveTask?.cancel()
         resolveTask = nil
@@ -209,7 +231,8 @@ final class MPVPlayerController: LivePlayer {
         resolveTask = nil
         // M7c L27: the time to the first frame includes resolving.
         loadStartedAt = .now
-        guard let resolver else {
+        // M7j L6: an antenna stream is never resolved (a resolve is a GET, which takes a tuner).
+        guard let resolver, !isDirect else {
             loadFile(url, original: url)
             return
         }
@@ -228,12 +251,21 @@ final class MPVPlayerController: LivePlayer {
     private func loadFile(_ url: URL, original: URL) {
         loggedDecoder = false
         liveEdge.reset()
-        // M7c L30: the last retry goes straight to the CDN, in case the relay is the problem.
-        let relayed = retries < Self.maxRetries ? relay?.localURL(for: url) : nil
+        state.httpStatus = nil
+        // M7j Q2: a load replaced before its first frame still reports its count.
+        reportPreFrameNoise()
+        preFrameNoise.reset()
+        // M7c L30: the last retry goes straight to the CDN, in case the relay is the problem. M7j L6: an antenna
+        // stream never goes through the relay (it buffers whole bodies; a TS stream never ends).
+        let relayed = !isDirect && retries < Self.maxRetries ? relay?.localURL(for: url) : nil
         mpv?.setString("pause", "no")
-        mpv?.command(["loadfile", (relayed ?? url).absoluteString, "replace"])
-        // M7c L27: notice, so `log show` keeps it.
-        logger.notice("Loading a stream from \(original.host() ?? "?", privacy: .public) via \(url.host() ?? "?", privacy: .public)\(relayed == nil ? "" : " through the relay", privacy: .public) (player \(self.index))")
+        mpv?.command(MPVLoadCommand.make(url: relayed ?? url, direct: isDirect))
+        // M7c L27: notice, so `log show` keeps it. M7j L15: never the tuner's address.
+        if isDirect {
+            logger.notice("Loading a stream from the antenna tuner (player \(self.index))")
+        } else {
+            logger.notice("Loading a stream from \(original.host() ?? "?", privacy: .public) via \(url.host() ?? "?", privacy: .public)\(relayed == nil ? "" : " through the relay", privacy: .public) (player \(self.index))")
+        }
     }
 
     /// M7h 13g: a pending URL loads as before. A replaced render context (the video view moved between hosts, e.g.
@@ -268,6 +300,7 @@ final class MPVPlayerController: LivePlayer {
             if state.phase == .loading || state.phase == .playing {
                 state.phase = .playing
             }
+            reportPreFrameNoise()
             if let loadStartedAt {
                 self.loadStartedAt = nil
                 let elapsed = ContinuousClock.now - loadStartedAt
@@ -284,10 +317,11 @@ final class MPVPlayerController: LivePlayer {
                   state.phase == .loading || state.phase == .playing,
                   let url = currentURL
             else { return }
+            reportPreFrameNoise()
             logger.error("Stream ended (\(String(describing: reason), privacy: .public), error \(error)); retries used \(self.retries) (player \(self.index))")
             // M7c L29: the resolved address may have expired; the retry resolves again.
-            resolver?.invalidate(url)
-            if retries < Self.maxRetries {
+            if !isDirect { resolver?.invalidate(url) }
+            if Self.shouldRetry(direct: isDirect, wasPlaying: state.phase == .playing, used: retries) {
                 retries += 1
                 state.phase = .loading
                 retryTask?.cancel()
@@ -297,15 +331,36 @@ final class MPVPlayerController: LivePlayer {
                     self.load(url)
                 }
             } else {
-                state = PlayerState(phase: .failed, timeshift: nil)
+                state = .failed(from: state)
                 onFailure?()
             }
         case .log(let level, let text):
+            // M7j L9: ffmpeg's "HTTP error 503 …" for the current load.
+            if let status = MPVLogText.httpStatus(in: text) { state.httpStatus = status }
             // Warnings and errors only (`mpv_request_log_messages("warn")`); notice keeps them for `log show` (L27).
-            logger.notice("mpv \(level, privacy: .public): \(text, privacy: .public)")
+            // M7j L15: never a URL (tokens, the tuner's address). M7j Q2: a decoder's complaints before the first
+            // frame (a stream joined mid-GOP) go to debug and are counted; after it they stay at notice.
+            if preFrameNoise.absorbs(text) {
+                logger.debug("mpv \(level, privacy: .public): \(MPVLogText.redacted(text), privacy: .public)")
+            } else {
+                logger.notice("mpv \(level, privacy: .public): \(MPVLogText.redacted(text), privacy: .public)")
+            }
         case .fileLoaded, .shutdown:
             break
         }
+    }
+
+    /// M7j Q2: one notice line for the decoder warnings logged at debug before the first frame, if there were any.
+    private func reportPreFrameNoise() {
+        guard let count = preFrameNoise.finish() else { return }
+        logger.notice("\(count) decoder warnings before the first frame (player \(self.index))")
+    }
+
+    /// Whether an ended stream is loaded again. A playlist stream: `maxRetries` times per `play`. M7j L6: an antenna
+    /// stream only when it was playing, once per `play`; one that never played fails at once, so the diagnosis
+    /// follows a single tuner answer (L9).
+    nonisolated static func shouldRetry(direct: Bool, wasPlaying: Bool, used: Int) -> Bool {
+        direct ? wasPlaying && used < directReconnects : used < maxRetries
     }
 
     private func phaseDidChange() {

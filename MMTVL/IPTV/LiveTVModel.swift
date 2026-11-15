@@ -56,7 +56,9 @@ final class LiveTVModel: LiveTVHosting {
         var isVisible: Bool
     }
 
-    static let playbackErrorMessage = "Can't play this channel"
+    nonisolated static let playbackErrorMessage = "Can't play this channel"
+    /// M7j L13: an antenna-only Live TV whose tuner has no channels.
+    static let noChannelsMessage = "No channels found"
     static let shortSkip: Double = 10
     static let longSkip: Double = 30
 
@@ -91,8 +93,11 @@ final class LiveTVModel: LiveTVHosting {
     private(set) var multiview: MultiviewModel?
     /// Each Multiview window's player.
     private(set) var tilePlayers: [Channel.ID: any LivePlayer] = [:]
-    /// Windows that failed after their playlist refresh (M6 L14).
-    private(set) var failedWindows: Set<Channel.ID> = []
+    /// Each failed window's text (M6 L14: after its playlist refresh, "Can't play this channel"; M7j L8, L9: an
+    /// antenna window's problem, e.g. "Both antenna tuners are in use" when it was never started).
+    private(set) var windowErrors: [Channel.ID: String] = [:]
+    /// The windows that show a failure.
+    var failedWindows: Set<Channel.ID> { Set(windowErrors.keys) }
     /// M7c L15: the channel the home screen previews on `player` (muted, no sleep assertion); nil = none.
     private(set) var previewChannelID: Channel.ID?
     private(set) var previewFailed = false
@@ -130,6 +135,7 @@ final class LiveTVModel: LiveTVHosting {
     @ObservationIgnored private var bannerGeneration = 0
     @ObservationIgnored private var barGeneration = 0
     @ObservationIgnored private let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "IPTV")
+    @ObservationIgnored private let antennaLogger = Logger(subsystem: "dev.mmtvl.launcher", category: "Antenna")
     /// M7c L24: `ChannelLogoCache.prefetch`, set by the app (tests fetch nothing).
     @ObservationIgnored var prefetchLogos: ([URL]) -> Void = { _ in }
     static let logoPrefetchRows = 30
@@ -170,7 +176,8 @@ final class LiveTVModel: LiveTVHosting {
         pendingTask?.cancel()
         restartGuideIdle()
         playbackError = nil
-        guard library.hasPlaylist else {
+        // M7j L13: a playlist or the antenna turned on (a search for tuners may still be due).
+        guard library.canHaveLiveSource else {
             stopPreview()
             mode = .setupNeeded
             return
@@ -189,13 +196,28 @@ final class LiveTVModel: LiveTVHosting {
         let library = library
         Task { await library.refreshGuideIfStale() }
         pendingTask = Task {
-            await library.refreshPlaylistIfStale()
+            // M7j L13: before the antenna's first search, wait for it (an antenna-only Live TV has nothing else);
+            // after it, a stale lineup is read in the background and reaches the guide through the lineup.
+            if library.antenna.isEnabled && !library.antenna.hasSearched {
+                await library.refreshChannelsIfStale()
+            } else {
+                Task { await library.refreshAntennaIfStale() }
+                await library.refreshPlaylistIfStale()
+            }
             guard !Task.isCancelled else { return }
             guard !library.channels.isEmpty else {
-                if case .failed(let message) = library.playlistStatus {
+                if !library.hasPlaylist, case .failed(let message) = library.antenna.status {
+                    // M7j L13 (QA, step 4): the search found a tuner but its lineup couldn't be read.
                     mode = .unavailable(message)
-                } else {
+                } else if !library.hasLiveSource {
+                    // M7j L13: no playlist, and the search found no tuner.
+                    mode = .setupNeeded
+                } else if case .failed(let message) = library.playlistStatus {
+                    mode = .unavailable(message)
+                } else if library.hasPlaylist {
                     mode = .unavailable("The playlist has no channels")
+                } else {
+                    mode = .unavailable(Self.noChannelsMessage)
                 }
                 return
             }
@@ -250,18 +272,30 @@ final class LiveTVModel: LiveTVHosting {
 
     /// Muted, without a sleep assertion. The same channel again is a no-op.
     func startPreview(channelID: Channel.ID) {
-        guard library.hasPlaylist, let channel = channel(channelID), previewChannelID != channelID else { return }
+        guard library.hasLiveSource, let channel = channel(channelID), previewChannelID != channelID else { return }
+        // M7j L18 (step 9b QA): no stream is asked of a tuner while it scans; the home screen shows no preview.
+        // Step 10 (security N1): only that tuner's channels.
+        if case .antenna(let deviceID) = channel.source, library.antenna.isScanning(deviceID: deviceID) { return }
         previewFailed = false
         previewChannelID = channelID
         player.setAudible(false)
         player.setHoldsSleepAssertion(false)
         player.setBufferProfile(.full)
-        player.play(channel.streamURL)
+        player.play(channel.streamURL, direct: channel.isDirectStream)
     }
 
     func stopPreview() {
         previewFailed = false
         endPreview()
+    }
+
+    /// M7j L18: before a channel scan (`IPTVLibrary.stopAntennaStreams`). The scan starts from Settings, and opening
+    /// Settings leaves Live TV (which releases every player but a kept preview), so the home preview is the only
+    /// stream MMTVL can hold then: it stops when its channel is an antenna channel.
+    func stopAntennaStreams() {
+        guard let id = previewChannelID, channel(id)?.isDirectStream == true else { return }
+        antennaLogger.notice("Stopped the home preview for a channel scan")
+        stopPreview()
     }
 
     /// Stops the stream and gives the player its sound and sleep assertion back.
@@ -341,7 +375,7 @@ final class LiveTVModel: LiveTVHosting {
         for player in players where kept == nil || player !== self.player { release(player) }
         player.setBufferProfile(.full)
         tilePlayers = [:]
-        failedWindows = []
+        windowErrors = [:]
         refreshedWindows = []
         multiview = nil
         guidePurpose = .watch
@@ -555,7 +589,13 @@ final class LiveTVModel: LiveTVHosting {
         currentChannel = channel
         playbackError = nil
         refreshedAfterFailure = false
-        player.play(channel.streamURL)
+        // M7j L8: no `play` when the device's tuners are all MMTVL's already (a zap on `player` doesn't count).
+        if let problem = tunerBudgetProblem(for: channel, excluding: player) {
+            player.stop()
+            playbackError = problem.message
+        } else {
+            player.play(channel.streamURL, direct: channel.isDirectStream)
+        }
         prefetchNeighbors(of: channel)
         library.rememberChannel(channel.id)
         mode = .player
@@ -613,10 +653,11 @@ final class LiveTVModel: LiveTVHosting {
     }
 
     /// M7c L31: once the highlight rests on a channel for `guideWarmDelay`, its stream is warmed, so Select starts
-    /// it at once. Not the channel already playing, nor one already in a Multiview window.
+    /// it at once. Not the channel already playing, nor one already in a Multiview window. M7j L7: never an antenna
+    /// channel (warming one would take a tuner).
     private func scheduleGuideWarm() {
         guideWarmTask?.cancel()
-        guard mode == .guide, let channel = guide?.focusedChannel,
+        guard mode == .guide, let channel = guide?.focusedChannel, !channel.isDirectStream,
               !(channel.id == currentChannel?.id && isPlaying), tilePlayers[channel.id] == nil
         else { return }
         if let lastWarm, lastWarm.id == channel.id, now().timeIntervalSince(lastWarm.at) < Self.guideRewarmInterval { return }
@@ -858,7 +899,7 @@ final class LiveTVModel: LiveTVHosting {
         for tile in tilePlayers.values { release(tile) }
         player.setBufferProfile(.full)
         tilePlayers = [:]
-        failedWindows = []
+        windowErrors = [:]
         refreshedWindows = []
         multiview = nil
         guidePurpose = .watch
@@ -917,19 +958,21 @@ final class LiveTVModel: LiveTVHosting {
             guard let slot = multiview?.focusedSlot else { return }
             openPicker(slot: slot)
         case .retryWindow:
-            guard let id = multiview?.focusedChannelID, let channel = channel(id) else { return }
-            failedWindows.remove(id)
+            guard let id = multiview?.focusedChannelID, let channel = channel(id), let tile = tilePlayers[id]
+            else { return }
+            windowErrors[id] = nil
             refreshedWindows.remove(id)
-            tilePlayers[id]?.play(channel.streamURL)
+            playWindow(id, channel, on: tile)
         case .chooseLayout:
             menu = layoutMenu()
             if menu == nil { menuParent = nil }
         case .setLayout(let layout):
             for id in multiview?.setLayout(layout) ?? [] {
                 if let player = tilePlayers.removeValue(forKey: id) { release(player) }
-                failedWindows.remove(id)
+                windowErrors[id] = nil
                 refreshedWindows.remove(id)
             }
+            startWindowsWaitingForATuner()
             applyAudio()
             saveSnapshot(true)
         case .removeWindow:
@@ -1117,7 +1160,7 @@ final class LiveTVModel: LiveTVHosting {
         showPausedOverlay()
         playbackError = nil
         tilePlayers = [:]
-        failedWindows = []
+        windowErrors = [:]
         refreshedWindows = []
         if let current, multiview.slot(of: current) != nil {
             tilePlayers[current] = player
@@ -1141,7 +1184,54 @@ final class LiveTVModel: LiveTVHosting {
         guard let channel = self.channel(id), let player = acquirePlayer() else { return }
         player.setBufferProfile(.tile)
         tilePlayers[id] = player
-        player.play(channel.streamURL)
+        playWindow(id, channel, on: player)
+    }
+
+    /// M7j L8: a window over the device's tuner count keeps its (idle) player but isn't played; it shows the busy
+    /// message, and its menu's Retry tries again.
+    private func playWindow(_ id: Channel.ID, _ channel: Channel, on tile: any LivePlayer) {
+        if let problem = tunerBudgetProblem(for: channel, excluding: tile) {
+            windowErrors[id] = problem.message
+            return
+        }
+        tile.play(channel.streamURL, direct: channel.isDirectStream)
+    }
+
+    // MARK: - Tuner budget (M7j L8)
+
+    /// `.allTunersInUse` when MMTVL's own players already hold every tuner of `channel`'s device, not counting
+    /// `excluding` (the player about to load it: a zap replaces its stream). nil for playlist channels and devices
+    /// no longer known. M7j L18 (step 9b QA): `.scanning` for a channel whose tuner is in a running channel scan, so
+    /// no stream is asked of a tuner mid-scan; another tuner's channels still play (step 10, security N1).
+    private func tunerBudgetProblem(for channel: Channel, excluding: any LivePlayer,
+                                    logs: Bool = true) -> AntennaProblem? {
+        guard case .antenna(let deviceID) = channel.source else { return nil }
+        if library.antenna.isScanning(deviceID: deviceID) {
+            if logs { antennaLogger.notice("Antenna stream: \(AntennaProblem.scanning.logText, privacy: .public)") }
+            return .scanning
+        }
+        guard let device = library.antenna.devices.first(where: { $0.id == deviceID }) else { return nil }
+        let held = antennaStreams(on: deviceID, excluding: excluding)
+        guard held >= device.tunerCount else { return nil }
+        if logs { antennaLogger.notice("Antenna tuners busy: \(held, privacy: .public) of \(device.tunerCount, privacy: .public) (MMTVL holds \(held, privacy: .public))") }
+        return .allTunersInUse(device.tunerCount)
+    }
+
+    /// MMTVL's players loading or playing (paused included: the stream stays open) an antenna channel of
+    /// `deviceID`: `player` for the full-screen channel or the preview, and the Multiview windows.
+    private func antennaStreams(on deviceID: String, excluding: any LivePlayer) -> Int {
+        var channelIDs: [ObjectIdentifier: Channel.ID] = [:]
+        if let id = previewChannelID ?? currentChannel?.id { channelIDs[ObjectIdentifier(player)] = id }
+        for (id, tile) in tilePlayers { channelIDs[ObjectIdentifier(tile)] = id }
+        let source = ChannelSource.antenna(deviceID: deviceID)
+        return players.count { candidate in
+            guard candidate !== excluding else { return false }
+            switch candidate.state.phase {
+            case .loading, .playing, .paused: break
+            case .idle, .failed: return false
+            }
+            return channelIDs[ObjectIdentifier(candidate)].flatMap(channel)?.source == source
+        }
     }
 
     /// L5: only the window with sound is unmuted.
@@ -1240,6 +1330,9 @@ final class LiveTVModel: LiveTVHosting {
             return
         }
         let target = tilePlayers[id]
+        // M7j L8: a window the tuner budget never started, or whose start (a diagnosis retry) it blocked, plays now
+        // that the other windows are gone.
+        let waitsForATuner = target?.state.phase == .idle || isWaitingForATuner(id)
         for (otherID, other) in tilePlayers where otherID != id {
             release(other)
         }
@@ -1251,19 +1344,19 @@ final class LiveTVModel: LiveTVHosting {
         let channel = self.channel(id)
         currentChannel = channel ?? currentChannel
         library.rememberChannel(id)
-        playbackError = failedWindows.contains(id) ? Self.playbackErrorMessage : nil
+        playbackError = windowErrors[id]
         refreshedAfterFailure = refreshedWindows.contains(id)
         saveSnapshot(false)
         self.multiview = nil
         tilePlayers = [:]
-        failedWindows = []
+        windowErrors = [:]
         refreshedWindows = []
         guide = nil
         guidePurpose = .watch
         menu = nil
         menuParent = nil
         mode = .player
-        if target == nil, let channel {
+        if target == nil || waitsForATuner, let channel {
             play(channel)
         } else {
             showBanner()
@@ -1290,26 +1383,82 @@ final class LiveTVModel: LiveTVHosting {
     }
 
     /// L11. Releases the displaced channel's player before acquiring one, so a full 1 + 4 never needs a sixth.
+    /// M7j L8 (orchestrator, 2026-11-15): the channel just picked wins a tuner. Picking a window that waits for a
+    /// tuner for a window playing an antenna channel of the same device swaps them and stops the other one, which
+    /// then waits; a released window's tuner goes to the first window waiting.
     private func assignWindow(_ id: Channel.ID, to slot: Int) {
-        guard multiview != nil else { return }
+        guard let current = multiview else { return }
+        let swapped = current.slot(of: id).flatMap { $0 != slot ? current.slots[slot] : nil }
         if let displaced = multiview?.assign(id, to: slot) {
             if let player = tilePlayers.removeValue(forKey: displaced) { release(player) }
-            failedWindows.remove(displaced)
+            windowErrors[displaced] = nil
             refreshedWindows.remove(displaced)
         }
-        if tilePlayers[id] == nil { startWindow(id) }
+        if tilePlayers[id] == nil {
+            startWindow(id)
+        } else if let swapped, isWaitingForATuner(id) {
+            takeTuner(for: id, from: swapped)
+        }
+        startWindowsWaitingForATuner()
         applyAudio()
         saveSnapshot(true)
+    }
+
+    /// The picked window `id` (waiting for a tuner) gets the tuner of `other`'s window when that one holds a stream
+    /// on the same device: `other` stops and shows the busy text.
+    private func takeTuner(for id: Channel.ID, from other: Channel.ID) {
+        guard let channel = channel(id), let otherChannel = self.channel(other), otherChannel.isDirectStream,
+              otherChannel.source == channel.source, let tile = tilePlayers[id], let otherTile = tilePlayers[other],
+              [.loading, .playing, .paused].contains(otherTile.state.phase), let busy = busyMessage(for: otherChannel)
+        else { return }
+        release(otherTile)
+        windowErrors[other] = busy
+        windowErrors[id] = nil
+        refreshedWindows.remove(id)
+        playWindow(id, channel, on: tile)
+    }
+
+    /// M7j L8 (orchestrator, 2026-11-15): after a window released its tuner, the windows waiting for one start in
+    /// window order, as far as the budget allows. Windows that failed for other reasons stay as they are.
+    private func startWindowsWaitingForATuner() {
+        guard let multiview else { return }
+        for id in multiview.slots.compactMap({ $0 }) where isWaitingForATuner(id) {
+            guard let channel = channel(id), let tile = tilePlayers[id],
+                  tunerBudgetProblem(for: channel, excluding: tile, logs: false) == nil
+            else { continue }
+            windowErrors[id] = nil
+            refreshedWindows.remove(id)
+            playWindow(id, channel, on: tile)
+        }
+    }
+
+    /// A window showing its device's busy text whose player holds no stream: never started (the budget), or a
+    /// start that was blocked or found every tuner busy.
+    private func isWaitingForATuner(_ id: Channel.ID) -> Bool {
+        guard let channel = channel(id), let busy = busyMessage(for: channel), windowErrors[id] == busy,
+              let tile = tilePlayers[id]
+        else { return false }
+        return tile.state.phase == .idle || tile.state.phase == .failed
+    }
+
+    /// The busy text of `channel`'s device ("Both antenna tuners are in use"); nil for playlist channels and
+    /// devices no longer known.
+    private func busyMessage(for channel: Channel) -> String? {
+        guard case .antenna(let deviceID) = channel.source,
+              let device = library.antenna.devices.first(where: { $0.id == deviceID })
+        else { return nil }
+        return AntennaProblem.allTunersInUse(device.tunerCount).message
     }
 
     private func removeWindow(_ slot: Int) {
         guard let id = multiview?.remove(slot) else { return }
         if let player = tilePlayers.removeValue(forKey: id) { release(player) }
-        failedWindows.remove(id)
+        windowErrors[id] = nil
         refreshedWindows.remove(id)
         if multiview?.isEmpty != false {
             removeAllWindows()
         } else {
+            startWindowsWaitingForATuner()
             applyAudio()
             saveSnapshot(true)
         }
@@ -1320,7 +1469,7 @@ final class LiveTVModel: LiveTVHosting {
         for player in tilePlayers.values { release(player) }
         player.setBufferProfile(.full)
         tilePlayers = [:]
-        failedWindows = []
+        windowErrors = [:]
         refreshedWindows = []
         multiview = nil
         library.rememberMultiview(nil)
@@ -1384,11 +1533,14 @@ final class LiveTVModel: LiveTVHosting {
         play(list[(index + step + list.count) % list.count])
     }
 
-    /// M7c L29: the channels one zap away, resolved ahead of time.
+    /// M7c L29: the channels one zap away, resolved ahead of time. M7j L7: not antenna channels (a resolve is a GET,
+    /// which takes a tuner).
     private func prefetchNeighbors(of channel: Channel) {
         let list = zapList(around: channel)
         guard list.count > 1, let index = list.firstIndex(where: { $0.id == channel.id }) else { return }
         let neighbors = [list[(index + 1) % list.count], list[(index - 1 + list.count) % list.count]]
+            .filter { !$0.isDirectStream }
+        guard !neighbors.isEmpty else { return }
         prefetchStreams(Array(Set(neighbors.map(\.streamURL))).sorted { $0.absoluteString < $1.absoluteString })
     }
 
@@ -1493,6 +1645,11 @@ final class LiveTVModel: LiveTVHosting {
             return
         }
         guard failed === player, let channel = currentChannel else { return }
+        // M7j L9: an antenna channel asks the tuner instead of re-fetching the playlist.
+        if channel.isDirectStream {
+            antennaFailed(channel, player: failed)
+            return
+        }
         guard !refreshedAfterFailure else {
             playbackError = Self.playbackErrorMessage
             logger.error("Can't play \(channel.name, privacy: .public)")
@@ -1505,13 +1662,17 @@ final class LiveTVModel: LiveTVHosting {
             guard !Task.isCancelled, currentChannel?.id == channel.id else { return }
             let fresh = library.channels.first { $0.id == channel.id } ?? channel
             currentChannel = fresh
-            player.play(fresh.streamURL)
+            player.play(fresh.streamURL, direct: fresh.isDirectStream)
         }
     }
 
     private func windowFailed(_ id: Channel.ID, player failed: any LivePlayer) {
+        if let channel = channel(id), channel.isDirectStream {
+            antennaWindowFailed(id, channel, player: failed)
+            return
+        }
         guard !refreshedWindows.contains(id) else {
-            failedWindows.insert(id)
+            windowErrors[id] = Self.playbackErrorMessage
             logger.error("Can't play \(self.channel(id)?.name ?? id, privacy: .public) in a window")
             return
         }
@@ -1520,7 +1681,57 @@ final class LiveTVModel: LiveTVHosting {
         pendingTask = Task {
             await library.refreshPlaylist()
             guard !Task.isCancelled, tilePlayers[id] === failed, let fresh = channel(id) else { return }
-            failed.play(fresh.streamURL)
+            failed.play(fresh.streamURL, direct: fresh.isDirectStream)
+        }
+    }
+
+    // MARK: - Antenna failures (M7j L9)
+
+    /// Full screen: the tuner says why (`IPTVLibrary.diagnose`); a search or lineup read that still has the
+    /// channel plays it once more (`refreshedAfterFailure`), else the problem shows. The diagnosis reads the
+    /// failed load's `httpStatus` now, before anything else loads on the player.
+    private func antennaFailed(_ channel: Channel, player failed: any LivePlayer) {
+        let mayRetry = !refreshedAfterFailure
+        refreshedAfterFailure = true
+        let httpStatus = failed.state.httpStatus
+        let library = library
+        pendingTask = Task {
+            let outcome = await library.diagnose(channel, httpStatus: httpStatus, mayRetry: mayRetry)
+            // Another channel, or this one chosen again, meanwhile: that load decides.
+            guard !Task.isCancelled, currentChannel?.id == channel.id, player === failed,
+                  failed.state.phase == .failed
+            else { return }
+            switch outcome {
+            case .retry(let fresh):
+                currentChannel = fresh
+                if let problem = tunerBudgetProblem(for: fresh, excluding: failed) {
+                    playbackError = problem.message
+                } else {
+                    failed.play(fresh.streamURL, direct: fresh.isDirectStream)
+                }
+            case .show(let problem):
+                playbackError = problem.message
+                logger.error("Can't play \(channel.name, privacy: .public): \(problem.logText, privacy: .public)")
+            }
+        }
+    }
+
+    /// The same for a Multiview window (`refreshedWindows`); the problem is the window's text.
+    private func antennaWindowFailed(_ id: Channel.ID, _ channel: Channel, player failed: any LivePlayer) {
+        let mayRetry = !refreshedWindows.contains(id)
+        refreshedWindows.insert(id)
+        let httpStatus = failed.state.httpStatus
+        let library = library
+        pendingTask = Task {
+            let outcome = await library.diagnose(channel, httpStatus: httpStatus, mayRetry: mayRetry)
+            guard !Task.isCancelled, tilePlayers[id] === failed, failed.state.phase == .failed else { return }
+            switch outcome {
+            case .retry(let fresh):
+                playWindow(id, fresh, on: failed)
+            case .show(let problem):
+                windowErrors[id] = problem.message
+                logger.error("Can't play \(channel.name, privacy: .public) in a window: \(problem.logText, privacy: .public)")
+            }
         }
     }
 }

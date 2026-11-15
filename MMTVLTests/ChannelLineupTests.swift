@@ -102,4 +102,64 @@ struct ChannelLineupTests {
         #expect(preferences == ChannelPreferences(hiddenGroups: ["x"]))
         #expect(try JSONDecoder().decode(ChannelPreferences.self, from: Data("{}".utf8)) == ChannelPreferences())
     }
+
+    // MARK: M7j L3: the Antenna group
+
+    @Test func antennaGroupComesAfterMyTeams() throws {
+        let lineup = ChannelLineup(channels: try channels + AntennaFixtures.liveChannels(firstNumber: 6))
+        #expect(lineup.groups == ["My Teams", "Antenna", "All Channels", "Live Channels", "NBA Games"])
+        #expect(lineup.channels(in: "Antenna").map(\.name) == ["WSB-HD", "WAGA-HD", "WXIA-HD"])
+        #expect(lineup.channels(in: "Antenna").map(\.displayNumber) == ["2.1", "5.1", "11.1"])
+        let favorites = ChannelLineup(channels: try channels + AntennaFixtures.liveChannels(firstNumber: 6),
+                                      preferences: ChannelPreferences(favorites: [Self.nba]))
+        #expect(favorites.groups.prefix(3) == ["Favorites", "My Teams", "Antenna"])
+    }
+
+    @Test func allChannelsListsPlaylistThenAntenna() throws {
+        let playlist = try channels
+        let antenna = AntennaFixtures.liveChannels(firstNumber: 6)
+        let lineup = ChannelLineup(channels: playlist + antenna)
+        #expect(lineup.channels(in: "All Channels").map(\.id) == playlist.map(\.id) + ["antenna:2.1", "antenna:5.1", "antenna:11.1"])
+        #expect(lineup.channels(in: "All Channels").map(\.number) == Array(1...8))
+    }
+
+    @Test func antennaOnlyHasMyTeamsAndAntenna() {
+        let lineup = ChannelLineup(channels: AntennaFixtures.liveChannels())
+        #expect(lineup.groups == ["My Teams", "Antenna"])
+        #expect(lineup.channels(in: "Antenna").count == 3)
+        #expect(lineup.channels(in: "All Channels").isEmpty)
+    }
+
+    @Test func hiddenAntennaGroupHidesThemEverywhere() throws {
+        let preferences = ChannelPreferences(favorites: ["antenna:5.1", Self.nba], hiddenGroups: ["Antenna"])
+        let lineup = ChannelLineup(channels: try channels + AntennaFixtures.liveChannels(firstNumber: 6),
+                                   preferences: preferences, teamChannelIDs: ["antenna:2.1"])
+        #expect(lineup.groups == ["Favorites", "My Teams", "All Channels", "Live Channels", "NBA Games"])
+        #expect(!lineup.visibleChannels.contains { $0.isDirectStream })
+        #expect(lineup.channels(in: "All Channels").count == 5)
+        #expect(lineup.channels(in: "Antenna").isEmpty)
+        #expect(lineup.channels(in: "Favorites").map(\.name) == ["NBA TV"])
+        #expect(lineup.channels(in: "My Teams").isEmpty)
+        #expect(!lineup.isVisible("antenna:5.1"))
+    }
+
+    @Test func playlistGroupNamedAntennaMergesAfterTheTuners() throws {
+        let local = Channel(id: "name:local news", number: 6, name: "Local News", group: "Antenna", tvgID: nil,
+                            tvgName: nil, logoURL: nil, streamURL: IPTVFixtures.streamURL(6))
+        let lineup = ChannelLineup(channels: try channels + [local] + AntennaFixtures.liveChannels(firstNumber: 7))
+        #expect(lineup.groups == ["My Teams", "Antenna", "All Channels", "Live Channels", "NBA Games"])
+        #expect(lineup.channels(in: "Antenna").map(\.name) == ["WSB-HD", "WAGA-HD", "WXIA-HD", "Local News"])
+        // A playlist with only an "Antenna" group: one group, no All Channels.
+        let alone = ChannelLineup(channels: [local])
+        #expect(alone.groups == ["My Teams", "Antenna"])
+        #expect(alone.channels(in: "Antenna").map(\.name) == ["Local News"])
+    }
+
+    @Test func antennaFavoritesShowInFavorites() throws {
+        let preferences = ChannelPreferences(favorites: ["antenna:5.1", Self.nba])
+        let lineup = ChannelLineup(channels: try channels + AntennaFixtures.liveChannels(firstNumber: 6),
+                                   preferences: preferences)
+        #expect(lineup.channels(in: "Favorites").map(\.name) == ["WAGA-HD", "NBA TV"])
+        #expect(lineup.favorites.map(\.id) == ["antenna:5.1", Self.nba])
+    }
 }

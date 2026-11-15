@@ -1,3 +1,4 @@
+import Foundation
 import Libmpv
 
 /// The demuxer cache sizes of a player: full screen or a Multiview window (M6 L6).
@@ -28,6 +29,22 @@ nonisolated enum MPVOptions {
         // M6 L7: render calls run on the main thread; don't block them for frame timing.
         ("video-timing-offset", "0"),
     ]
+}
+
+/// The `loadfile` command for a Live TV stream (M7j L6). mpv 0.38+ takes per-file options as the 4th argument, after
+/// the index (-1 = none), and restores them when the file ends, so they never reach the next stream on the core.
+nonisolated enum MPVLoadCommand {
+    /// An antenna stream's per-file options. Constants only, never built from tuner data (security M2):
+    /// - `deinterlace=auto`: ATSC 1.0 1080i is deinterlaced (`bwdif`), progressive frames are left alone.
+    /// - `demuxer=lavf,demuxer-lavf-format=mpegts`: read as MPEG-TS only, so neither mpv's playlist demuxer nor
+    ///   ffmpeg's HLS demuxer runs, and nothing a playlist names is fetched.
+    /// - `stream-lavf-o=max_redirects=0`: ffmpeg's http protocol (FFmpeg 8.1.2 in MPVKit 1.0.0) follows no redirect.
+    static let directOptions = "deinterlace=auto,demuxer=lavf,demuxer-lavf-format=mpegts,stream-lavf-o=max_redirects=0"
+
+    static func make(url: URL, direct: Bool) -> [String] {
+        direct ? ["loadfile", url.absoluteString, "replace", "-1", directOptions]
+               : ["loadfile", url.absoluteString, "replace"]
+    }
 }
 
 nonisolated enum LibraryVersions {

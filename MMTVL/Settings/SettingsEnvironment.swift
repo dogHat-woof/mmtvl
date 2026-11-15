@@ -43,6 +43,16 @@ struct SettingsEnvironment {
     var setTeamPicked: (Team.ID, Bool) -> Void
     var refreshIPTV: () -> Void
     var removeIPTVSource: () -> Void
+    /// M7j L14: Find Tuners: `IPTVLibrary.discoverAntenna()` (a search, then the lineups), then
+    /// `AntennaSource.findOutcome(found:)`.
+    var findAntennaTuners: () async -> AntennaFindOutcome
+    /// M7j L14: `IPTVLibrary.setChannelHidden(_:_:)` (Antenna → Channels).
+    var setChannelHidden: (Channel.ID, Bool) -> Void
+    /// M7j L18: `IPTVLibrary.startAntennaScan()` (the confirm page's Scan) and `stopAntennaScan()` (Stop Scan).
+    var startAntennaScan: () -> Void
+    var stopAntennaScan: () -> Void
+    /// M7j L18: true exactly while Settings → Antenna is the top page (`IPTVLibrary.antennaPageVisible(_:)`).
+    var antennaPageVisible: (Bool) -> Void
     var phoneRemoteStatus: () -> PhoneRemoteSettingsStatus
     /// `PhoneRemote.setPairing(_:)`: true while Pair a Phone shows (M5 L3).
     var setPhonePairing: (Bool) -> Void

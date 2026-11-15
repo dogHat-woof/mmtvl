@@ -264,7 +264,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 35;
 				DEVELOPMENT_TEAM = H846CY8RB4;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
@@ -275,7 +275,7 @@
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "MMTVL asks macOS to sleep or restart the Mac mini from its power menu.";
 				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "MMTVL lists pictures here so you can use one as tile art.";
 				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "MMTVL lists pictures here so you can use one as tile art.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MMTVL connects to your Plex Media Server and lets phones on this network find it for casting.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MMTVL connects to your Plex Media Server and HDHomeRun tuners, and lets phones on this network find it for casting.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -298,7 +298,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 35;
 				DEVELOPMENT_TEAM = H846CY8RB4;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
@@ -309,7 +309,7 @@
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "MMTVL asks macOS to sleep or restart the Mac mini from its power menu.";
 				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "MMTVL lists pictures here so you can use one as tile art.";
 				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "MMTVL lists pictures here so you can use one as tile art.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MMTVL connects to your Plex Media Server and lets phones on this network find it for casting.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MMTVL connects to your Plex Media Server and HDHomeRun tuners, and lets phones on this network find it for casting.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -330,7 +330,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 35;
 				DEVELOPMENT_TEAM = H846CY8RB4;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.2.0;
@@ -349,7 +349,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 34;
+				CURRENT_PROJECT_VERSION = 35;
 				DEVELOPMENT_TEAM = H846CY8RB4;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.2.0;

@@ -122,6 +122,29 @@ struct XMLTVTests {
         #expect(result.programmes.first?.summary == "Tom & Jerry <3 and a long\nline that continues")
     }
 
+    /// M7j step 8 (every guide): two `<channel>` elements with one id become one channel with both elements' names,
+    /// at the first one's position, and its programmes are kept once.
+    @Test func repeatedChannelIDsMerge() throws {
+        let url = try writeFixture("""
+        <tv>
+        <channel id="US1.hdhomerun.com"><display-name>WATLDT4</display-name><display-name>11.11</display-name></channel>
+        <channel id="b"><display-name>B</display-name></channel>
+        <channel id="us1.HDHOMERUN.com"><display-name>WATLDT4</display-name><display-name>36.4</display-name></channel>
+        <programme start="20261005120000" stop="20261005130000" channel="US1.hdhomerun.com"><title>T</title></programme>
+        </tv>
+        """)
+        defer { try? FileManager.default.removeItem(at: url) }
+        var seen: [EPGChannel] = []
+        let result = try XMLTVParser.parse(fileURL: url, window: DateInterval(start: .distantPast, end: .distantFuture)) {
+            seen = $0
+            return ["us1.hdhomerun.com"]
+        }
+        #expect(result.channels.map(\.id) == ["us1.hdhomerun.com", "b"])
+        #expect(result.channels.first?.names == ["WATLDT4", "11.11", "36.4"])
+        #expect(seen.map(\.id) == ["us1.hdhomerun.com", "b"])
+        #expect(result.programmes.map(\.title) == ["T"])
+    }
+
     @Test func episodeText() {
         #expect(XMLTVParser.episodeText(xmltvNS: "1.0.0/1") == "S2 E1")
         #expect(XMLTVParser.episodeText(xmltvNS: ".4.") == "E5")
@@ -135,5 +158,42 @@ struct XMLTVTests {
         #expect(throws: (any Error).self) {
             try XMLTVParser.parse(fileURL: url, window: DateInterval(start: .distantPast, end: .distantFuture)) { _ in [] }
         }
+    }
+
+    /// Security M1: 200,000 `<channel id="a">` elements, each with a new display-name, merge in linear time and keep
+    /// at most `maximumNamesPerChannel` names; one element listing that many names is capped too.
+    @Test func manyRepeatsOfOneIDStayLinearAndCapped() throws {
+        var xml = "<tv>\n"
+        xml.reserveCapacity(12_000_000)
+        for n in 0..<200_000 {
+            xml += "<channel id=\"a\"><display-name>name \(n)</display-name></channel>\n"
+        }
+        xml += "<channel id=\"b\">" + (0..<50_000).map { "<display-name>b \($0)</display-name>" }.joined() + "</channel>\n"
+        xml += "</tv>\n"
+        let url = try writeFixture(xml)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let clock = ContinuousClock()
+        var result: XMLTVParser.Result?
+        let elapsed = try clock.measure {
+            result = try XMLTVParser.parse(fileURL: url, window: DateInterval(start: .distantPast, end: .distantFuture)) { _ in [] }
+        }
+        #expect(elapsed < .seconds(3))    // quadratic merging takes minutes here; 3 s leaves room on a loaded Mac
+        let channels = try #require(result?.channels)
+        #expect(channels.map(\.id) == ["a", "b"])
+        #expect(channels[0].names == (0..<XMLTVParser.maximumNamesPerChannel).map { "name \($0)" })
+        #expect(channels[1].names.count == XMLTVParser.maximumNamesPerChannel)
+    }
+
+    /// The cap keeps everything SiliconDust's file has: two merged elements with 6 names each.
+    @Test func theCapKeepsTwoMergedSiliconDustChannels() throws {
+        let first = ["WATLDT4", "11.11 WATLDT4", "11.11 WATL-DT4", "11.11", "WATL-DT4", "MeTV"]
+        let second = ["WATLDT4B", "36.4 WATLDT4", "36.4 WATL-D4", "36.4", "WATL-D4", "MeTV Toons"]
+        func element(_ names: [String]) -> String {
+            "<channel id=\"US1.hdhomerun.com\">" + names.map { "<display-name>\($0)</display-name>" }.joined() + "</channel>"
+        }
+        let url = try writeFixture("<tv>\(element(first))\(element(second))</tv>")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let result = try XMLTVParser.parse(fileURL: url, window: DateInterval(start: .distantPast, end: .distantFuture)) { _ in [] }
+        #expect(result.channels.first?.names == first + second)
     }
 }

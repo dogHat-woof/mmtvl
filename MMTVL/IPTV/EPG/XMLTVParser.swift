@@ -9,6 +9,10 @@ nonisolated final class XMLTVParser: NSObject, XMLParserDelegate {
     }
 
     private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "IPTV")
+    /// M7j step 8 (security M1): a channel keeps at most this many display-names, later ones are dropped, so a file
+    /// repeating one id (or one element listing names) millions of times can't make the matchers' work unbounded.
+    /// SiliconDust's channels have at most 6, 12 when two elements merge.
+    static let maximumNamesPerChannel = 16
 
     /// `wantedIDs` is called once, at the first <programme> (the DTD puts every <channel> first), with the
     /// channels read so far. It returns the lowercased EPG ids to keep programmes for.
@@ -35,6 +39,10 @@ nonisolated final class XMLTVParser: NSObject, XMLParserDelegate {
     private var loggedLateChannel = false
 
     private var channels: [EPGChannel] = []
+    /// M7j step 8: a channel id's position in `channels`, so a repeated `<channel id>` merges into the first one.
+    private var channelIndex: [String: Int] = [:]
+    /// Security M1: the names each merged channel already has (by its position), so a merge is linear.
+    private var channelNames: [Int: Set<String>] = [:]
     /// Kept programmes; a nil stop is filled in `finish()`.
     private var pending: [(programme: Programme, hasStop: Bool)] = []
 
@@ -81,20 +89,40 @@ nonisolated final class XMLTVParser: NSObject, XMLParserDelegate {
         } else if currentChannel != nil {
             switch elementName {
             case "display-name":
-                if !value.isEmpty { currentChannel?.names.append(value) }
+                if !value.isEmpty, (currentChannel?.names.count ?? 0) < Self.maximumNamesPerChannel {
+                    currentChannel?.names.append(value)
+                }
             case "channel":
                 if let channel = currentChannel, !channel.id.isEmpty {
                     if wanted != nil, !loggedLateChannel {
                         loggedLateChannel = true
                         Self.logger.info("XMLTV has <channel> elements after programmes; not re-matching")
                     }
-                    channels.append(channel)
+                    add(channel)
                 }
                 currentChannel = nil
             default:
                 break
             }
         }
+    }
+
+    /// M7j step 8 (user decision 2026-11-15, every guide): `<channel>` elements with the same id become one channel at
+    /// the first one's position, its display-names followed by the later elements' new ones (duplicates dropped), so
+    /// `EPGStore.replaceSource` never sees an id twice. SiliconDust's file lists a network carried by two stations
+    /// under one id, with both numbers. Linear in the names (security M1), at most `maximumNamesPerChannel` kept.
+    private func add(_ channel: EPGChannel) {
+        guard let index = channelIndex[channel.id] else {
+            channelIndex[channel.id] = channels.count
+            channels.append(channel)
+            return
+        }
+        guard channels[index].names.count < Self.maximumNamesPerChannel else { return }
+        var seen = channelNames[index] ?? Set(channels[index].names)
+        for name in channel.names where channels[index].names.count < Self.maximumNamesPerChannel {
+            if seen.insert(name).inserted { channels[index].names.append(name) }
+        }
+        channelNames[index] = seen
     }
 
     // MARK: - Programmes

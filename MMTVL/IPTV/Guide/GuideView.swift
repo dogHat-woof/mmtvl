@@ -327,8 +327,13 @@ struct GuideView: View {
 
     private func channelCell(_ channel: Channel, isFocused: Bool) -> some View {
         HStack(spacing: 12) {
-            Text("\(channel.number)")
+            // M7j: "5.1" for antenna channels. Tabular digits keep the column's right edge even; the fixed slot keeps
+            // the names in line, and a number wider than "26.12" shrinks rather than truncating.
+            Text(channel.displayNumber)
                 .font(Theme.guideCellTimeFont)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(Theme.guideChannelNumberMinimumScale)
                 .foregroundStyle(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText)
                 .frame(width: Theme.guideChannelNumberWidth, alignment: .trailing)
             if let logo = channel.logoURL {

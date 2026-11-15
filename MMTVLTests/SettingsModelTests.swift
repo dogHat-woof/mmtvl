@@ -526,10 +526,11 @@ struct SettingsLiveTVTests {
         #expect(recorder.appliedSettings.isEmpty)
     }
 
+    /// M7j: with the antenna off, the Antenna row stays, so it can be turned back on.
     @Test func pageWithoutPlaylistOnlyPastes() {
-        let (model, recorder) = makeSettingsModel()
+        let (model, recorder) = makeSettingsModel(settings: Self.antennaOff)
         model.perform(.push(.liveTV))
-        #expect(model.focusableRowIDs == ["iptv.playlist.paste"])
+        #expect(model.focusableRowIDs == ["iptv.playlist.paste", "iptv.antenna"])
         #expect(model.row(id: "iptv.playlist.paste")?.title == "Paste Playlist URL")
         #expect(model.row(id: "iptv.guide.add") == nil)
         model.press(.select)
@@ -611,7 +612,7 @@ struct SettingsLiveTVTests {
         model.refreshStatus()
         model.perform(.push(.liveTV))
         #expect(model.focusableRowIDs == ["iptv.playlist.paste", "iptv.guide.g1", "iptv.guide.g2", "iptv.guide.add",
-                                          "iptv.groups", "iptv.hiddenChannels", "iptv.teams", "iptv.homePreview", "iptv.refresh",
+                                          "iptv.antenna", "iptv.groups", "iptv.hiddenChannels", "iptv.teams", "iptv.homePreview", "iptv.refresh",
                                           "iptv.remove"])
         let info = model.row(id: "iptv.playlist.info")
         #expect(info?.title == "iptv.example")
@@ -630,7 +631,7 @@ struct SettingsLiveTVTests {
 
         model.press(.down, .down, .down, .select)
         #expect(recorder.pastes == [.guide])
-        model.press(.down, .down, .down, .down, .down, .select)   // past Groups, Hidden Channels, Teams (M7f L13)
+        model.press(.down, .down, .down, .down, .down, .down, .select)   // past Antenna (M7j), Groups, Hidden Channels, Teams (M7f L13)
         #expect(recorder.iptvRefreshes == 1)
     }
 
@@ -641,7 +642,7 @@ struct SettingsLiveTVTests {
         recorder.iptv.customGuideCount = 0
         model.refreshStatus()
         model.perform(.push(.liveTV))
-        #expect(model.focusableRowIDs == ["iptv.playlist.paste", "iptv.guide.add", "iptv.groups", "iptv.hiddenChannels", "iptv.teams",
+        #expect(model.focusableRowIDs == ["iptv.playlist.paste", "iptv.guide.add", "iptv.antenna", "iptv.groups", "iptv.hiddenChannels", "iptv.teams",
                                           "iptv.homePreview", "iptv.refresh", "iptv.remove"])
         #expect(model.row(id: "iptv.guide.p")?.value == "From Playlist")
         #expect(model.row(id: "iptv.guide.p")?.action == nil)
@@ -835,6 +836,341 @@ struct SettingsLiveTVTests {
         #expect(recorder.teamPicks.last == TeamPick(id: first.id, picked: false))
     }
 
+    // MARK: Antenna (M7j L14)
+
+    private static let antennaOff: AppSettings = {
+        var settings = AppSettings()
+        settings.antennaEnabled = false
+        return settings
+    }()
+
+    /// A tuner whose DeviceID ("SECRETID") and base URL (`http://10.0.0.9`) the app knows; Settings gets neither.
+    private static func antennaStatus(hasPlaylist: Bool = false) -> IPTVSettingsStatus {
+        let device = HDHomeRunDevice(id: "SECRETID", name: "HDHomeRun FLEX 4K", model: "HDFX-4K", tunerCount: 2,
+                                     baseURL: URL(string: "http://10.0.0.9")!,
+                                     lineupURL: URL(string: "http://10.0.0.9/lineup.json")!)
+        var status = hasPlaylist ? Self.status : IPTVSettingsStatus()
+        status.antennaEnabled = true
+        status.antennaTuners = [.init(name: device.name, model: device.model, tunerCount: device.tunerCount,
+                                      channelCount: 3)]
+        status.antennaChannels = [
+            .init(id: "antenna:2.1", displayNumber: "2.1", name: "WSB-HD", isHD: true, signalQuality: 100),
+            .init(id: "antenna:2.2", displayNumber: "2.2", name: "ME-TV", signalQuality: 87),
+            .init(id: "antenna:5.1", displayNumber: "5.1", name: "WAGA-HD", isHD: true),
+        ]
+        status.antennaGuideLine = "Updated Nov 15, 9:12 AM · 1,234 programmes · 2 of 3 channels"
+        return status
+    }
+
+    private func onAntennaPage(_ status: IPTVSettingsStatus = Self.antennaStatus(),
+                               settings: AppSettings = AppSettings()) -> (SettingsModel, SettingsRecorder) {
+        let (model, recorder) = makeSettingsModel(settings: settings)
+        recorder.iptv = status
+        model.refreshStatus()
+        model.perform(.push(.liveTV))
+        model.perform(.push(.antenna))
+        return (model, recorder)
+    }
+
+    @Test func liveTVPageHasAnAntennaRow() {
+        // Without a playlist: a tuner found sets Live TV up, and the Channels section shows with the Antenna row.
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = Self.antennaStatus()
+        model.refreshStatus()
+        #expect(model.row(id: "liveTV")?.value == "3 Channels")
+        model.perform(.push(.liveTV))
+        #expect(model.sections.first { $0.id == "channels" }?.rows.map(\.id)
+            == ["iptv.antenna", "iptv.groups", "iptv.hiddenChannels", "iptv.teams"])
+        let row = model.row(id: "iptv.antenna")
+        #expect(row?.title == "Antenna")
+        #expect(row?.value == "1 Tuner · 3 Channels")
+        #expect(row?.description == "Channels from an HDHomeRun tuner on your network.")
+        #expect(row?.action == .push(.antenna))
+        #expect(row?.showsDisclosure == true)
+
+        // Searching, then nothing found (the antenna on, no playlist: the Channels section still shows).
+        recorder.iptv = IPTVSettingsStatus()
+        recorder.iptv.antennaEnabled = true
+        recorder.iptv.antennaSearching = true
+        model.refreshStatus()
+        #expect(model.sections(for: .root).flatMap(\.rows).first { $0.id == "liveTV" }?.value == "Not Set Up")
+        #expect(model.row(id: "iptv.antenna")?.value == "Searching…")
+        #expect(model.row(id: "iptv.groups") != nil)
+        // No tuner yet: the Channels section only (no guides, preview or Refresh Now).
+        #expect(model.sections.map(\.id) == ["playlist", "channels"])
+        recorder.iptv.antennaSearching = false
+        model.refreshStatus()
+        #expect(model.row(id: "iptv.antenna")?.value == "No Tuner Found")
+
+        // With a playlist: the row leads the Channels section; the root counts both sources.
+        let (withPlaylist, playlistRecorder) = makeSettingsModel()
+        playlistRecorder.iptv = Self.antennaStatus(hasPlaylist: true)
+        withPlaylist.refreshStatus()
+        #expect(withPlaylist.row(id: "liveTV")?.value == "121 Channels")
+        withPlaylist.perform(.push(.liveTV))
+        #expect(withPlaylist.sections.first { $0.id == "channels" }?.rows.map(\.id)
+            == ["iptv.antenna", "iptv.groups", "iptv.hiddenChannels", "iptv.teams"])
+        #expect(withPlaylist.row(id: "iptv.antenna")?.value == "1 Tuner · 3 Channels")
+        #expect(withPlaylist.sections.map(\.id) == ["playlist", "guides", "channels", "homePreview", "manage"])
+    }
+
+    /// L11, L13: a tuner alone gets the guides (antenna channels match the pasted ones with Guide from SiliconDust
+    /// off), the preview switch (the preview holds a tuner) and Refresh Now; only Remove is the playlist's.
+    @Test func antennaOnlyPageHasGuidesPreviewAndRefresh() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = Self.antennaStatus()
+        model.refreshStatus()
+        model.perform(.push(.liveTV))
+        #expect(model.sections.map(\.id) == ["playlist", "guides", "channels", "homePreview", "manage"])
+        #expect(model.focusableRowIDs == ["iptv.playlist.paste", "iptv.guide.add", "iptv.antenna", "iptv.groups",
+                                          "iptv.hiddenChannels", "iptv.teams", "iptv.homePreview", "iptv.refresh"])
+        #expect(model.row(id: "iptv.remove") == nil)
+        #expect(model.row(id: "iptv.playlist.info") == nil)
+        #expect(model.row(id: "iptv.guideSource") == nil)
+        #expect(model.row(id: "iptv.guide.none")?.title == "No guide")
+        // The count is the playlist's, so it's left out.
+        #expect(model.sections.first { $0.id == "guides" }?.footer == "A channel uses the first guide in this list that has it.")
+        #expect(model.row(id: "iptv.refresh")?.description == "Reads the tuner's channels and downloads the guides again now.")
+        model.activate(rowID: "iptv.refresh")
+        #expect(recorder.iptvRefreshes == 1)
+        model.activate(rowID: "iptv.homePreview")
+        #expect(recorder.appliedSettings.last?.homeLivePreview == false)
+
+        // A pasted guide with a tuner alone: its row and page as with a playlist.
+        recorder.iptv.guideSources = [.init(id: "g1", label: "guide-source.online · guide-source_US2.xml.gz",
+                                            line: "Loading…", isFromPlaylist: false)]
+        recorder.iptv.customGuideCount = 1
+        model.refreshStatus()
+        #expect(model.row(id: "iptv.guide.g1")?.action == .push(.guideSource(id: "g1")))
+    }
+
+    @Test func antennaPageShowsTunersAndGuide() {
+        var status = Self.antennaStatus()
+        status.antennaLeftOut = 2
+        let (model, _) = onAntennaPage(status)
+        #expect(model.pageTitle == "Antenna")
+        #expect(model.sections.map(\.title) == ["Antenna", "Tuners", "Guide", "Channels"])
+        #expect(model.focusableRowIDs == ["antenna.enabled", "antenna.find", "antenna.scan", "antenna.guide",
+                                          "antenna.channels"])
+
+        let use = model.row(id: "antenna.enabled")
+        #expect(use?.title == "Use Antenna")
+        #expect(use?.value == "On")
+        #expect(use?.description == "Finds HDHomeRun tuners on your network and adds their channels to Live TV's Antenna group.")
+        let tuner = model.row(id: "antenna.tuner.0")
+        #expect(tuner?.title == "HDHomeRun FLEX 4K")
+        #expect(tuner?.value == "2 tuners")
+        #expect(tuner?.detail == "HDFX-4K · 3 channels")
+        #expect(tuner?.action == nil)
+        let find = model.row(id: "antenna.find")
+        #expect(find?.title == "Find Tuners")
+        #expect(find?.detail == nil)
+        #expect(find?.description == "Looks for HDHomeRun tuners on your network again.")
+        let guide = model.row(id: "antenna.guide")
+        #expect(guide?.title == "Guide from SiliconDust")
+        #expect(guide?.value == "On")
+        #expect(guide?.description == "Downloads 2 days of listings from SiliconDust (api.hdhomerun.com) about once a day, signed in with your tuner. Off: antenna channels use your pasted guides.")
+        let guideStatus = model.row(id: "antenna.guide.status")
+        #expect(guideStatus?.detail == "Updated Nov 15, 9:12 AM · 1,234 programmes · 2 of 3 channels")
+        #expect(guideStatus?.action == nil)
+        let channels = model.row(id: "antenna.channels")
+        #expect(channels?.value == "3 Shown")
+        #expect(channels?.description == "Show or hide each antenna channel.")
+        #expect(model.sections.last?.footer == "Channels come from the tuner's lineup. After moving the antenna, Scan for Channels finds them again. 2 protected channels can't play and are left out.")
+
+        // The lineup can't be read: the tuner row says so (the last channels are kept).
+        var failing = Self.antennaStatus()
+        failing.antennaLineupLine = AntennaSource.unreachableMessage
+        let (failed, _) = onAntennaPage(failing)
+        #expect(failed.row(id: "antenna.tuner.0")?.detail == "HDFX-4K · The antenna tuner isn't answering")
+        #expect(failed.sections.last?.footer == "Channels come from the tuner's lineup. After moving the antenna, Scan for Channels finds them again.")
+
+        // L15: no DeviceID or address anywhere on the Antenna pages, or on Live TV's.
+        for page in [SettingsPage.liveTV, .antenna, .antennaChannels, .root] {
+            for row in model.sections(for: page).flatMap(\.rows) {
+                for text in [row.id, row.title, row.value, row.detail, row.description].compactMap({ $0 }) {
+                    #expect(!text.contains("SECRETID"))
+                    #expect(!text.contains("10.0.0.9"))
+                }
+            }
+            for footer in model.sections(for: page).compactMap(\.footer) {
+                #expect(!footer.contains("SECRETID"))
+                #expect(!footer.contains("10.0.0.9"))
+            }
+        }
+    }
+
+    @Test func findTunersSaysWhatItFound() async {
+        let (model, recorder) = onAntennaPage()
+        recorder.antennaFindResult = .found(1)
+        model.activate(rowID: "antenna.find")
+        #expect(model.row(id: "antenna.find")?.detail == "Searching…")
+        #expect(model.isProbeRunning(.findAntennaTuners))
+        await model.probeTasks[.findAntennaTuners]?.value
+        #expect(recorder.antennaFinds == 1)
+        #expect(model.row(id: "antenna.find")?.detail == "Found 1 tuner")
+
+        recorder.antennaFindResult = .noneFound
+        model.activate(rowID: "antenna.find")
+        #expect(model.row(id: "antenna.find")?.detail == "Searching…")
+        await model.probeTasks[.findAntennaTuners]?.value
+        #expect(recorder.antennaFinds == 2)
+        #expect(model.row(id: "antenna.find")?.detail == "No HDHomeRun found on this network")
+        #expect(SettingsModel.antennaFindLine(.found(2)) == "Found 2 tuners")
+        // QA 4: a known tuner kept after an empty search that didn't answer either.
+        recorder.antennaFindResult = .noneAnswered
+        model.activate(rowID: "antenna.find")
+        await model.probeTasks[.findAntennaTuners]?.value
+        #expect(model.row(id: "antenna.find")?.detail == "No HDHomeRun answered")
+
+        // A fresh visit starts without the old result.
+        model.press(.back)
+        model.perform(.push(.antenna))
+        #expect(model.row(id: "antenna.find")?.detail == nil)
+
+        // No tuner known: the row says what the automatic search is doing, then that none was found.
+        var none = IPTVSettingsStatus()
+        none.antennaEnabled = true
+        none.antennaSearching = true
+        let (empty, emptyRecorder) = onAntennaPage(none)
+        #expect(empty.row(id: "antenna.tuner.0") == nil)
+        #expect(empty.row(id: "antenna.find")?.detail == "Searching…")
+        emptyRecorder.iptv.antennaSearching = false
+        empty.refreshStatus()
+        #expect(empty.row(id: "antenna.find")?.detail == "No HDHomeRun found on this network")
+    }
+
+    /// QA 2: one channel is "1 Channel", on the root row and the Antenna row.
+    @Test func oneChannelIsSingular() {
+        var status = Self.antennaStatus()
+        status.antennaTuners[0].channelCount = 1
+        status.antennaChannels = [status.antennaChannels[0]]
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = status
+        model.refreshStatus()
+        #expect(model.row(id: "liveTV")?.value == "1 Channel")
+        model.perform(.push(.liveTV))
+        #expect(model.row(id: "iptv.antenna")?.value == "1 Tuner · 1 Channel")
+        model.perform(.push(.antenna))
+        #expect(model.row(id: "antenna.tuner.0")?.detail == "HDFX-4K · 1 channel")
+    }
+
+    /// QA 6: one protected channel left out.
+    @Test func oneLeftOutChannelIsSingular() {
+        var status = Self.antennaStatus()
+        status.antennaLeftOut = 1
+        let (model, _) = onAntennaPage(status)
+        #expect(model.sections.last?.footer == "Channels come from the tuner's lineup. After moving the antenna, Scan for Channels finds them again. 1 protected channel can't play and is left out.")
+    }
+
+    /// QA 3: with the Antenna group hidden, each channel keeps its own Shown/Hidden and the footer says why none show.
+    @Test func hiddenAntennaGroupSaysSoOnTheChannelsPage() {
+        var status = Self.antennaStatus()
+        status.antennaChannels[1].isHidden = true
+        let (model, recorder) = onAntennaPage(status)
+        model.perform(.push(.antennaChannels))
+        #expect(model.sections.first?.footer == nil)
+        recorder.iptv.groups = [.init(name: "Antenna", channelCount: 3, isHidden: true)]
+        model.refreshStatus()
+        #expect(model.sections.first?.footer
+            == "The Antenna group is hidden in Live TV → Groups, so none of these channels show.")
+        #expect(model.row(id: "antennaChannel.antenna:2.1")?.value == "Shown")
+        #expect(model.row(id: "antennaChannel.antenna:2.2")?.value == "Hidden")
+        #expect(model.row(id: "antennaChannel.antenna:2.1")?.isDimmed == false)
+        // Another group hidden: no footer.
+        recorder.iptv.groups = [.init(name: "Antenna", channelCount: 3, isHidden: false),
+                                .init(name: "NHL Games", channelCount: 8, isHidden: true)]
+        model.refreshStatus()
+        #expect(model.sections.first?.footer == nil)
+    }
+
+    /// QA 5: the descriptions hold for a tuner without a playlist too.
+    @Test func liveTVDescriptionsCoverTheAntenna() {
+        let (model, recorder) = makeSettingsModel()
+        #expect(model.row(id: "liveTV")?.description
+            == "The playlist, antenna and guides, channel groups, hidden channels, teams and the Home screen preview.")
+        recorder.iptv = Self.antennaStatus()
+        model.refreshStatus()
+        model.perform(.push(.liveTV))
+        #expect(model.row(id: "iptv.groups")?.description == "Which groups show in the guide.")
+    }
+
+    @Test func useAntennaTogglesTheSetting() {
+        let (model, recorder) = onAntennaPage()
+        model.activate(rowID: "antenna.enabled")
+        #expect(recorder.appliedSettings.last?.antennaEnabled == false)
+        #expect(model.row(id: "antenna.enabled")?.value == "Off")
+        #expect(model.row(id: "antenna.find") == nil)
+        model.activate(rowID: "antenna.enabled")
+        #expect(recorder.appliedSettings.last?.antennaEnabled == true)
+        #expect(model.row(id: "antenna.enabled")?.value == "On")
+        #expect(model.row(id: "antenna.find") != nil)
+        #expect(recorder.appliedSettings.allSatisfy { $0.antennaGuide })
+    }
+
+    @Test func guideToggleAppliesTheSetting() {
+        let (model, recorder) = onAntennaPage()
+        model.activate(rowID: "antenna.guide")
+        #expect(recorder.appliedSettings.last?.antennaGuide == false)
+        #expect(recorder.appliedSettings.last?.antennaEnabled == true)
+        #expect(model.row(id: "antenna.guide")?.value == "Off")
+        #expect(model.row(id: "antenna.guide.status")?.detail == "Off")
+        model.activate(rowID: "antenna.guide")
+        #expect(recorder.appliedSettings.last?.antennaGuide == true)
+        #expect(model.row(id: "antenna.guide.status")?.detail == "Updated Nov 15, 9:12 AM · 1,234 programmes · 2 of 3 channels")
+    }
+
+    @Test func antennaChannelsPageTogglesHiding() {
+        let (model, recorder) = onAntennaPage()
+        model.activate(rowID: "antenna.channels")
+        #expect(model.page == .antennaChannels)
+        #expect(model.pageTitle == "Channels")
+        #expect(model.focusableRowIDs == ["antennaChannel.antenna:2.1", "antennaChannel.antenna:2.2",
+                                          "antennaChannel.antenna:5.1"])
+        let first = model.row(id: "antennaChannel.antenna:2.1")
+        #expect(first?.title == "2.1  WSB-HD")
+        #expect(first?.value == "Shown")
+        #expect(first?.detail == "HD · Signal 100 %")
+        #expect(first?.isDimmed == false)
+        #expect(model.row(id: "antennaChannel.antenna:2.2")?.detail == "Signal 87 %")
+        #expect(model.row(id: "antennaChannel.antenna:5.1")?.detail == "HD")
+
+        model.press(.down, .select)
+        #expect(recorder.channelHides == [ChannelHide(id: "antenna:2.2", hidden: true)])
+        // The library hid it.
+        recorder.iptv.antennaChannels[1].isHidden = true
+        model.refreshStatus()
+        let hidden = model.row(id: "antennaChannel.antenna:2.2")
+        #expect(hidden?.value == "Hidden")
+        #expect(hidden?.isDimmed == true)
+        #expect(model.sections(for: .antenna).flatMap(\.rows).first { $0.id == "antenna.channels" }?.value == "1 Hidden")
+        model.press(.select)
+        #expect(recorder.channelHides.last == ChannelHide(id: "antenna:2.2", hidden: false))
+
+        // No channels: only an info row.
+        recorder.iptv.antennaChannels = []
+        model.refreshStatus()
+        #expect(model.focusableRowIDs.isEmpty)
+        #expect(model.row(id: "antennaChannel.none")?.title == "No antenna channels")
+    }
+
+    @Test func antennaOffShowsOffAndHidesTheTunerRows() {
+        var status = Self.antennaStatus()
+        status.antennaEnabled = false
+        status.antennaTuners = []
+        status.antennaChannels = []
+        let (model, _) = onAntennaPage(status, settings: Self.antennaOff)
+        #expect(model.sections.map(\.id) == ["antenna"])
+        #expect(model.focusableRowIDs == ["antenna.enabled"])
+        #expect(model.row(id: "antenna.enabled")?.value == "Off")
+        #expect(model.row(id: "antenna.tuner.0") == nil)
+        #expect(model.sections(for: .liveTV).flatMap(\.rows).first { $0.id == "iptv.antenna" }?.value == "Off")
+        // Even with a tuner still in the status (the library hasn't caught up), the setting decides.
+        let (lagging, _) = onAntennaPage(Self.antennaStatus(), settings: Self.antennaOff)
+        #expect(lagging.row(id: "antenna.tuner.0") == nil)
+        #expect(lagging.sections(for: .liveTV).flatMap(\.rows).first { $0.id == "iptv.antenna" }?.value == "Off")
+    }
+
     @Test func hiddenChannelsPage() {
         let (model, recorder) = makeSettingsModel()
         recorder.iptv = Self.status
@@ -845,6 +1181,14 @@ struct SettingsLiveTVTests {
         #expect(model.row(id: "hidden.id:a")?.title == "3  A")
         #expect(model.row(id: "hidden.id:a")?.value == "Show")
         #expect(model.row(id: "hidden.id:a")?.detail == "Live Channels")
+        // M7j: an antenna channel shows its GuideNumber, not its position.
+        recorder.iptv.hiddenChannels = [.init(id: "id:a", number: 3, name: "A", group: "Live Channels"),
+                                        .init(id: "antenna:5.1", number: 412, name: "WAGA-HD", group: "Antenna",
+                                              guideNumber: "5.1")]
+        model.refreshStatus()
+        #expect(model.row(id: "hidden.antenna:5.1")?.title == "5.1  WAGA-HD")
+        #expect(model.row(id: "hidden.antenna:5.1")?.detail == "Antenna")
+        #expect(model.row(id: "hidden.id:a")?.title == "3  A")
         recorder.iptv.hiddenChannels = []
         model.press(.select)
         #expect(recorder.unhiddenChannels == ["id:a"])
@@ -876,6 +1220,120 @@ struct SettingsLiveTVTests {
         model.perform(.push(.guideSource(id: "gone")))
         #expect(model.sections.isEmpty)
         #expect(model.pageTitle == "Guide")
+    }
+
+    // MARK: M7j L18: the channel scan
+
+    @Test func scanRowOpensTheConfirmPage() {
+        let (model, recorder) = onAntennaPage()
+        let row = model.row(id: "antenna.scan")
+        #expect(row?.title == "Scan for Channels")
+        #expect(row?.value == nil)
+        #expect(row?.detail == nil)
+        #expect(row?.isDimmed == false)
+        #expect(row?.showsDisclosure == true)
+        #expect(row?.description == "Has the tuner look for channels again, for a few minutes.")
+        #expect(model.sections.first { $0.id == "antennaTuners" }?.rows.map(\.id)
+            == ["antenna.tuner.0", "antenna.find", "antenna.scan"])
+
+        model.activate(rowID: "antenna.scan")
+        #expect(model.page == .confirmAntennaScan)
+        #expect(model.pageTitle == "Scan for Channels?")
+        #expect(model.focusableRowIDs == ["confirm.cancel", "confirm.scan"])
+        #expect(model.focusedRowID == "confirm.cancel")
+        #expect(model.row(id: "confirm.scan")?.title == "Scan")
+        #expect(model.sections.first?.footer == "The tuner looks for channels for a few minutes. Antenna channels can't play meanwhile, here or on other devices. Channels it doesn't find are removed from the tuner's lineup.")
+        // Cancel goes back without a scan.
+        model.press(.select)
+        #expect(model.page == .antenna)
+        #expect(recorder.antennaScanStarts == 0)
+
+        // No tuner: no Scan row.
+        var none = IPTVSettingsStatus()
+        none.antennaEnabled = true
+        let (empty, _) = onAntennaPage(none)
+        #expect(empty.row(id: "antenna.scan") == nil)
+    }
+
+    @Test func confirmPageScanStartsAndPops() {
+        let (model, recorder) = onAntennaPage()
+        model.activate(rowID: "antenna.scan")
+        model.press(.down, .select)
+        #expect(recorder.antennaScanStarts == 1)
+        #expect(model.page == .antenna)
+        #expect(model.focusedRowID == "antenna.scan")
+    }
+
+    @Test func scanningRowShowsProgressAndStops() {
+        var status = Self.antennaStatus()
+        status.antennaScan = .running(progress: 45, found: 120)
+        let (model, recorder) = onAntennaPage(status)
+        let row = model.row(id: "antenna.scan")
+        #expect(row?.title == "Stop Scan")
+        #expect(row?.value == "45 %")
+        #expect(row?.detail == "Scanning… 120 found")
+        #expect(row?.action == .stopAntennaScan)
+        #expect(row?.showsDisclosure == false)
+        // Select stops it at once, with no confirm page.
+        model.activate(rowID: "antenna.scan")
+        #expect(recorder.antennaScanStops == 1)
+        #expect(model.page == .antenna)
+        // The scan read the lineup again: the row is idle once more.
+        recorder.iptv.antennaScan = .stopped
+        model.refreshStatus()
+        #expect(model.row(id: "antenna.scan")?.title == "Scan for Channels")
+        #expect(model.row(id: "antenna.scan")?.detail == "Scan stopped")
+    }
+
+    @Test func cantScanRowIsDimmed() {
+        var status = Self.antennaStatus()
+        status.antennaCanScan = false
+        let (model, _) = onAntennaPage(status)
+        let row = model.row(id: "antenna.scan")
+        #expect(row?.isDimmed == true)
+        #expect(row?.detail == "The tuner can't scan now")
+        #expect(row?.title == "Scan for Channels")
+        // Security L2: an info row; Select on it does nothing.
+        #expect(row?.action == nil)
+        #expect(row?.showsDisclosure == false)
+        #expect(!model.focusableRowIDs.contains("antenna.scan"))
+        model.activate(rowID: "antenna.scan")
+        #expect(model.page == .antenna)
+        // "Can't scan" wins over the last scan's line.
+        #expect(SettingsModel.antennaScanLine(.finished(found: 5, added: 1, removed: 0), canScan: false)
+            == "The tuner can't scan now")
+    }
+
+    @Test func finishedScanSaysWhatChanged() {
+        var status = Self.antennaStatus()
+        status.antennaScan = .finished(found: 185, added: 3, removed: 2)
+        let (model, _) = onAntennaPage(status)
+        #expect(model.row(id: "antenna.scan")?.detail == "Found 185 channels: 3 new, 2 gone")
+        #expect(model.row(id: "antenna.scan")?.isDimmed == false)
+        #expect(SettingsModel.antennaScanLine(.finished(found: 1, added: 1, removed: 0), canScan: true)
+            == "Found 1 channel: 1 new, 0 gone")
+        #expect(SettingsModel.antennaScanLine(.finished(found: 1_234, added: 0, removed: 0), canScan: true)
+            == "Found 1,234 channels: 0 new, 0 gone")
+        #expect(SettingsModel.antennaScanLine(.stopped, canScan: true) == "Scan stopped")
+        #expect(SettingsModel.antennaScanLine(.failed, canScan: true) == "Scan failed")
+        #expect(SettingsModel.antennaScanLine(nil, canScan: true) == nil)
+    }
+
+    /// The scan is polled fast exactly while the Antenna page is on top (and Settings open).
+    @Test func antennaPageVisibilityFollowsTheTopPage() {
+        let (model, recorder) = onAntennaPage()
+        #expect(recorder.antennaPageVisibility == [true])
+        model.activate(rowID: "antenna.scan")
+        #expect(recorder.antennaPageVisibility == [true, false])
+        model.press(.back)
+        #expect(recorder.antennaPageVisibility == [true, false, true])
+        model.activate(rowID: "antenna.channels")
+        model.press(.back)
+        #expect(recorder.antennaPageVisibility == [true, false, true, false, true])
+        model.screenDidClose()
+        #expect(recorder.antennaPageVisibility.last == false)
+        model.reset()
+        #expect(recorder.antennaPageVisibility.count == 6)
     }
 
     @Test func removeConfirmFocusesCancelFirst() {

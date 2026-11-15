@@ -3,7 +3,11 @@ import zlib
 
 /// File-to-file gzip inflate. Apple's Compression framework is raw DEFLATE and can't read gzip.
 nonisolated enum Gunzip {
-    enum GunzipError: Error { case zlib(Int32) }
+    enum GunzipError: Error, Equatable {
+        case zlib(Int32)
+        /// M7j step 8 (security L3): the output passed `maxOutputBytes`.
+        case tooLarge
+    }
 
     private static let chunkSize = 256 * 1024
 
@@ -16,8 +20,9 @@ nonisolated enum Gunzip {
     }
 
     /// Streams `source` → `destination` in 256 KB chunks with inflateInit2_(…, 15 + 32, …).
-    /// On Z_STREAM_END with input left (concatenated members), inflateReset and continue. Throws on zlib errors.
-    static func decompress(_ source: URL, to destination: URL) throws {
+    /// On Z_STREAM_END with input left (concatenated members), inflateReset and continue. Throws on zlib errors, and
+    /// `tooLarge` once more than `maxOutputBytes` (nil: no limit) would be written.
+    static func decompress(_ source: URL, to destination: URL, maxOutputBytes: Int? = nil) throws {
         let input = try FileHandle(forReadingFrom: source)
         defer { try? input.close() }
         FileManager.default.createFile(atPath: destination.path, contents: nil)
@@ -31,6 +36,7 @@ nonisolated enum Gunzip {
 
         var outBuffer = [UInt8](repeating: 0, count: chunkSize)
         var finishedMember = false
+        var written = 0
         while let chunk = try input.read(upToCount: chunkSize), !chunk.isEmpty {
             var inBytes = [UInt8](chunk)
             let inCount = inBytes.count
@@ -53,6 +59,8 @@ nonisolated enum Gunzip {
                         }
                         return chunkSize - Int(stream.avail_out)
                     }
+                    written += produced
+                    if let maxOutputBytes, written > maxOutputBytes { throw GunzipError.tooLarge }
                     if produced > 0 { output.write(Data(outBuffer[0..<produced])) }
                     if status == Z_STREAM_END { finishedMember = true }
                     if status == Z_BUF_ERROR && produced == 0 { break }

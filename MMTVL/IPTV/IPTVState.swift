@@ -14,16 +14,20 @@ nonisolated struct IPTVState: Codable, Equatable, Sendable {
     var multiview: MultiviewSnapshot?
     /// M7 L13: channels watched, most recent first, at most `maxRecentChannels` (the top shelf without favorites).
     var recentChannelIDs: [String]
+    /// M7j L10: when the antenna guide is next downloaded (20–28 h after a success, 1 h after a failure); nil: as soon
+    /// as there are antenna channels. Its last import is `guideImports[AntennaGuide.sourceID]`. Never a token.
+    var antennaGuideDue: Date?
 
     static let maxRecentChannels = 10
 
     init(lastChannelID: String? = nil, lastGroup: String? = nil, guideImports: [String: Date] = [:],
-         multiview: MultiviewSnapshot? = nil, recentChannelIDs: [String] = []) {
+         multiview: MultiviewSnapshot? = nil, recentChannelIDs: [String] = [], antennaGuideDue: Date? = nil) {
         self.lastChannelID = lastChannelID
         self.lastGroup = lastGroup
         self.guideImports = guideImports
         self.multiview = multiview
         self.recentChannelIDs = recentChannelIDs
+        self.antennaGuideDue = antennaGuideDue
     }
 
     init(from decoder: Decoder) throws {
@@ -35,5 +39,7 @@ nonisolated struct IPTVState: Codable, Equatable, Sendable {
         // A snapshot that can't be decoded (say, an unknown layout) reads as nil; the rest of the state is kept.
         multiview = (try? container.decodeIfPresent(MultiviewSnapshot.self, forKey: .multiview)) ?? nil
         recentChannelIDs = (try? container.decodeIfPresent([String].self, forKey: .recentChannelIDs)) ?? []
+        // M7j: a value that can't be decoded reads as nil (due now).
+        antennaGuideDue = (try? container.decodeIfPresent(Date.self, forKey: .antennaGuideDue)) ?? nil
     }
 }

@@ -29,6 +29,14 @@ final class SettingsRecorder {
     var groupHides: [GroupHide] = []
     var teamPicks: [TeamPick] = []
     var unhiddenChannels: [String] = []
+    /// M7j L14: Find Tuners answers at once with this.
+    var antennaFindResult = AntennaFindOutcome.noneFound
+    var antennaFinds = 0
+    var channelHides: [ChannelHide] = []
+    /// M7j L18: the channel scan's start and stop, and each Antenna page visibility change.
+    var antennaScanStarts = 0
+    var antennaScanStops = 0
+    var antennaPageVisibility: [Bool] = []
     var phoneRemote = PhoneRemoteSettingsStatus()
     var pairingCalls: [Bool] = []
     var forgets = 0
@@ -98,6 +106,11 @@ struct TeamPick: Equatable {
     var picked: Bool
 }
 
+struct ChannelHide: Equatable {
+    var id: String
+    var hidden: Bool
+}
+
 struct GroupHide: Equatable {
     var name: String
     var hidden: Bool
@@ -150,6 +163,14 @@ func makeSettingsModel(
         setTeamPicked: { recorder.teamPicks.append(TeamPick(id: $0, picked: $1)) },
         refreshIPTV: { recorder.iptvRefreshes += 1 },
         removeIPTVSource: { recorder.iptvRemovals += 1 },
+        findAntennaTuners: {
+            recorder.antennaFinds += 1
+            return recorder.antennaFindResult
+        },
+        setChannelHidden: { recorder.channelHides.append(ChannelHide(id: $0, hidden: $1)) },
+        startAntennaScan: { recorder.antennaScanStarts += 1 },
+        stopAntennaScan: { recorder.antennaScanStops += 1 },
+        antennaPageVisible: { recorder.antennaPageVisibility.append($0) },
         phoneRemoteStatus: { recorder.phoneRemote },
         setPhonePairing: { recorder.pairingCalls.append($0) },
         forgetAllPhones: { recorder.forgets += 1 },

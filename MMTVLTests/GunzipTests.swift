@@ -52,4 +52,17 @@ struct GunzipTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         #expect(try Gunzip.isGzip(try write("<tv></tv>", name: "plain.xml")) == false)
     }
+
+    /// M7j step 8 (security L3): output past the limit stops the inflate; within it, it's whole.
+    @Test func outputOverTheLimitIsRefused() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let text = String(repeating: "abcdefgh", count: 200_000)    // 1.6 MB, compresses to a few KB
+        let compressed = try gzip(try write(text, name: "big.txt"))
+        let output = directory.appending(path: "big.out")
+        #expect(throws: Gunzip.GunzipError.tooLarge) {
+            try Gunzip.decompress(compressed, to: output, maxOutputBytes: 1_000_000)
+        }
+        try Gunzip.decompress(compressed, to: output, maxOutputBytes: 1_600_000)
+        #expect(try Data(contentsOf: output).count == 1_600_000)
+    }
 }

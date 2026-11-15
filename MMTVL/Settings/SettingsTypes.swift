@@ -29,6 +29,10 @@ nonisolated enum SettingsPage: Hashable, Sendable {
     case addressEntry(AddressField)
     /// M7l L3: System → Glass, the five glass steps.
     case glassStyle
+    /// M7j L14: Live TV → Antenna, and its Channels list.
+    case antenna, antennaChannels
+    /// M7j L18: Antenna → Scan for Channels' confirm page.
+    case confirmAntennaScan
 }
 
 /// M7h step 11: which address the keyboard page edits.
@@ -43,6 +47,8 @@ nonisolated enum AddressField: Hashable, Sendable {
 /// "Searching…", then shows the result.
 nonisolated enum SettingsProbe: Hashable, Sendable {
     case testReceiver, findReceiver, testTV, findTV
+    /// M7j L14: Live TV → Antenna → Find Tuners (a UDP search on the LAN, then the lineups).
+    case findAntennaTuners
 }
 
 /// What Settings → Siri Remote shows (M7h D43). Built by the app from `SiriRemoteInput` and `RemoteBattery`.
@@ -109,6 +115,35 @@ nonisolated struct IPTVSettingsStatus: Equatable, Sendable {
     var hiddenChannels: [HiddenChannelStatus] = []
     /// M7f L13: picked team ids, in the order added.
     var teams: [String] = []
+    /// M7j L14: the antenna is on (`AntennaSource.isEnabled`).
+    var antennaEnabled = false
+    /// M7j: a search for tuners is running, or none has finished since the antenna was turned on.
+    var antennaSearching = false
+    /// The tuners found, in DeviceID order. Never a DeviceID, address or token.
+    var antennaTuners: [AntennaTunerStatus] = []
+    /// The antenna channels, in GuideNumber order.
+    var antennaChannels: [AntennaChannelStatus] = []
+    /// Protected (DRM) channels left out of the lineup.
+    var antennaLeftOut = 0
+    /// The lineup's status when it failed: why it can't be read ("The antenna tuner isn't answering"); nil otherwise
+    /// (the last channels are kept meanwhile, L5).
+    var antennaLineupLine: String?
+    /// The antenna guide (`AntennaGuide.sourceID`): "Updated Nov 15, 9:12 AM · 1,234 programmes · 150 of 185 channels",
+    /// "Loading…", "Failed: …", "Not loaded yet".
+    var antennaGuideLine = ""
+    /// M7j L18: the last channel scan (`AntennaSource.scan`); nil when none shows.
+    var antennaScan: AntennaScanState?
+    /// M7j L18: some tuner may start a scan (`AntennaSource.canScan`); false dims Scan for Channels.
+    var antennaCanScan = true
+
+    /// M7j L18: a scan is running (Select on its row is Stop Scan).
+    var antennaIsScanning: Bool {
+        if case .running = antennaScan { return true }
+        return false
+    }
+
+    /// L13: Live TV has something to show: a playlist, or a tuner that was found.
+    var hasLiveSource: Bool { hasPlaylist || !antennaTuners.isEmpty }
 
     struct GuideSourceStatus: Identifiable, Equatable, Sendable {
         /// GuideSource.id.
@@ -135,6 +170,35 @@ nonisolated struct IPTVSettingsStatus: Equatable, Sendable {
         var number: Int
         var name: String
         var group: String
+        /// M7j: an antenna channel's GuideNumber ("5.1"); nil for playlist channels.
+        var guideNumber: String? = nil
+
+        /// What the row shows: `Channel.displayNumber`.
+        var displayNumber: String { guideNumber ?? "\(number)" }
+    }
+
+    /// M7j L14: one HDHomeRun tuner. No DeviceID, address or DeviceAuth: only what Settings shows.
+    struct AntennaTunerStatus: Equatable, Sendable {
+        /// FriendlyName ("HDHomeRun FLEX 4K").
+        var name: String
+        /// ModelNumber ("HDFX-4K").
+        var model: String
+        var tunerCount: Int
+        /// Its channels in Live TV.
+        var channelCount: Int
+    }
+
+    /// M7j L14: one antenna channel on Settings → Live TV → Antenna → Channels.
+    struct AntennaChannelStatus: Identifiable, Equatable, Sendable {
+        /// Channel.ID (`antenna:5.1`).
+        var id: String
+        /// `Channel.displayNumber`: the GuideNumber ("5.1").
+        var displayNumber: String
+        var name: String
+        var isHD = false
+        /// The lineup's SignalQuality, 0…100; nil when the tuner doesn't say.
+        var signalQuality: Int?
+        var isHidden = false
     }
 }
 
@@ -224,6 +288,8 @@ nonisolated enum SettingKey: String, CaseIterable, Sendable {
     case siriRemoteSwipes
     /// M7m L29: Settings → Live TV → My Teams → Matching.
     case teamMatchInitials, teamMatchNicknames
+    /// M7j L14: Settings → Live TV → Antenna.
+    case antennaEnabled, antennaGuide
 
     var keyPath: WritableKeyPath<AppSettings, Bool> {
         switch self {
@@ -245,6 +311,8 @@ nonisolated enum SettingKey: String, CaseIterable, Sendable {
         case .siriRemoteSwipes: \.siriRemoteSwipes
         case .teamMatchInitials: \.teamMatchInitials
         case .teamMatchNicknames: \.teamMatchNicknames
+        case .antennaEnabled: \.antennaEnabled
+        case .antennaGuide: \.antennaGuide
         }
     }
 }
@@ -312,6 +380,12 @@ nonisolated enum SettingsAction: Hashable, Sendable {
     case setTVBrand(TVBrand)
     /// Read-only checks (L12, L17, L18); never a command that changes anything.
     case testReceiver, findReceiver, testTV, findTV
+    /// M7j L14: Live TV → Antenna → Find Tuners.
+    case findAntennaTuners
+    /// M7j L14: Live TV → Antenna → Channels: hides a shown channel, shows a hidden one.
+    case toggleChannelHidden(id: String)
+    /// M7j L18: the confirm page's Scan, and Stop Scan on the running scan's row.
+    case startAntennaScan, stopAntennaScan
     /// The address page: save the typed address (empty clears it), or clear the field.
     case saveAddress(AddressField)
     case clearAddress

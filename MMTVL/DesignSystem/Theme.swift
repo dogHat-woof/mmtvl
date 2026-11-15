@@ -413,8 +413,12 @@ enum Theme {
     /// The star after a favorite's name in the channel cell (M6b).
     static let guideFavoriteSymbolSize: CGFloat = 20
     /// M7l 8c: the channel number's slot in the channel cell; the Choose Teams row puts its symbol after it, where
-    /// channel logos sit, so its title lines up with the channel names.
-    static let guideChannelNumberWidth: CGFloat = 44
+    /// channel logos sit, so its title lines up with the channel names. M7j: 52 fits an antenna GuideNumber up to
+    /// "99.99" (48.3 pt at `guideCellTimeFont` with tabular digits) and a four-digit playlist number (43.5 pt).
+    static let guideChannelNumberWidth: CGFloat = 52
+    /// M7j: a number wider than the slot (a five-digit playlist number, a three-digit minor) shrinks to this
+    /// much at most, so it never truncates or pushes the name.
+    static let guideChannelNumberMinimumScale: CGFloat = 0.8
     /// M7l 8c: the day and time slot that starts an upcoming game's cell ("Wed 12:30 PM" at `guideCellFont`).
     static let guideUpcomingTimeWidth: CGFloat = 220
     /// M7l 8c: the symbols in My Teams' Choose Teams and upcoming rows.

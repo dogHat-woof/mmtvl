@@ -62,7 +62,8 @@ nonisolated struct ChannelLineup: Equatable, Sendable {
     static let maxUpcomingTeamGames = 30
 
     /// ["Favorites"] when there are visible favorites or a picked team is on (M7l 8b), ["My Teams"] whenever a channel
-    /// is visible (M7l 8c), then `ChannelList.guideGroups(of: visibleChannels)`.
+    /// is visible (M7l 8c), then `ChannelList.guideGroups(of: visibleChannels)` (M7j L3: Antenna, All Channels, the
+    /// playlist's groups).
     private(set) var groups: [String]
     /// Playlist order, without hidden channels and hidden groups.
     private(set) var visibleChannels: [Channel]

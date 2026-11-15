@@ -71,7 +71,7 @@ struct LiveTVRootView: View {
             MultiviewOverlayView(model: model)
         case .setupNeeded:
             LiveTVMessageView(title: "Live TV isn't set up",
-                              message: "Copy your playlist URL, then open Settings → Live TV → Paste Playlist URL.",
+                              message: "Paste a playlist URL in Settings → Live TV, or connect an HDHomeRun tuner.",
                               hint: "Select: open Settings · Home: leave Live TV")
         case .loading:
             VStack(spacing: 32) {
@@ -223,7 +223,7 @@ struct LiveBannerView: View {
             }
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("\(banner.channel.number)  \(banner.channel.name)")
+                    Text("\(banner.channel.displayNumber)  \(banner.channel.name)")
                         .font(Theme.liveBannerTitleFont)
                         .foregroundStyle(Theme.primaryText)
                     Spacer(minLength: 24)

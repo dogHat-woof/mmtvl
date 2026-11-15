@@ -1003,6 +1003,374 @@ struct LiveTVModelTests {
         #expect(model.pausedOverlayTask == nil)
         #expect(!model.pausedOverlayVisible)
     }
+
+    // MARK: M7j L13: Live TV with only an antenna
+
+    @Test func antennaOnlyOpensTheGuide() async throws {
+        let fixture = try makeLibrary(tuner: FakeTuner())
+        defer { fixture.cleanUp() }
+        let player = FakePlayer()
+        let model = LiveTVModel(player: player, makePlayer: { FakePlayer() }, library: fixture.library)
+        await open(model)
+        #expect(model.mode == .guide)
+        #expect(model.guide?.groups == ["My Teams", "Antenna"])
+        #expect(model.guide?.selectedGroup == "Antenna")
+        #expect(model.guide?.focusedChannel?.name == "WSB-HD")
+        #expect(fixture.tuner?.searchCount == 1)
+        #expect(player.played.isEmpty)
+    }
+
+    @Test func noPlaylistAndNoTunerNeedsSetup() async throws {
+        let fixture = try makeLibrary(tuner: FakeTuner(devices: []))
+        defer { fixture.cleanUp() }
+        let model = LiveTVModel(player: FakePlayer(), makePlayer: { FakePlayer() }, library: fixture.library)
+        await open(model)
+        #expect(model.mode == .setupNeeded)
+        #expect(fixture.tuner?.searchCount == 1)
+        // The search isn't repeated on the next open while it's fresh.
+        await open(model)
+        #expect(model.mode == .setupNeeded)
+        #expect(fixture.tuner?.searchCount == 1)
+    }
+
+    @Test func antennaOnlyWithoutChannelsSaysNoChannelsFound() async throws {
+        let tuner = FakeTuner(lineups: [AntennaFixtures.device().lineupURL: "[]"])
+        let fixture = try makeLibrary(tuner: tuner)
+        defer { fixture.cleanUp() }
+        let model = LiveTVModel(player: FakePlayer(), makePlayer: { FakePlayer() }, library: fixture.library)
+        await open(model)
+        #expect(model.mode == .unavailable("No channels found"))
+    }
+
+    @Test func previewStartsWithOnlyATuner() async throws {
+        let fixture = try makeLibrary(tuner: FakeTuner())
+        defer { fixture.cleanUp() }
+        let player = FakePlayer()
+        let model = LiveTVModel(player: player, makePlayer: { FakePlayer() }, library: fixture.library)
+        model.startPreview(channelID: "antenna:5.1")
+        #expect(player.played.isEmpty)   // no tuner found yet
+
+        await fixture.library.discoverAntenna()
+        model.startPreview(channelID: "antenna:5.1")
+        #expect(model.previewChannelID == "antenna:5.1")
+        #expect(player.played == [AntennaFixtures.streamURL("5.1")])
+    }
+
+    // MARK: M7j L6, L7: antenna channels play direct and are never touched ahead
+
+    /// The playlist and a fake tuner (2.1, 5.1, 11.1 after the playlist's five channels in All Channels).
+    private func makeAntennaModel(state: IPTVState) async throws -> (LiveTVModel, FakePlayer, LibraryFixture) {
+        let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL, state: state, tuner: FakeTuner())
+        let player = FakePlayer()
+        let model = LiveTVModel(player: player, makePlayer: { FakePlayer() }, library: fixture.library,
+                                now: { fixture.clock.now })
+        await open(model)
+        return (model, player, fixture)
+    }
+
+    @Test func antennaChannelPlaysDirect() async throws {
+        let (model, player, fixture) = try await makeAntennaModel(state: IPTVState(lastChannelID: "antenna:5.1",
+                                                                                   lastGroup: "Antenna"))
+        defer { fixture.cleanUp() }
+        #expect(model.mode == .player)
+        #expect(player.played == [AntennaFixtures.streamURL("5.1")])
+        #expect(player.playedDirect == [true])
+        _ = model.handle(.down)
+        #expect(player.played.last == AntennaFixtures.streamURL("11.1"))
+        #expect(player.playedDirect == [true, true])
+    }
+
+    /// M7j L18 (step 9b QA minor 1): while a channel scan runs, no antenna stream is asked for: no preview, and full
+    /// screen says so without a `play`. Playlist channels still play.
+    @Test func noAntennaStreamWhileTheTunerScans() async throws {
+        let tuner = FakeTuner()
+        tuner.setLineupStatusSequence([AntennaFixtures.scanningLineupStatusJSON(progress: 10, found: 1)])
+        let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL,
+                                      state: IPTVState(lastChannelID: "antenna:5.1", lastGroup: "Antenna"), tuner: tuner)
+        defer { fixture.cleanUp() }
+        let library = fixture.library
+        await library.refreshAtLaunch()
+        await library.antennaPageVisible(true)   // a scan started elsewhere
+        #expect(library.antenna.isScanning)
+        let player = FakePlayer()
+        let model = LiveTVModel(player: player, makePlayer: { FakePlayer() }, library: library,
+                                now: { fixture.clock.now })
+
+        model.startPreview(channelID: "antenna:5.1")
+        #expect(model.previewChannelID == nil)
+        #expect(player.played.isEmpty)
+
+        await open(model)
+        #expect(model.mode == .player)
+        #expect(model.currentChannel?.id == "antenna:5.1")
+        #expect(model.playbackError == "The tuner is scanning for channels")
+        #expect(player.played.isEmpty)
+        _ = model.handle(.up)   // 2.1, an antenna channel too
+        #expect(player.played.isEmpty)
+
+        library.stopAntennaScan()
+        model.startPreview(channelID: "id:nbatv.us")
+        #expect(player.played == [IPTVFixtures.streamURL(2)])
+    }
+
+    /// Step 10 (security N1): a scan blocks only its own tuner's channels. Tuner B reports a scan when Settings →
+    /// Antenna opens (a scan elsewhere, or a LAN host that always says so); tuner A's channels still preview and play,
+    /// B's show "The tuner is scanning for channels" without a `play`.
+    @Test func aScanBlocksOnlyItsOwnTunersChannels() async throws {
+        let deviceA = AntennaFixtures.device()
+        let deviceB = AntennaFixtures.device(id: "5678ABCD", host: "10.0.0.10")
+        let tuner = FakeTuner(devices: [deviceA, deviceB], lineups: [
+            deviceA.lineupURL: AntennaFixtures.lineupJSON([("2.1", "WSB-HD"), ("5.1", "WAGA-HD")]),
+            deviceB.lineupURL: AntennaFixtures.lineupJSON([("11.1", "WXIA-HD")], host: "10.0.0.10"),
+        ])
+        tuner.setLineupStatusSequence([AntennaFixtures.idleLineupStatusJSON()], for: deviceA)
+        tuner.setLineupStatusSequence([AntennaFixtures.scanningLineupStatusJSON(progress: 10, found: 1)], for: deviceB)
+        let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL,
+                                      state: IPTVState(lastChannelID: "antenna:5.1", lastGroup: "Antenna"), tuner: tuner)
+        defer { fixture.cleanUp() }
+        let library = fixture.library
+        await library.refreshAtLaunch()
+        await library.antennaPageVisible(true)
+        #expect(library.antenna.isScanning)
+        #expect(library.antenna.isScanning(deviceID: deviceB.id))
+        #expect(!library.antenna.isScanning(deviceID: deviceA.id))
+        let player = FakePlayer()
+        let model = LiveTVModel(player: player, makePlayer: { FakePlayer() }, library: library,
+                                now: { fixture.clock.now })
+
+        // The preview: B's channel doesn't start, A's does.
+        model.startPreview(channelID: "antenna:11.1")
+        #expect(model.previewChannelID == nil)
+        #expect(player.played.isEmpty)
+        model.startPreview(channelID: "antenna:5.1")
+        #expect(model.previewChannelID == "antenna:5.1")
+        #expect(player.played == [AntennaFixtures.streamURL("5.1")])
+        model.stopPreview()
+
+        // Full screen: A's 5.1 plays; Down to B's 11.1 says the tuner is scanning, with no stream request.
+        await open(model)
+        #expect(model.mode == .player)
+        #expect(model.currentChannel?.id == "antenna:5.1")
+        #expect(model.playbackError == nil)
+        let playedBefore = player.played.count
+        #expect(player.played.last == AntennaFixtures.streamURL("5.1"))
+        _ = model.handle(.down)
+        #expect(model.currentChannel?.id == "antenna:11.1")
+        #expect(model.playbackError == "The tuner is scanning for channels")
+        #expect(player.played.count == playedBefore)
+        _ = model.handle(.up)   // back to A's 5.1: plays
+        #expect(model.currentChannel?.id == "antenna:5.1")
+        #expect(player.played.count == playedBefore + 1)
+        #expect(player.played.last == AntennaFixtures.streamURL("5.1"))
+    }
+
+    @Test func playlistChannelPlaysThroughTheRelay() async throws {
+        let (model, player, fixture) = try await makeAntennaModel(state: Self.watching)
+        defer { fixture.cleanUp() }
+        #expect(model.currentChannel?.name == "NFL Network")
+        #expect(player.played == [IPTVFixtures.streamURL(1)])
+        #expect(player.playedDirect == [false])
+    }
+
+    /// L7: a zap's neighbors are resolved ahead only when they're playlist channels.
+    @Test func neighborsSkipAntennaChannels() async throws {
+        let (model, _, fixture) = try await makeAntennaModel(state: IPTVState(lastChannelID: "id:knicks @ heat",
+                                                                              lastGroup: "All Channels"))
+        defer { fixture.cleanUp() }
+        var prefetched: [[URL]] = []
+        model.prefetchStreams = { prefetched.append($0) }
+        _ = model.handle(.up)   // Lakers @ Celtics: Red Zone and Knicks @ Heat
+        #expect(prefetched == [[IPTVFixtures.streamURL(3), IPTVFixtures.streamURL(5)]])
+        _ = model.handle(.down)   // Knicks @ Heat: Lakers @ Celtics, not 2.1
+        #expect(prefetched.last == [IPTVFixtures.streamURL(4)])
+        _ = model.handle(.down)   // 2.1: Knicks @ Heat, not 5.1
+        #expect(model.currentChannel?.id == "antenna:2.1")
+        #expect(prefetched.last == [IPTVFixtures.streamURL(5)])
+        _ = model.handle(.down)   // 5.1: 2.1 and 11.1, both antenna: nothing
+        #expect(model.currentChannel?.id == "antenna:5.1")
+        #expect(prefetched.count == 3)
+    }
+
+    /// L7: the guide's highlight resting on an antenna channel doesn't warm it.
+    @Test func guideWarmUpSkipsAntennaChannels() async throws {
+        let (model, player, fixture) = try await makeAntennaModel(state: IPTVState(lastChannelID: "id:knicks @ heat",
+                                                                                   lastGroup: "All Channels"))
+        defer { fixture.cleanUp() }
+        player.state.phase = .playing
+        var warmed: [URL] = []
+        model.warmStream = { warmed.append($0) }
+        model.guideWarmDelay = .milliseconds(30)
+        openGuide(model)
+        #expect(model.guide?.focusedChannel?.id == "id:knicks @ heat")
+        _ = model.handle(.down)
+        #expect(model.guide?.focusedChannel?.id == "antenna:2.1")
+        await model.guideWarmTask?.value
+        #expect(warmed.isEmpty)
+        _ = model.handle(.down)
+        await model.guideWarmTask?.value
+        #expect(warmed.isEmpty)
+
+        // A playlist channel still is (the warm-up works in this setup).
+        _ = model.handle(.up)
+        _ = model.handle(.up)
+        _ = model.handle(.up)
+        #expect(model.guide?.focusedChannel?.id == "id:lakers @ celtics")
+        await model.guideWarmTask?.value
+        #expect(warmed == [IPTVFixtures.streamURL(4)])
+    }
+
+    // MARK: M7j L9: why an antenna channel didn't play
+
+    /// 5.1 full screen (the playlist and a fake tuner), its tuner answering `status`.
+    private func makeFailingAntennaModel(status: String? = AntennaFixtures.statusJSON(busy: 0)) async throws
+        -> (LiveTVModel, FakePlayer, LibraryFixture, FakeTuner) {
+        let (model, player, fixture) = try await makeAntennaModel(state: IPTVState(lastChannelID: "antenna:5.1",
+                                                                                   lastGroup: "Antenna"))
+        let tuner = try #require(fixture.tuner)
+        tuner.setStatus(status)
+        tuner.setLineupStatus(AntennaFixtures.lineupStatusJSON(scanning: false))
+        #expect(player.played == [AntennaFixtures.streamURL("5.1")])
+        return (model, player, fixture, tuner)
+    }
+
+    /// Retries exhausted with mpv's last "HTTP error NNN" (`httpStatus`), then the diagnosis.
+    private func fail(_ player: FakePlayer, httpStatus: Int?, _ model: LiveTVModel) async {
+        player.state.httpStatus = httpStatus
+        player.fail()
+        await model.pendingTask?.value
+    }
+
+    @Test func antennaFailureShowsNoSignal() async throws {
+        let (model, player, fixture, tuner) = try await makeFailingAntennaModel()
+        defer { fixture.cleanUp() }
+        await fail(player, httpStatus: 503, model)
+        #expect(tuner.statusFetchCount == 1)
+        #expect(model.playbackError == "No signal on this channel")
+        #expect(model.mode == .player)
+        #expect(player.played.count == 1)
+        // Select tries again (as for any failure).
+        _ = model.handle(.select)
+        #expect(player.played == [AntennaFixtures.streamURL("5.1"), AntennaFixtures.streamURL("5.1")])
+        #expect(model.playbackError == nil)
+    }
+
+    @Test func antennaFailureDoesntRefreshThePlaylist() async throws {
+        let (model, player, fixture, tuner) = try await makeFailingAntennaModel()
+        defer { fixture.cleanUp() }
+        let fetches = fixture.network.fetchCount
+        let lineupFetches = tuner.lineupFetchCount
+        await fail(player, httpStatus: nil, model)
+        #expect(fixture.network.fetchCount == fetches)
+        #expect(tuner.lineupFetchCount == lineupFetches)
+        #expect(model.playbackError == "No signal on this channel")
+        #expect(player.played.count == 1)
+    }
+
+    /// Every tuner busy (another device has them): said at once, without a retry.
+    @Test func antennaFailureWithEveryTunerBusySaysSo() async throws {
+        let (model, player, fixture, _) = try await makeFailingAntennaModel(status: AntennaFixtures.statusJSON(busy: 2))
+        defer { fixture.cleanUp() }
+        await fail(player, httpStatus: 503, model)
+        #expect(model.playbackError == "Both antenna tuners are in use")
+        #expect(player.played.count == 1)
+    }
+
+    @Test func unknownChannelRefreshesTheLineupAndRetriesOnce() async throws {
+        let (model, player, fixture, tuner) = try await makeFailingAntennaModel()
+        defer { fixture.cleanUp() }
+        let lineupFetches = tuner.lineupFetchCount
+        await fail(player, httpStatus: 404, model)
+        #expect(tuner.lineupFetchCount == lineupFetches + 1)
+        #expect(player.played == [AntennaFixtures.streamURL("5.1"), AntennaFixtures.streamURL("5.1")])
+        #expect(player.playedDirect == [true, true])
+        #expect(model.playbackError == nil)
+
+        // The retry fails too: the message, with no second lineup read.
+        await fail(player, httpStatus: 404, model)
+        #expect(tuner.lineupFetchCount == lineupFetches + 1)
+        #expect(player.played.count == 2)
+        #expect(model.playbackError == "This channel is no longer on the tuner")
+    }
+
+    @Test func unknownChannelGoneFromTheLineupIsNotRetried() async throws {
+        let (model, player, fixture, tuner) = try await makeFailingAntennaModel()
+        defer { fixture.cleanUp() }
+        tuner.setLineup(AntennaFixtures.lineupJSON([("2.1", "WSB-HD"), ("11.1", "WXIA-HD")]),
+                        for: AntennaFixtures.device())
+        await fail(player, httpStatus: 404, model)
+        #expect(player.played.count == 1)
+        #expect(model.playbackError == "This channel is no longer on the tuner")
+    }
+
+    @Test func unreachableTunerRediscoversAndRetriesOnce() async throws {
+        let (model, player, fixture, tuner) = try await makeFailingAntennaModel(status: nil)
+        defer { fixture.cleanUp() }
+        let searches = tuner.searchCount
+        let lineupFetches = tuner.lineupFetchCount
+        await fail(player, httpStatus: nil, model)
+        #expect(tuner.searchCount == searches + 1)
+        #expect(tuner.lineupFetchCount == lineupFetches + 1)
+        #expect(player.played == [AntennaFixtures.streamURL("5.1"), AntennaFixtures.streamURL("5.1")])
+        #expect(model.playbackError == nil)
+
+        await fail(player, httpStatus: nil, model)
+        #expect(tuner.searchCount == searches + 1)
+        #expect(player.played.count == 2)
+        #expect(model.playbackError == "The antenna tuner isn't answering")
+    }
+
+    /// The search finds the tuner but its lineup doesn't come: no retry on the kept channels.
+    @Test func unreachableTunerWithoutALineupIsNotRetried() async throws {
+        let (model, player, fixture, tuner) = try await makeFailingAntennaModel(status: nil)
+        defer { fixture.cleanUp() }
+        tuner.setLineup(nil, for: AntennaFixtures.device())
+        await fail(player, httpStatus: nil, model)
+        #expect(player.played.count == 1)
+        #expect(model.playbackError == "The antenna tuner isn't answering")
+    }
+
+    /// A zap while the tuner is asked: the new channel's load decides, not the old diagnosis.
+    @Test func aZapDuringTheDiagnosisWins() async throws {
+        let (model, player, fixture, _) = try await makeFailingAntennaModel()
+        defer { fixture.cleanUp() }
+        player.state.httpStatus = 503
+        player.fail()
+        _ = model.handle(.down)   // 11.1
+        await model.pendingTask?.value
+        #expect(model.currentChannel?.id == "antenna:11.1")
+        #expect(model.playbackError == nil)
+    }
+
+    @Test func previewFailureOnAnAntennaChannelEnds() async throws {
+        let tuner = FakeTuner()
+        tuner.setStatus(AntennaFixtures.statusJSON(busy: 0))
+        let fixture = try makeLibrary(tuner: tuner)
+        defer { fixture.cleanUp() }
+        let player = FakePlayer()
+        let model = LiveTVModel(player: player, makePlayer: { FakePlayer() }, library: fixture.library)
+        await fixture.library.discoverAntenna()
+        model.startPreview(channelID: "antenna:5.1")
+        #expect(player.played == [AntennaFixtures.streamURL("5.1")])
+        player.state.httpStatus = 503
+        player.fail()
+        await model.pendingTask?.value
+        #expect(model.previewFailed)
+        #expect(model.previewChannelID == nil)
+        #expect(model.playbackError == nil)
+        #expect(tuner.statusFetchCount == 0)
+        #expect(player.played.count == 1)
+    }
+
+    /// QA (step 4) finding 1: a tuner was found but its lineup couldn't be read: the antenna's failure, not setup.
+    @Test func unreadableLineupWithOnlyATunerIsUnavailable() async throws {
+        let fixture = try makeLibrary(tuner: FakeTuner(lineups: [:]))
+        defer { fixture.cleanUp() }
+        let model = LiveTVModel(player: FakePlayer(), makePlayer: { FakePlayer() }, library: fixture.library)
+        await open(model)
+        #expect(fixture.tuner?.searchCount == 1)
+        #expect(model.mode == .unavailable("The antenna tuner isn't answering"))
+        #expect(model.mode != .setupNeeded)
+    }
 }
 
 /// M7c L15, L16: the home screen's muted preview and Select adopting it.
@@ -1221,5 +1589,4 @@ struct LiveTVPreviewTests {
         defer { fixture.cleanUp() }
         #expect(model.defaultPreviewChannelID == Self.nba)
     }
-
 }

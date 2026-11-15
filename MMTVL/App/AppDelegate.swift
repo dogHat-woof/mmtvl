@@ -128,6 +128,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let iptvLibrary = makeIPTVLibrary(directory: directory)
         iptvLibrary.usePlaylistGuide = settings.usePlaylistGuide
+        // M7j L14: before the first refresh.
+        iptvLibrary.antenna.isEnabled = settings.antennaEnabled
+        iptvLibrary.antennaGuideEnabled = settings.antennaGuide
         // M7m L29: the matcher's index for these options is built off the main actor before its first use.
         iptvLibrary.teamMatchOptions = settings.teamMatchOptions
         TeamMatcher.Index.prepareBundled(settings.teamMatchOptions)
@@ -145,6 +148,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let liveTV = LiveTVModel(player: MPVPlayerController(), makePlayer: { MPVPlayerController() }, library: iptvLibrary)
         liveTV.channelUpMovesUpList = settings.channelUpMovesUpList
         self.liveTV = liveTV
+        #if DEBUG
+        muteLiveTVForDebugIfAsked(liveTV)
+        #endif
         var liveShelf = LiveShelfSource.library(iptvLibrary)
         liveShelf.defaultChannel = { [weak liveTV] in liveTV?.defaultPreviewChannelID }
         // M7c L24.
@@ -186,6 +192,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // M7h step 13e: status changes refresh only their part, and only while Settings shows.
         iptvLibrary.onStatusChange = { [weak router] in router?.settings.refreshStatus(.iptv) }
         iptvLibrary.onLineupChange = { [weak router] in router?.playlistDidChange() }
+        // M7j L18: a channel scan stops MMTVL's own antenna streams first.
+        iptvLibrary.stopAntennaStreams = { [weak liveTV] in liveTV?.stopAntennaStreams() }
         plex.onChange = { [weak router] in
             router?.settings.refreshStatus(.plex)
             router?.shelfContentChanged()
@@ -248,12 +256,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windowController.show(reason: "launch")
         setUpReflector()
 
-        // M4 L4/L5: channels are fetched at every launch; the guide only when stale.
-        if iptvLibrary.hasPlaylist {
-            Task {
-                await iptvLibrary.refreshPlaylist()
-                await iptvLibrary.refreshGuideIfStale()
-            }
+        // M4 L4/L5: channels are fetched at every launch; the guide only when stale. M7j L4: the antenna's tuners
+        // are searched for at the same time.
+        if iptvLibrary.canHaveLiveSource {
+            Task { await iptvLibrary.refreshAtLaunch() }
         }
         startIPTVRefreshTimer()
         startRemoteBatteryPolling()
@@ -263,6 +269,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showPowerMenuDemo()
         #endif
     }
+
+    #if DEBUG
+    /// M7j step 5 (Debug builds only): `-liveTVMuted YES` starts every Live TV player muted (the pool's players made
+    /// later too, `LiveTVModel.configure`), and the app volume route can't unmute them (`setUpVolume`): playback
+    /// checks on the dev Mac make no sound.
+    static var liveTVMutedForDebug: Bool { UserDefaults.standard.bool(forKey: "liveTVMuted") }
+
+    private func muteLiveTVForDebugIfAsked(_ liveTV: LiveTVModel) {
+        guard Self.liveTVMutedForDebug else { return }
+        liveTV.setAppVolume(0, muted: true)
+        Logger(subsystem: "dev.mmtvl.launcher", category: "MPV").notice("Live TV muted (Debug)")
+    }
+    #endif
 
     #if DEBUG
     /// M7h step 6 (Debug builds only): `-toastDemo "Trackpad On"` (optional `-toastDemoSymbol <SF Symbol>`) shows
@@ -345,6 +364,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "tvAddress": .addressEntry(.tv)
         case "system": .system
         case "glassStyle": .glassStyle
+        // M7j step 9: `-settingsDemo "liveTV/antenna/antennaChannels"`.
+        case "liveTV": .liveTV
+        case "antenna": .antenna
+        case "antennaChannels": .antennaChannels
         default: nil
         }
     }
@@ -370,6 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// M7f L5 (D40): every 15 minutes the playlist (10 min staleness), then the guides (12 h), in windowed mode too.
+    /// M7j: also the antenna's lineup and, when due (L10), the antenna guide (`refreshIfStale`).
     /// A source pasted later is picked up by the next tick.
     private func startIPTVRefreshTimer() {
         iptvRefreshTask?.cancel()
@@ -377,7 +401,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(IPTVLibrary.autoRefreshInterval))
                 guard !Task.isCancelled, let library = self?.iptvLibrary else { return }
-                if library.hasPlaylist { await library.refreshIfStale() }
+                if library.canHaveLiveSource { await library.refreshIfStale() }
             }
         }
         teamsRefreshTask?.cancel()
@@ -623,7 +647,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mode: { [weak self] in self?.settings.volumeMode ?? .auto },
             isLauncherActive: { NSApp.isActive },
             applyAppVolume: { [weak self] volume in
-                self?.liveTV?.setAppVolume(volume.level, muted: volume.muted)
+                var liveVolume = (level: volume.level, muted: volume.muted)
+                #if DEBUG
+                // M7j step 5: with `-liveTVMuted YES` no volume button unmutes Live TV.
+                if Self.liveTVMutedForDebug { liveVolume = (0, true) }
+                #endif
+                self?.liveTV?.setAppVolume(liveVolume.level, muted: liveVolume.muted)
                 self?.youtube?.setVolume(volume.level, muted: volume.muted)
             },
             receiver: receiver,
@@ -960,7 +989,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             stateFile: JSONConfigFile(url: directory.appending(path: IPTVState.fileName), defaultValue: IPTVState()),
             overridesFile: JSONConfigFile(url: directory.appending(path: IPTVState.overridesFileName), defaultValue: [String: String]()),
             preferencesFile: JSONConfigFile(url: directory.appending(path: ChannelPreferences.fileName),
-                                            defaultValue: ChannelPreferences())
+                                            defaultValue: ChannelPreferences()),
+            // M7j: the live discovery and tuner HTTP; turned on from `settings.json` before the first refresh. L18: the
+            // only place `livePost` is passed in (the channel scan's `lineup.post`); everywhere else posts nothing.
+            antenna: AntennaSource(http: HDHomeRunHTTP(post: HDHomeRunHTTP.livePost))
         )
     }
 
@@ -972,7 +1004,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var status = IPTVSettingsStatus()
         status.hasPlaylist = library.hasPlaylist
         status.playlistHost = library.playlistHost
-        status.channelCount = library.channels.count
+        status.channelCount = library.playlistChannels.count
         switch library.playlistStatus {
         case .idle: status.playlistLine = ""
         case .loading: status.playlistLine = "Loading…"
@@ -1014,9 +1046,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let hiddenChannels = Set(library.preferences.hiddenChannels)
         status.hiddenChannels = library.channels.filter { hiddenChannels.contains($0.id) }.map { channel in
-            IPTVSettingsStatus.HiddenChannelStatus(id: channel.id, number: channel.number, name: channel.name, group: channel.group)
+            IPTVSettingsStatus.HiddenChannelStatus(id: channel.id, number: channel.number, name: channel.name, group: channel.group,
+                                                   guideNumber: channel.guideNumber)
         }
         status.teams = library.preferences.teams
+        library.fillAntennaSettings(&status)
         return status
     }
 
@@ -1127,7 +1161,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             castReceiver?.restart()
             reflector?.systemDidWake()
             // M7f L5 (D40): the network may need a moment; a failure is logged and the next tick retries.
-            if let library = iptvLibrary, library.hasPlaylist { await library.refreshIfStale() }
+            // M7j L4: the antenna's tuners are searched for again.
+            if let library = iptvLibrary, library.canHaveLiveSource { await library.refreshAfterWake() }
         }
     }
 
@@ -1302,6 +1337,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if new.teamMatchOptions != old.teamMatchOptions, let iptvLibrary {
             Task { await iptvLibrary.applyTeamMatchOptions(new.teamMatchOptions) }
         }
+        if new.antennaEnabled != old.antennaEnabled, let iptvLibrary {
+            Task { await iptvLibrary.applyAntennaEnabled(new.antennaEnabled) }
+        }
+        if new.antennaGuide != old.antennaGuide, let iptvLibrary {
+            Task { await iptvLibrary.applyAntennaGuide(new.antennaGuide) }
+        }
         updateKioskLock()
         if kiosk && new.launchAtLogin != old.launchAtLogin {
             LoginItem.apply(enabled: new.launchAtLogin)
@@ -1451,6 +1492,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let library = self?.iptvLibrary else { return }
                 self?.liveTV?.leave()
                 Task { await library.removeSource() }
+            },
+            findAntennaTuners: { [weak self] in
+                guard let library = self?.iptvLibrary else { return .noneFound }
+                let found = await library.discoverAntenna()
+                return library.antenna.findOutcome(found: found)
+            },
+            setChannelHidden: { [weak self] id, hidden in self?.iptvLibrary?.setChannelHidden(id, hidden) },
+            startAntennaScan: { [weak self] in self?.iptvLibrary?.startAntennaScan() },
+            stopAntennaScan: { [weak self] in self?.iptvLibrary?.stopAntennaScan() },
+            antennaPageVisible: { [weak self] visible in
+                guard let library = self?.iptvLibrary else { return }
+                Task { await library.antennaPageVisible(visible) }
             },
             phoneRemoteStatus: { [weak self] in self?.phoneRemoteSettingsStatus() ?? PhoneRemoteSettingsStatus() },
             setPhonePairing: { [weak self] in self?.phoneRemote?.setPairing($0) },

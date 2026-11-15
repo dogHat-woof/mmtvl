@@ -124,6 +124,10 @@ struct LiveSearchView: View {
     private func detail(_ result: LiveSearchModel.Result) -> String? {
         switch result {
         case .channel(let channel):
+            // M7j: an antenna channel leads with its GuideNumber: "5.1 · Antenna".
+            if let guideNumber = channel.guideNumber {
+                return "\(guideNumber) · \(channel.group)"
+            }
             return channel.group.isEmpty ? "Channel" : "Channel · \(channel.group)"
         case .programme(_, let programme):
             return programme.subtitle ?? programme.episode

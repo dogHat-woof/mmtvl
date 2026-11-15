@@ -494,4 +494,28 @@ struct GuideModelTests {
         #expect(!unknown)
         #expect(model.focusedChannel?.id == "id:c1")
     }
+
+    // MARK: M7j L3: the Antenna group isn't the default
+
+    @Test func defaultGroupSkipsAntenna() {
+        let lineup = ChannelLineup(channels: channels + AntennaFixtures.liveChannels(firstNumber: 11))
+        #expect(lineup.groups == ["My Teams", "Antenna", "All Channels", "Live", "NBA", "NHL"])
+        let model = GuideModel(lineup: lineup, group: nil, focusedChannelID: nil, now: now)
+        #expect(model.selectedGroup == "All Channels")
+        let favorites = ChannelLineup(channels: channels + AntennaFixtures.liveChannels(firstNumber: 11),
+                                      preferences: ChannelPreferences(favorites: ["antenna:5.1"]))
+        #expect(GuideModel(lineup: favorites, group: nil, focusedChannelID: nil, now: now).selectedGroup == "Favorites")
+        // A remembered Antenna group still opens it.
+        let remembered = GuideModel(lineup: lineup, group: "Antenna", focusedChannelID: nil, now: now)
+        #expect(remembered.selectedGroup == "Antenna")
+        #expect(remembered.channels.map(\.displayNumber) == ["2.1", "5.1", "11.1"])
+    }
+
+    @Test func antennaIsTheDefaultWhenItIsTheOnlyGroup() {
+        let lineup = ChannelLineup(channels: AntennaFixtures.liveChannels())
+        let model = GuideModel(lineup: lineup, group: nil, focusedChannelID: nil, now: now)
+        #expect(model.groups == ["My Teams", "Antenna"])
+        #expect(model.selectedGroup == "Antenna")
+        #expect(model.focusedChannel?.name == "WSB-HD")
+    }
 }

@@ -85,7 +85,7 @@ extension LiveShelfSource {
     static func library(_ library: IPTVLibrary) -> LiveShelfSource {
         LiveShelfSource(
             channels: { [weak library] in
-                guard let library, library.hasPlaylist else { return (ChannelLineup(channels: []), []) }
+                guard let library, library.hasLiveSource else { return (ChannelLineup(channels: []), []) }
                 return (library.lineup, library.state.recentChannelIDs)
             },
             nowNext: { [weak library] channel in
@@ -172,7 +172,9 @@ final class TopShelfModel: TopShelfProviding {
         channels = Array(channels.prefix(Self.maxLiveCards))
         liveDefaultID = defaultID
         live.prefetchLogos(channels.compactMap(\.logoURL))
-        live.prefetchStreams(channels.prefix(Self.streamPrefetchPages).map(\.streamURL))
+        // M7j L7: never an antenna channel's stream (a resolve is a GET, which takes a tuner).
+        let prefetched = channels.prefix(Self.streamPrefetchPages).filter { !$0.isDirectStream }
+        if !prefetched.isEmpty { live.prefetchStreams(prefetched.map(\.streamURL)) }
         var cards: [ShelfCard] = []
         let date = now()
         for channel in channels {

@@ -32,6 +32,36 @@ struct TopShelfModelTests {
         return TopShelfModel(live: source, now: { Self.now })
     }
 
+    /// M7j L7: the first pages' streams are resolved ahead, but never an antenna channel's (a GET takes a tuner).
+    @Test func liveCardsDontPrefetchAntennaStreams() async {
+        let antenna = AntennaFixtures.liveChannels(firstNumber: 13)   // 2.1, 5.1, 11.1
+        let playlist = (1...3).map { channel($0) }
+        let favorites = [antenna[1].id, "id:c1", antenna[0].id, "id:c2"]
+        var prefetched: [[URL]] = []
+        let source = LiveShelfSource(
+            channels: { (ChannelLineup(channels: playlist + antenna,
+                                       preferences: ChannelPreferences(favorites: favorites)), []) },
+            nowNext: { _ in (nil, nil) },
+            prefetchStreams: { prefetched.append($0) }
+        )
+        let model = TopShelfModel(live: source, now: { Self.now })
+        await model.reloadLive()
+        #expect(model.liveCards.map(\.id) == favorites.map { "live.\($0)" })
+        #expect(prefetched == [[URL(string: "https://cdn/1.m3u8")!]])
+
+        // Only antenna channels on the first pages: nothing is prefetched.
+        prefetched = []
+        let onlyAntenna = TopShelfModel(live: LiveShelfSource(
+            channels: { (ChannelLineup(channels: antenna,
+                                       preferences: ChannelPreferences(favorites: antenna.map(\.id))), []) },
+            nowNext: { _ in (nil, nil) },
+            prefetchStreams: { prefetched.append($0) }
+        ), now: { Self.now })
+        await onlyAntenna.reloadLive()
+        #expect(onlyAntenna.liveCards.count == 3)
+        #expect(prefetched.isEmpty)
+    }
+
     @Test func favoritesComeFirst() async {
         let model = makeModel(favorites: ["id:c3", "id:c1"], recent: ["id:c5"])
         await model.reloadLive()

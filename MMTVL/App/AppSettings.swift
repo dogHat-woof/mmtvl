@@ -84,6 +84,12 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
     /// M7m L29: a programme naming only a nickname ("The Cougars meet the Bearcats") counts for the teams with it
     /// (Settings → Live TV → My Teams → Match Nicknames Alone).
     var teamMatchNicknames = false
+    /// M7j L14: find HDHomeRun tuners on the network and add their channels to Live TV (Settings → Live TV →
+    /// Antenna → Use Antenna). Off: no discovery, no lineup, no antenna channels.
+    var antennaEnabled = true
+    /// M7j L10, L11: antenna channels' guide from SiliconDust (Settings → Live TV → Antenna → Guide from SiliconDust).
+    /// Off: they're matched against the pasted guides.
+    var antennaGuide = true
 
     /// M7m L29: the matcher's options from the two switches (`IPTVLibrary.teamMatchOptions`).
     var teamMatchOptions: TeamMatchOptions { TeamMatchOptions(initials: teamMatchInitials, nicknames: teamMatchNicknames) }
@@ -165,5 +171,10 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
             ?? defaults.teamMatchInitials
         teamMatchNicknames = ((try? container.decodeIfPresent(Bool.self, forKey: .teamMatchNicknames)) ?? nil)
             ?? defaults.teamMatchNicknames
+        // M7j L14: likewise.
+        antennaEnabled = ((try? container.decodeIfPresent(Bool.self, forKey: .antennaEnabled)) ?? nil)
+            ?? defaults.antennaEnabled
+        antennaGuide = ((try? container.decodeIfPresent(Bool.self, forKey: .antennaGuide)) ?? nil)
+            ?? defaults.antennaGuide
     }
 }

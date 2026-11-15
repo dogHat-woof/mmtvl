@@ -72,7 +72,7 @@ nonisolated struct GuideModel: Equatable, Sendable {
     private var lineup: ChannelLineup
 
     /// The default group (no remembered one) is the first: Favorites when it exists (M6b L11). M7l 8c: never My Teams
-    /// (always there), unless it's the only group.
+    /// (always there), unless it's the only group. M7j L3: nor Antenna, unless it's the only other group.
     init(lineup: ChannelLineup, group: String?, focusedChannelID: Channel.ID?, now: Date) {
         self.lineup = lineup
         let groups = lineup.groups
@@ -197,9 +197,10 @@ nonisolated struct GuideModel: Equatable, Sendable {
 
     // MARK: - Private
 
-    /// M7l 8c: the first group that isn't My Teams, else 0.
+    /// M7l 8c: the first group that isn't My Teams; M7j L3: nor Antenna, else Antenna, else 0.
     private static func defaultGroupIndex(_ groups: [String]) -> Int {
-        groups.firstIndex { $0 != ChannelLineup.teamsGroup } ?? 0
+        groups.firstIndex { $0 != ChannelLineup.teamsGroup && $0 != AntennaLineup.group }
+            ?? groups.firstIndex(of: AntennaLineup.group) ?? 0
     }
 
     private static func channelRowIndex(of id: Channel.ID, in rows: [Row]) -> Int? {

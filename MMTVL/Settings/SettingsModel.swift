@@ -94,6 +94,8 @@ final class SettingsModel {
     @ObservationIgnored private var isLearning = false
     /// The plex.tv/link code is made and polled while the Plex link page shows (M7 L15).
     @ObservationIgnored private var isPlexLinking = false
+    /// M7j L18: Settings → Antenna is the top page (told to the environment on each change).
+    @ObservationIgnored private var isAntennaPageVisible = false
     @ObservationIgnored private var learnConfirmShownAt: Date?
     /// M7h: the running checks; tests await them. A check whose token was dropped (settings changed) is ignored.
     @ObservationIgnored private(set) var probeTasks: [SettingsProbe: Task<Void, Never>] = [:]
@@ -178,6 +180,7 @@ final class SettingsModel {
         syncPairing()
         syncLearning()
         syncPlexLink()
+        syncAntennaPage()
     }
 
     /// M7m L10 (D50): Settings opened on a tile's page from the home tile menu: root (on Home Screen) → Home Screen
@@ -195,6 +198,7 @@ final class SettingsModel {
     func screenDidClose() {
         syncLearning(closed: true)
         syncPlexLink(closed: true)
+        syncAntennaPage(closed: true)
         guard isPairing else { return }
         isPairing = false
         environment.setPhonePairing(false)
@@ -371,6 +375,8 @@ final class SettingsModel {
             new[keyPath: key.keyPath].toggle()
             settings = new
             environment.applySettings(new)
+            // M7j: Find Tuners' last result is about the antenna as it was.
+            if key == .antennaEnabled { dropProbes([.findAntennaTuners]) }
             refreshStatus()
         case .setStartTile(let id):
             guard settings.homeStartTile != id, item(id: id)?.isVisible == true else { return }
@@ -441,6 +447,10 @@ final class SettingsModel {
         case .unhideIPTVChannel(let id):
             environment.unhideIPTVChannel(id)
             refreshStatus()
+        case .toggleChannelHidden(let id):
+            guard let channel = iptv.antennaChannels.first(where: { $0.id == id }) else { return }
+            environment.setChannelHidden(id, !channel.isHidden)
+            refreshStatus()
         case .toggleTeam(let id):
             environment.setTeamPicked(id, !iptv.teams.contains(id))
             refreshStatus()
@@ -449,6 +459,14 @@ final class SettingsModel {
         case .removeIPTVSource:
             environment.removeIPTVSource()
             pop()
+        case .startAntennaScan:
+            // M7j L18: back on the Antenna page, whose Scan row now reads Stop Scan.
+            environment.startAntennaScan()
+            pop()
+            refreshStatus(.iptv)
+        case .stopAntennaScan:
+            environment.stopAntennaScan()
+            refreshStatus(.iptv)
         case .forgetAllPhones:
             environment.forgetAllPhones()
             refreshStatus()
@@ -540,6 +558,8 @@ final class SettingsModel {
             runProbe(.testTV)
         case .findTV:
             runProbe(.findTV)
+        case .findAntennaTuners:
+            runProbe(.findAntennaTuners)
         case .saveAddress(let field):
             saveAddress(field)
         case .clearAddress:
@@ -691,7 +711,20 @@ final class SettingsModel {
             case .findTV:
                 let found = await environment.findTVs()
                 self?.finishProbe(probe, token: token) { $0.foundTVs(found) }
+            case .findAntennaTuners:
+                let found = await environment.findAntennaTuners()
+                self?.finishProbe(probe, token: token) { _ in Self.antennaFindLine(found) }
             }
+        }
+    }
+
+    /// M7j L14: Find Tuners' result.
+    static func antennaFindLine(_ outcome: AntennaFindOutcome) -> String {
+        switch outcome {
+        case .found(1): "Found 1 tuner"
+        case .found(let count): "Found \(count) tuners"
+        case .noneFound: "No HDHomeRun found on this network"
+        case .noneAnswered: "No HDHomeRun answered"
         }
     }
 
@@ -871,6 +904,8 @@ final class SettingsModel {
         case .tv:
             dropProbes([.testTV, .findTV])
             if settings.tvBrand == .cec { environment.refreshCEC() }
+        case .antenna:
+            dropProbes([.findAntennaTuners])
         case .receiverPort:
             serialPorts = environment.serialPorts()
         case .addressEntry(let field):
@@ -893,6 +928,7 @@ final class SettingsModel {
         syncPairing()
         syncLearning()
         syncPlexLink()
+        syncAntennaPage()
         if page == .plex { environment.refreshPlex() }
         if page == .casting { environment.refreshCasting() }
     }
@@ -909,6 +945,16 @@ final class SettingsModel {
         syncPairing()
         syncLearning()
         syncPlexLink()
+        syncAntennaPage()
+    }
+
+    /// M7j L18: a running channel scan is polled every second exactly while Settings → Antenna is the top page (and
+    /// Settings is open); each time it opens, the tuners are asked whether they can scan.
+    private func syncAntennaPage(closed: Bool = false) {
+        let visible = !closed && page == .antenna
+        guard visible != isAntennaPageVisible else { return }
+        isAntennaPageVisible = visible
+        environment.antennaPageVisible(visible)
     }
 
     /// M7 L15: the link code is made and polled exactly while the Plex link page shows.

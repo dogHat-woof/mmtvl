@@ -1,18 +1,53 @@
 import Foundation
 
-/// A live channel from the playlist. Kept in memory only (D23).
+/// Where a channel comes from (M7j): the playlist, or an HDHomeRun tuner's lineup. Its descriptions and mirror never
+/// show the DeviceID (L15).
+nonisolated enum ChannelSource: Hashable, Sendable, CustomStringConvertible, CustomDebugStringConvertible,
+    CustomReflectable {
+    case playlist
+    /// `deviceID`: the tuner's DeviceID, memory only, never logged or shown.
+    case antenna(deviceID: String)
+
+    var description: String {
+        switch self {
+        case .playlist: "playlist"
+        case .antenna: "antenna"
+        }
+    }
+
+    var debugDescription: String { description }
+
+    var customMirror: Mirror { Mirror(self, children: [:], displayStyle: .enum) }
+}
+
+/// A live channel from the playlist, or (M7j) an antenna tuner. Kept in memory only (D23).
 nonisolated struct Channel: Identifiable, Hashable, Sendable {
-    /// See `ChannelList.make`.
+    /// See `ChannelList.make`; antenna channels: `antenna:<GuideNumber>` (M7j L1).
     let id: String
-    /// 1-based position among kept channels.
+    /// 1-based position among kept channels; antenna channels continue after the playlist's (M7j L2).
     let number: Int
     let name: String
-    /// entry.group ?? "Other".
+    /// entry.group ?? "Other"; antenna channels: `AntennaLineup.group`.
     let group: String
     let tvgID: String?
     let tvgName: String?
     let logoURL: URL?
     let streamURL: URL
+    /// M7j: `var` with a default, so the memberwise init keeps working without it.
+    var source: ChannelSource = .playlist
+    /// Antenna channels: the tuner's GuideNumber ("5.1").
+    var guideNumber: String? = nil
+
+    /// "5.1" for antenna channels, else "\(number)".
+    var displayNumber: String { guideNumber ?? "\(number)" }
+
+    /// Antenna streams skip the resolver and relay and are never prefetched (M7j L6, L7).
+    var isDirectStream: Bool {
+        if case .antenna = source { true } else { false }
+    }
+
+    /// The epg-overrides.json key Match Guide writes: the id for antenna channels (M7j L12), else the name.
+    var overrideKey: String { isDirectStream ? id : name }
 }
 
 nonisolated enum ChannelList {
@@ -67,15 +102,24 @@ nonisolated enum ChannelList {
         return channels.compactMap { seen.insert($0.group).inserted ? $0.group : nil }
     }
 
-    /// [allChannelsGroup] + groups when there is more than one group, else the groups.
+    /// M7j L3: Antenna (when a channel's group is "Antenna"), then [allChannelsGroup] when that and the other
+    /// groups make more than one group, then the other groups in first-appearance order.
     static func guideGroups(of channels: [Channel]) -> [String] {
         let groups = groups(of: channels)
-        return groups.count > 1 ? [allChannelsGroup] + groups : groups
+        let hasAntenna = groups.contains(AntennaLineup.group)
+        let others = groups.filter { $0 != AntennaLineup.group }
+        let count = others.count + (hasAntenna ? 1 : 0)
+        return (hasAntenna ? [AntennaLineup.group] : []) + (count > 1 ? [allChannelsGroup] : []) + others
     }
 
-    /// All channels for allChannelsGroup, else that group's channels, in playlist order.
+    /// All channels for allChannelsGroup (the playlist's, then the antenna's, M7j L3), else that group's channels,
+    /// in order. M7j L3: in "Antenna", the antenna channels come first (GuideNumber order), then a playlist group
+    /// of that name.
     static func channels(in group: String, of channels: [Channel]) -> [Channel] {
-        group == allChannelsGroup ? channels : channels.filter { $0.group == group }
+        guard group != allChannelsGroup else { return channels }
+        let inGroup = channels.filter { $0.group == group }
+        guard group == AntennaLineup.group else { return inGroup }
+        return inGroup.filter(\.isDirectStream) + inGroup.filter { !$0.isDirectStream }
     }
 
     private static func isLiveStream(_ url: URL) -> Bool {

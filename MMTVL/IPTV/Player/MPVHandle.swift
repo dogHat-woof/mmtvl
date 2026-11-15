@@ -84,11 +84,6 @@ nonisolated final class MPVHandle: @unchecked Sendable {
         }
     }
 
-    /// Replaces https?://\S+ with "<url>": stream URLs carry the account token (L2).
-    static func redact(_ text: String) -> String {
-        text.replacing(/https?:\/\/\S+/, with: "<url>")
-    }
-
     /// On the event queue: the only thread that calls mpv_wait_event.
     private func drain() {
         while let event = mpv_wait_event(handle, 0)?.pointee {
@@ -116,7 +111,7 @@ nonisolated final class MPVHandle: @unchecked Sendable {
                 guard let message = event.data?.assumingMemoryBound(to: mpv_event_log_message.self).pointee else { continue }
                 let prefix = String(cString: message.prefix)
                 let text = String(cString: message.text).trimmingCharacters(in: .whitespacesAndNewlines)
-                onEvent(.log(level: String(cString: message.level), text: Self.redact("[\(prefix)] \(text)")))
+                onEvent(.log(level: String(cString: message.level), text: MPVLogText.redacted("[\(prefix)] \(text)")))
             default:
                 continue
             }

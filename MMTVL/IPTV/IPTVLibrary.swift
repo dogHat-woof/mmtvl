@@ -20,7 +20,13 @@ final class IPTVLibrary {
     static let autoRefreshInterval: TimeInterval = 15 * 60
     static let maxGuideSources = 6
 
+    /// M7j: the playlist's channels.
+    private(set) var playlistChannels: [Channel] = []
+    /// Every Live TV channel: `playlistChannels`, then (M7j) `antenna.channels` (L3: All Channels lists them in
+    /// this order). Recomputed by `updateChannels()`.
     private(set) var channels: [Channel] = []
+    /// M7j: the HDHomeRun tuners and their channels (`IPTVLibrary+Antenna.swift`).
+    @ObservationIgnored let antenna: AntennaSource
     private(set) var playlistStatus: Status = .idle
     private(set) var guideStatus: Status = .idle
     private(set) var guideProgrammeCount = 0
@@ -59,6 +65,9 @@ final class IPTVLibrary {
     @ObservationIgnored var onStatusChange: (() -> Void)?
     /// M7f L5: the lineup changed (a re-fetch, or favorites and hiding); AppDelegate → `AppRouter.playlistDidChange()`.
     @ObservationIgnored var onLineupChange: (() -> Void)?
+    /// M7j L18: stops MMTVL's own antenna streams before a channel scan; AppDelegate →
+    /// `LiveTVModel.stopAntennaStreams()`.
+    @ObservationIgnored var stopAntennaStreams: (() -> Void)?
 
     private var playlistURL: URL?
     private var customGuideURLs: [URL] = []
@@ -67,6 +76,13 @@ final class IPTVLibrary {
     var usePlaylistGuide = false {
         didSet { updateGuideSources() }
     }
+    /// M7j L10, L11: `settings.json` `antennaGuide`, set by AppDelegate at launch (live changes: `applyAntennaGuide`).
+    /// On: antenna channels take their guide from SiliconDust; off: from the pasted guides, like playlist channels.
+    var antennaGuideEnabled = false
+    /// M7j L10: an antenna guide import is running.
+    @ObservationIgnored private var isImportingAntennaGuide = false
+    /// M7j L10: the last antenna guide download tried (memory only), so Refresh Now can't repeat a failing one.
+    @ObservationIgnored private var lastAntennaGuideAttempt: Date?
     /// M7m L29: `settings.json` `teamMatchInitials` and `teamMatchNicknames`, set by AppDelegate at launch (live
     /// changes: `applyTeamMatchOptions`). My Teams and the channel menu match with `teamMatchIndex`.
     var teamMatchOptions = TeamMatchOptions.off
@@ -84,8 +100,10 @@ final class IPTVLibrary {
 
     init(sources: IPTVSourceStore, store: EPGStore?, network: IPTVNetwork,
          stateFile: JSONConfigFile<IPTVState>, overridesFile: JSONConfigFile<[String: String]>,
-         preferencesFile: JSONConfigFile<ChannelPreferences>, now: @escaping () -> Date = Date.init) {
+         preferencesFile: JSONConfigFile<ChannelPreferences>, antenna: AntennaSource = AntennaSource(),
+         now: @escaping () -> Date = Date.init) {
         self.sources = sources
+        self.antenna = antenna
         self.store = store
         self.network = network
         self.stateFile = stateFile
@@ -97,6 +115,8 @@ final class IPTVLibrary {
         playlistURL = sources.playlistURL()
         customGuideURLs = sources.guideURLs()
         updateGuideSources()
+        // M7j L18: the channel scan's progress and end.
+        antenna.onScanChange = { [weak self] lineupRead in await self?.antennaScanDidChange(lineupRead: lineupRead) }
         if let store {
             Task { [weak self] in
                 let counts = (try? await store.programmeCounts()) ?? [:]
@@ -125,8 +145,9 @@ final class IPTVLibrary {
     /// M7f L4: the playlist's header names a guide (`url-tvg` / `x-tvg-url`).
     var playlistNamesGuide: Bool { !playlistGuideURLs.isEmpty }
 
-    /// Playlist channels with guide data.
-    var matchedChannelCount: Int { epgMatches.count }
+    /// Playlist channels with guide data. M7j (step 4's carry-over): only the playlist's, so Settings' Guides footer
+    /// counts them against `playlistChannels.count`; the antenna guide has its own status (step 9).
+    var matchedChannelCount: Int { playlistChannels.reduce(0) { $0 + (epgMatches[$1.id] == nil ? 0 : 1) } }
 
     /// Also moves it to the front of `recentChannelIDs` (M7 L13).
     func rememberChannel(_ id: Channel.ID) {
@@ -157,12 +178,12 @@ final class IPTVLibrary {
             let text = try await network.fetchText(url)
             let playlist = try M3UParser.parse(text)
             guard url == playlistURL else { return }    // replaced or removed meanwhile
-            channels = ChannelList.make(from: playlist)
+            playlistChannels = ChannelList.make(from: playlist)
             playlistGuideURLs = playlist.guideURLs
             updateGuideSources()
-            updateLineup()
+            updateChannels()    // and the lineup, when the channels changed
             lastPlaylistFetch = now()
-            logger.notice("Loaded \(self.channels.count) channels from \(url.host() ?? "?", privacy: .public)")
+            logger.notice("Loaded \(self.playlistChannels.count) channels from \(url.host() ?? "?", privacy: .public)")
             await rematch()
             setPlaylistStatus(.loaded(now()))
         } catch {
@@ -173,16 +194,17 @@ final class IPTVLibrary {
 
     /// When channels are empty or the last fetch is more than 10 minutes old (L4).
     func refreshPlaylistIfStale() async {
-        if channels.isEmpty || lastPlaylistFetch.map({ now().timeIntervalSince($0) > Self.playlistStaleness }) ?? true {
+        if playlistChannels.isEmpty || lastPlaylistFetch.map({ now().timeIntervalSince($0) > Self.playlistStaleness }) ?? true {
             await refreshPlaylist()
         }
     }
 
-    /// M7f L5 (D40): the timer's and wake's check. The playlist goes first, so a guide import never runs with no
-    /// channels.
+    /// M7f L5 (D40): the timer's and wake's check. The channels go first (M7j: the playlist and the antenna's
+    /// lineup, at the same time), so a guide import never runs with no channels.
     func refreshIfStale() async {
-        await refreshPlaylistIfStale()
+        await refreshChannelsIfStale()
         await refreshGuideIfStale()
+        await refreshAntennaGuideIfDue()
     }
 
     /// Every guide (Refresh Now). Idle when there is no guide.
@@ -229,7 +251,7 @@ final class IPTVLibrary {
                 updateState { $0.guideImports[source.id] = now() }
                 succeeded += 1
             } catch {
-                logger.error("Guide from \(source.url.host() ?? "?", privacy: .public) failed: \(Self.redact(error.localizedDescription), privacy: .public)")
+                logger.error("Guide from \(source.url.host() ?? "?", privacy: .public) failed: \(Self.redact(Self.message(for: error)), privacy: .public)")
                 let message = Self.message(for: error)
                 guideSourceInfo[source.id, default: GuideSourceInfo()].status = .failed(message)
                 firstFailure = firstFailure ?? message
@@ -255,10 +277,15 @@ final class IPTVLibrary {
         await refreshGuide(sourceIDs: Set(stale.map(\.id)))
     }
 
-    /// Playlist, then every guide (forced).
+    /// Playlist, then every guide (forced); M7j L10: the antenna guide only when its last import is more than an hour
+    /// old. M7j step 9 (Refresh Now): the antenna's lineup at the same time as the playlist (a search when no tuner is
+    /// known); with no playlist, only the antenna and the guides (`refreshPlaylist` does nothing without one).
     func refreshAll() async {
-        await refreshPlaylist()
+        async let playlist: Void = refreshPlaylist()
+        async let tuners: Void = refreshAntenna()
+        _ = await (playlist, tuners)
         await refreshGuide()
+        await refreshAntennaGuide(manual: true)
     }
 
     func setPlaylistURL(_ url: URL) async {
@@ -271,7 +298,8 @@ final class IPTVLibrary {
         }
         logger.info("Playlist source set to \(url.host() ?? "?", privacy: .public)")
         playlistURL = url
-        channels = []
+        playlistChannels = []    // M7j: the antenna's stay
+        updateChannels()
         epgMatches = [:]
         playlistGuideURLs = []
         updateGuideSources()
@@ -353,7 +381,7 @@ final class IPTVLibrary {
         onStatusChange?()
     }
 
-    /// Keychain items, the stored guide, state and memory.
+    /// Keychain items, the stored guide, state and memory. M7j L17: antenna channels stay.
     func removeSource() async {
         do {
             try sources.removeAll()
@@ -367,7 +395,8 @@ final class IPTVLibrary {
         }
         playlistURL = nil
         customGuideURLs = []
-        channels = []
+        playlistChannels = []    // M7j L17: the antenna's stay (they come from the tuner)
+        updateChannels()
         epgMatches = [:]
         playlistGuideURLs = []
         guideSources = []
@@ -377,6 +406,7 @@ final class IPTVLibrary {
         updateLineup()    // preferences are kept (M6b L5)
         lastPlaylistFetch = nil
         guideProgrammeCount = 0
+        // M7j L17: the antenna guide's rows went with guide.sqlite; it's due again (`antennaGuideDue` nil), within the 1 h rule (step 8, security L1).
         updateState { $0 = IPTVState() }
         playlistStatus = .idle
         guideStatus = store == nil ? .failed("Guide storage unavailable") : .idle
@@ -440,7 +470,8 @@ final class IPTVLibrary {
 
     /// The guide's short label ("guide-source_US2"), for a guide in use.
     func guideLabel(for ref: EPGRef) -> String? {
-        guideSources.first { $0.id == ref.sourceID }?.shortLabel
+        if ref.sourceID == AntennaGuide.sourceID { return AntennaGuide.label }
+        return guideSources.first { $0.id == ref.sourceID }?.shortLabel
     }
 
     /// What Match Guide offers for `channel`: its current choice and match, then ranked suggestions from every guide.
@@ -453,7 +484,14 @@ final class IPTVLibrary {
             bySource = [:]
         }
         let sources = guideSources.map { EPGSourceChannels(sourceID: $0.id, channels: bySource[$0.id] ?? []) }
-        let suggestions = await EPGSuggester.suggest(for: channel, in: sources)
+        var suggestions: [EPGSuggester.Candidate] = []
+        // M7j L12: an antenna channel is offered the antenna guide's channels first, then the pasted guides'.
+        if channel.isDirectStream, keepsAntennaGuide {
+            let antennaSource = EPGSourceChannels(sourceID: AntennaGuide.sourceID,
+                                                  channels: bySource[AntennaGuide.sourceID] ?? [])
+            suggestions = await EPGSuggester.suggest(for: channel, in: [antennaSource])
+        }
+        suggestions += await EPGSuggester.suggest(for: channel, in: sources)
 
         let current = epgMatches[channel.id]
         let choice: GuideMatchChoice
@@ -463,30 +501,33 @@ final class IPTVLibrary {
         default: choice = .automatic
         }
 
-        let labels = Dictionary(guideSources.map { ($0.id, $0.shortLabel) }, uniquingKeysWith: { first, _ in first })
+        var labels = Dictionary(guideSources.map { ($0.id, $0.shortLabel) }, uniquingKeysWith: { first, _ in first })
+        labels[AntennaGuide.sourceID] = AntennaGuide.label
         var candidates: [GuideCandidate] = []
         if let current {
             let epg = bySource[current.sourceID]?.first { $0.id.lowercased() == current.epgID }
             candidates.append(GuideCandidate(ref: current, name: epg?.names.first ?? current.epgID,
                                              sourceLabel: labels[current.sourceID] ?? ""))
         }
-        for suggestion in suggestions where suggestion.ref != current {
+        for suggestion in suggestions
+        where suggestion.ref != current && !candidates.contains(where: { $0.ref == suggestion.ref }) {
             candidates.append(GuideCandidate(ref: suggestion.ref, name: suggestion.name,
                                              sourceLabel: labels[suggestion.ref.sourceID] ?? ""))
         }
         return GuideMatchOptions(choice: choice, current: current, candidates: candidates)
     }
 
-    /// Writes the choice to epg-overrides.json under the channel's name (L6), then re-imports the chosen guide if
-    /// that channel's programmes weren't kept, else only rematches.
+    /// Writes the choice to epg-overrides.json under the channel's `overrideKey` (L6; M7j L12: an antenna channel's id,
+    /// since antenna names repeat), then re-imports the chosen guide if that channel's programmes weren't kept, else
+    /// only rematches. M7j L10: the antenna guide is re-imported only when its last import is more than an hour old.
     func setGuideMatch(_ choice: GuideMatchChoice, for channel: Channel) async {
         var overrides = overridesFile.load()
-        let keys = Set([channel.name, channel.tvgID ?? ""].filter { !$0.isEmpty }.map { $0.lowercased() })
+        let keys = Set([channel.id, channel.name, channel.tvgID ?? ""].filter { !$0.isEmpty }.map { $0.lowercased() })
         overrides = overrides.filter { !keys.contains($0.key.lowercased()) }
         switch choice {
         case .automatic: break
-        case .none: overrides[channel.name] = ""
-        case .epg(let ref): overrides[channel.name] = ref.epgID
+        case .none: overrides[channel.overrideKey] = ""
+        case .epg(let ref): overrides[channel.overrideKey] = ref.epgID
         }
         do {
             try overridesFile.save(overrides)
@@ -495,27 +536,65 @@ final class IPTVLibrary {
             return
         }
         if case .epg(let ref) = choice, await !hasProgrammes(ref) {
-            await refreshGuide(sourceIDs: [ref.sourceID])
+            await reimport(ref.sourceID)
             return
         }
         await rematch()
         onStatusChange?()
         // Automatic after No Guide: the automatic match's programmes weren't kept at import.
         if choice == .automatic, let ref = epgMatches[channel.id], await !hasProgrammes(ref) {
-            await refreshGuide(sourceIDs: [ref.sourceID])
+            await reimport(ref.sourceID)
         }
     }
 
-    private func hasProgrammes(_ ref: EPGRef) async -> Bool {
+    /// Imports one guide again for Match Guide: a pasted or playlist guide at once, the antenna guide only when its
+    /// last import is more than an hour old (else a rematch). Also after a lineup read that added antenna channels
+    /// without programmes (`importAntennaGuideForNewChannels`). True when the antenna guide was imported (a pasted
+    /// or playlist guide: always true).
+    @discardableResult
+    func reimport(_ sourceID: String) async -> Bool {
+        guard sourceID == AntennaGuide.sourceID else {
+            await refreshGuide(sourceIDs: [sourceID])
+            return true
+        }
+        if await !refreshAntennaGuide(manual: true) {
+            await rematch()
+            onStatusChange?()
+            return false
+        }
+        return true
+    }
+
+    /// Pre-build QA minor 1 (coordinator, 2026-11-15): a re-import for new antenna channels that the 1 h rule
+    /// blocked is due when that hour ends (the later of the last import and the last attempt, + 1 h, + 1 s since the
+    /// rule still blocks at exactly 1 h), so the 15-minute timer's `refreshAntennaGuideIfDue` brings it. Only ever
+    /// earlier than the current due date, never later; never when the hour isn't what blocked it. At most one
+    /// download an hour still.
+    func dueAntennaGuideWhenTheHourEnds() {
+        let id = AntennaGuide.sourceID
+        guard keepsAntennaGuide, let due = state.antennaGuideDue,
+              let last = [state.guideImports[id], lastAntennaGuideAttempt].compactMap({ $0 }).max()
+        else { return }
+        let end = last.addingTimeInterval(AntennaGuide.minimumManualInterval + 1)
+        guard end > now(), end < due else { return }
+        updateState { $0.antennaGuideDue = end }
+        let minutes = Int((end.timeIntervalSince(now()) / 60).rounded(.up))
+        Logger(subsystem: "dev.mmtvl.launcher", category: "Antenna")
+            .notice("Antenna guide due again in \(minutes, privacy: .public) min, for new channels")
+    }
+
+    func hasProgrammes(_ ref: EPGRef) async -> Bool {
         guard let store else { return true }
         return ((try? await store.programmeCount(for: ref)) ?? 0) > 0
     }
 
-    /// The override value for `channel` (by name, then tvg-id, ignoring case), as the matcher reads it.
+    /// The override value for `channel` (by its `overrideKey` (M7j L12), then name, then tvg-id, ignoring case), as
+    /// the matcher reads it.
     private static func override(for channel: Channel, in overrides: [String: String]) -> String? {
         var lower: [String: String] = [:]
         for (key, value) in overrides { lower[key.lowercased()] = value }
-        return lower[channel.name.lowercased()] ?? channel.tvgID.flatMap { lower[$0.lowercased()] }
+        return lower[channel.overrideKey.lowercased()] ?? lower[channel.name.lowercased()]
+            ?? channel.tvgID.flatMap { lower[$0.lowercased()] }
     }
 
     // MARK: - Queries
@@ -662,8 +741,9 @@ final class IPTVLibrary {
 
     // MARK: - Private
 
-    /// Matches every channel over every guide in use, in priority order (M6b L3).
-    private func rematch() async {
+    /// Matches the playlist's channels over every guide in use, in priority order (M6b L3); M7j: the antenna's over
+    /// the antenna guide (L10) or, with it off, the pasted guides (L11) (`antennaMatches`).
+    func rematch() async {
         let bySource: [String: [EPGChannel]]
         do {
             bySource = try await store?.channelsBySource() ?? [:]
@@ -671,8 +751,16 @@ final class IPTVLibrary {
             logger.error("Reading guide channels failed: \(error.localizedDescription, privacy: .public)")
             bySource = [:]
         }
+        let overrides = overridesFile.load()
         let sources = guideSources.map { EPGSourceChannels(sourceID: $0.id, channels: bySource[$0.id] ?? []) }
-        epgMatches = EPGMatcher.match(channels, sources: sources, overrides: overridesFile.load())
+        var matches = EPGMatcher.match(playlistChannels, sources: sources, overrides: overrides)
+        let antennaChannels = channels.filter(\.isDirectStream)
+        if !antennaChannels.isEmpty {
+            let antennaGuide = keepsAntennaGuide ? (bySource[AntennaGuide.sourceID] ?? []) : nil
+            matches.merge(Self.antennaMatches(antennaChannels, antennaGuide: antennaGuide, pasted: sources,
+                                              overrides: overrides)) { first, _ in first }
+        }
+        epgMatches = matches
         var matched: [String: Int] = [:]
         for ref in epgMatches.values {
             matched[ref.sourceID, default: 0] += 1
@@ -680,13 +768,24 @@ final class IPTVLibrary {
         for source in guideSources {
             guideSourceInfo[source.id, default: GuideSourceInfo()].matchedChannels = matched[source.id] ?? 0
         }
+        if keepsAntennaGuide {
+            guideSourceInfo[AntennaGuide.sourceID, default: GuideSourceInfo()].matchedChannels =
+                matched[AntennaGuide.sourceID] ?? 0
+        }
         guideRevision += 1
         await updateTeams()
     }
 
-    /// Deletes the rows of guides no longer in use, and their bookkeeping.
+    /// Deletes the rows of guides no longer in use, and their bookkeeping. M7j L10: the antenna guide (rows, due date
+    /// and last import) is kept while `keepsAntennaGuide`, even when no antenna channel is loaded just now (a tuner
+    /// that didn't answer at launch); when it goes, it's due again once it's turned back on.
     private func pruneUnusedGuides() async {
-        let ids = Set(guideSources.map(\.id))
+        var ids = Set(guideSources.map(\.id))
+        if keepsAntennaGuide {
+            ids.insert(AntennaGuide.sourceID)
+        } else if state.antennaGuideDue != nil {
+            updateState { $0.antennaGuideDue = nil }
+        }
         do {
             try await store?.removeSources(keeping: ids)
         } catch {
@@ -697,6 +796,109 @@ final class IPTVLibrary {
             updateState { $0.guideImports = $0.guideImports.filter { ids.contains($0.key) } }
         }
         updateProgrammeCount()
+    }
+
+    // MARK: - The antenna guide (M7j L10)
+
+    /// The antenna guide is kept: it's on (`antennaGuideEnabled`) and so is the antenna (`antennaEnabled`), whether or
+    /// not the tuner's channels are loaded right now (security L1: a tuner missing for a while doesn't cost a
+    /// download when it's back).
+    var keepsAntennaGuide: Bool { antennaGuideEnabled && antenna.isEnabled }
+
+    /// The timer, wake, launch and a lineup change: imports the antenna guide when it's due (`antennaGuideDue`; never
+    /// imported: at once), and neither the last import nor the last attempt is less than an hour old.
+    func refreshAntennaGuideIfDue() async {
+        await refreshAntennaGuide(manual: false)
+    }
+
+    /// Imports SiliconDust's XMLTV for the antenna channels (L10), never within `AntennaGuide.minimumManualInterval`
+    /// of the last import or attempt (security L1: turning the guide off and on doesn't download each time).
+    /// `manual` (Refresh Now, Match Guide): whatever the due date; else only when due. The DeviceAuth is read
+    /// from every tuner right before the download and held in locals only: never in a property, log, status or the
+    /// state file. True when an import ran.
+    @discardableResult
+    func refreshAntennaGuide(manual: Bool) async -> Bool {
+        guard let store, keepsAntennaGuide, !isImportingAntennaGuide, !antenna.devices.isEmpty,
+              channels.contains(where: \.isDirectStream)
+        else { return false }
+        let id = AntennaGuide.sourceID
+        let recent = [state.guideImports[id], lastAntennaGuideAttempt].compactMap { $0 }
+        if recent.contains(where: { now().timeIntervalSince($0) <= AntennaGuide.minimumManualInterval }) {
+            return false
+        }
+        if !manual, let due = state.antennaGuideDue, now() < due {
+            return false
+        }
+        isImportingAntennaGuide = true
+        defer { isImportingAntennaGuide = false }
+        lastAntennaGuideAttempt = now()
+        let antennaLogger = Logger(subsystem: "dev.mmtvl.launcher", category: "Antenna")
+        let host = AntennaGuide.endpoint.host() ?? "?"
+        guideSourceInfo[id, default: GuideSourceInfo()].status = .loading
+        onStatusChange?()
+
+        // L1, L10: in DeviceID order, as the lineup takes them.
+        let devices = antenna.devices.sorted { $0.id < $1.id }
+        var auths: [String] = []
+        for device in devices {
+            guard let auth = await antenna.http.deviceAuth(of: device) else { break }
+            auths.append(auth)
+        }
+        let antennaChannels = channels.filter(\.isDirectStream)
+        if auths.count == devices.count, keepsAntennaGuide,
+           let url = AntennaGuide.url(deviceAuths: auths) {
+            auths = []
+            do {
+                let outcome = try await GuideImporter.importGuide(
+                    from: url, sourceID: id, channels: antennaChannels, overrides: overridesFile.load(), store: store,
+                    network: network, now: now(), matcher: { AntennaGuide.match($0, to: $1, overrides: $2) },
+                    maxDownloadBytes: AntennaGuide.maximumDownloadBytes, maxUnzippedBytes: AntennaGuide.maximumUnzippedBytes)
+                guideSourceInfo[id, default: GuideSourceInfo()].programmeCount = outcome.programmeCount
+                guideSourceInfo[id, default: GuideSourceInfo()].status = .loaded(now())
+                let due = AntennaGuide.nextDue(after: now())
+                updateState {
+                    $0.guideImports[id] = now()
+                    $0.antennaGuideDue = due
+                }
+                let hours = Int((due.timeIntervalSince(now()) / 3600).rounded())
+                antennaLogger.notice("Guide from \(host, privacy: .public): \(outcome.programmeCount, privacy: .public) programmes, \(outcome.matchedChannels, privacy: .public) of \(antennaChannels.count, privacy: .public) channels matched; next in about \(hours, privacy: .public) h")
+            } catch {
+                // QA minor 2: the message (e.g. "Server error (HTTP 503)"), never the URL.
+                let message = Self.redact(Self.message(for: error))
+                antennaLogger.error("Guide from \(host, privacy: .public) failed: \(message, privacy: .public)")
+                antennaGuideFailed(message)
+            }
+        } else {
+            auths = []
+            // Step 2 security L5: a missing or malformed DeviceAuth means no download; it's never logged.
+            antennaLogger.error("Guide from \(host, privacy: .public) skipped: the tuner didn't give a usable guide key")
+            antennaGuideFailed("The tuner didn't give a guide key")
+        }
+        updateProgrammeCount()
+        // Turned off (or the antenna channels went) meanwhile: its rows go.
+        if !keepsAntennaGuide { await pruneUnusedGuides() }
+        await rematch()
+        onStatusChange?()
+        return true
+    }
+
+    /// Tried again in an hour (L10).
+    private func antennaGuideFailed(_ message: String) {
+        guideSourceInfo[AntennaGuide.sourceID, default: GuideSourceInfo()].status = .failed(message)
+        updateState { $0.antennaGuideDue = now().addingTimeInterval(AntennaGuide.retryAfterFailure) }
+    }
+
+    /// L11: `settings.json` `antennaGuide` changed. Off: SiliconDust isn't asked again, the antenna guide's rows go and
+    /// antenna channels match the pasted guides; on: they match the antenna guide, imported when due.
+    func applyAntennaGuide(_ enabled: Bool) async {
+        guard enabled != antennaGuideEnabled else { return }
+        antennaGuideEnabled = enabled
+        Logger(subsystem: "dev.mmtvl.launcher", category: "Antenna")
+            .notice("Antenna guide \(enabled ? "on" : "off", privacy: .public)")
+        await pruneUnusedGuides()
+        await rematch()
+        onStatusChange?()
+        if enabled { await refreshAntennaGuideIfDue() }
     }
 
     /// Saves the pasted guides and recomputes the guides in use. Logs and returns false on a Keychain error.
@@ -738,6 +940,18 @@ final class IPTVLibrary {
         onStatusChange?()
     }
 
+    /// M7j: `channels` = `playlistChannels` + `antenna.channels` (numbered after the playlist's, L2), and the lineup.
+    /// True when `channels` changed.
+    @discardableResult
+    func updateChannels() -> Bool {
+        antenna.firstNumber = playlistChannels.count + 1
+        let merged = playlistChannels + antenna.channels
+        guard merged != channels else { return false }
+        channels = merged
+        updateLineup()
+        return true
+    }
+
     private func updateLineup() {
         let lineup = ChannelLineup(channels: channels, preferences: preferences, teamChannelIDs: teamChannelIDs,
                                    upcomingTeamGames: upcomingTeamGames)
@@ -777,6 +991,7 @@ final class IPTVLibrary {
     static func message(for error: Error) -> String {
         switch error {
         case IPTVNetworkError.http(let status): return "Server error (HTTP \(status))"
+        case IPTVNetworkError.tooLarge, Gunzip.GunzipError.tooLarge: return "The guide file is too large"
         case M3UParser.ParseError.notAPlaylist: return "The address didn't return a playlist"
         case let error as URLError: return error.localizedDescription
         case is Gunzip.GunzipError: return "The guide file couldn't be read"
