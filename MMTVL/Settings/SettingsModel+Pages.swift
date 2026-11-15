@@ -619,6 +619,15 @@ extension SettingsModel {
             SettingsSection(id: "leagues.pro", title: "Pro", rows: rows(TeamLeague.allCases.filter { !$0.isCollege })),
             SettingsSection(id: "leagues.college", title: "College", rows: rows(TeamLeague.allCases.filter(\.isCollege)),
                             footer: "The guide's My Teams group shows your teams' live games, the channels showing them now, and their games in the next 3 days."),
+            // M7m L29.
+            SettingsSection(id: "matching", title: "Matching", rows: [
+                SettingsRow(id: "teams.matchInitials", title: "Match Initials", value: Self.onOff(settings.teamMatchInitials),
+                            action: .toggle(.teamMatchInitials),
+                            description: "Games named with initials, such as ULM or BYU, count for your teams. Some initials are also pro teams' (BUF, MIA), so other games may show."),
+                SettingsRow(id: "teams.matchNicknames", title: "Match Nicknames Alone",
+                            value: Self.onOff(settings.teamMatchNicknames), action: .toggle(.teamMatchNicknames),
+                            description: "A game that names only a nickname, such as \"The Cougars meet the Bearcats\", counts for your teams with that nickname, narrowed by the school or conference when the guide names one."),
+            ], footer: "Spelled-out names, such as Louisiana-Monroe or Brigham Young, always count."),
         ]
     }
 

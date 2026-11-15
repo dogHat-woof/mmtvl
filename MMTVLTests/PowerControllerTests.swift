@@ -8,6 +8,8 @@ final class PowerLog {
     var events: [String] = []
     var toasts: [String] = []
     var sleeps: [Duration] = []
+    /// M7m L23: `keepMacAwake` calls, kept out of `events` so the order checks stay as they were.
+    var keepAwake: [Bool] = []
     /// Whether sleeping or restarting the Mac could be asked for (pmset or the Apple event went out).
     var macRequestsSucceed = true
 
@@ -16,6 +18,7 @@ final class PowerLog {
         PowerEffects(
             sleepDisplays: { self.events.append("displays.sleep") },
             wakeDisplays: { self.events.append("displays.wake") },
+            keepMacAwake: { self.keepAwake.append($0) },
             sleepMac: {
                 self.events.append("mac.sleep")
                 return self.macRequestsSucceed
@@ -304,6 +307,55 @@ struct PowerControllerTests {
         power.relaunch()
         #expect(log.events == ["mac.sleep", "mac.restart", "relaunch"])
         #expect(log.toasts.isEmpty)
+    }
+
+    /// M7m L23: the off holds the Mac awake, and does so before the displays sleep.
+    @Test func offKeepsTheMacAwakeBeforeTheDisplaysSleep() async {
+        var effects = log.effects
+        effects.keepMacAwake = { [log] in
+            log.keepAwake.append($0)
+            log.events.append("mac.keepAwake.\($0)")
+        }
+        let power = PowerController(tv: FakePowerTV(log: log, on: true), receiver: FakePowerReceiver(log: log),
+                                    effects: effects)
+        await press(power)
+        #expect(log.keepAwake == [true])
+        #expect(log.events == ["tv.isOn", "tv.powerKey", "receiver.powerOff", "mac.keepAwake.true", "displays.sleep"])
+    }
+
+    /// M7m L23: the next on lets the Mac idle-sleep again, before the displays wake.
+    @Test func onLetsTheMacSleepAgain() async {
+        var effects = log.effects
+        effects.keepMacAwake = { [log] in
+            log.keepAwake.append($0)
+            log.events.append("mac.keepAwake.\($0)")
+        }
+        let power = PowerController(tv: FakePowerTV(log: log, on: true), receiver: FakePowerReceiver(log: log),
+                                    effects: effects)
+        await press(power)
+        log.events = []
+        await press(power)
+        #expect(log.keepAwake == [true, false])
+        #expect(log.events.prefix(3) == ["tv.isOn", "mac.keepAwake.false", "displays.wake"])
+    }
+
+    /// M7m L23: the power menu's Turn Off TV & Receiver holds it too.
+    @Test func powerMenuTurnOffKeepsTheMacAwake() async {
+        let power = makePower(tv: FakePowerTV(log: log, on: false), receiver: FakePowerReceiver(log: log))
+        #expect(power.turnOff())
+        await power.task?.value
+        #expect(log.keepAwake == [true])
+    }
+
+    /// M7m L23: Sleep Mac mini neither takes nor drops it (explicit sleep isn't blocked by it).
+    @Test func sleepMacDoesntChangeIt() async {
+        let power = makePower(tv: nil, receiver: FakePowerReceiver(log: log))
+        await press(power)
+        #expect(log.keepAwake == [true])
+        power.sleepMac()
+        await power.actionTask?.value
+        #expect(log.keepAwake == [true])
+        #expect(log.events.last == "mac.sleep")
     }
 
     /// QA Q2: a request that couldn't be sent says so.

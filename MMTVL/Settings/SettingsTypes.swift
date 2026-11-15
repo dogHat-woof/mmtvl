@@ -222,6 +222,8 @@ nonisolated enum SettingKey: String, CaseIterable, Sendable {
     case tvVolumeEnabled
     /// M7h step 13e.
     case siriRemoteSwipes
+    /// M7m L29: Settings → Live TV → My Teams → Matching.
+    case teamMatchInitials, teamMatchNicknames
 
     var keyPath: WritableKeyPath<AppSettings, Bool> {
         switch self {
@@ -241,6 +243,8 @@ nonisolated enum SettingKey: String, CaseIterable, Sendable {
         case .volumeToast: \.volumeToast
         case .tvVolumeEnabled: \.tvVolumeEnabled
         case .siriRemoteSwipes: \.siriRemoteSwipes
+        case .teamMatchInitials: \.teamMatchInitials
+        case .teamMatchNicknames: \.teamMatchNicknames
         }
     }
 }

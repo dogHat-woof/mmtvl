@@ -24,7 +24,19 @@ final class AppRouter {
     private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "AppRouter")
 
     private(set) var screen: Screen = .home {
-        didSet { if screen != oldValue { updateLivePreview() } }
+        didSet {
+            guard screen != oldValue else { return }
+            // M7m L5: the tile menu belongs to the home screen; any other screen (a cast, Live TV, a PIN) closes it.
+            if screen != .home {
+                tileMenu = nil
+                endMoving(reason: "the screen changed")
+            }
+            // M7m (QA step 6, finding 4): a new screen counts as activity, so a click that opens one through the
+            // dim (mouse, phone trackpad, Siri trackpad mode) doesn't leave it dimmed.
+            feedIdleActivity(reason: "(the screen changed)")
+            updateLivePreview()
+            updateStillness()
+        }
     }
     /// All tiles in stored order, hidden ones included.
     private(set) var items: [LaunchItem]
@@ -69,7 +81,14 @@ final class AppRouter {
     @ObservationIgnored var isAppActive = true {
         didSet {
             guard isAppActive != oldValue else { return }
+            // M7m L20: back in front with the screen saver asked for but no `didstop` (it never started, or macOS
+            // didn't say): awake, as after the screen saver.
+            if isAppActive, idlePhase == .screenSaver, !isScreenSaverRunning {
+                feedIdleActivity(reason: "(back in front)")
+            }
             updateLivePreview()
+            updateStillness()
+            updateIdleTicks()
             if isAppActive {
                 homeEntryGeneration += 1
             } else if isLeavingHome {
@@ -98,15 +117,72 @@ final class AppRouter {
     @ObservationIgnored private var previewTask: Task<Void, Never>?
     @ObservationIgnored private var scheduledPreviewID: Channel.ID?
     @ObservationIgnored private var idleTask: Task<Void, Never>?
+    /// M7m L18 (D51): the idle dimmer. `idlePhase` mirrors its phase for the views (the dim in `LauncherRootView`).
+    @ObservationIgnored private var stillIdle = StillScreenIdle(dimAfter: Theme.stillScreenDimAfter,
+                                                                saverAfterDim: Theme.screenSaverAfterDim)
+    private(set) var idlePhase: StillScreenIdle.Phase = .awake
+    /// Injectable clock for the dimmer (tests advance it and call `idleTick()`).
+    @ObservationIgnored var idleNow: () -> ContinuousClock.Instant = { ContinuousClock.now }
+    /// M7m L20: the dimmer asks for the screen saver (AppDelegate: `ScreenSaver.start()`).
+    @ObservationIgnored var startScreenSaver: () -> Void = {}
+    /// M7m L20: a press ends the running screen saver (AppDelegate: `ScreenSaver.end()`).
+    @ObservationIgnored var endScreenSaver: () -> Void = {}
+    /// M7m L20: macOS's screen saver runs (`screenSaverDidStart`/`Stop`), whoever started it.
+    @ObservationIgnored private(set) var isScreenSaverRunning = false
+    /// M7m L20 (security medium): a screen saver engine really runs (AppDelegate: `ScreenSaver.isEngineRunning`), so a
+    /// `didstart` without a `didstop` can't swallow every press for good.
+    @ObservationIgnored var isScreenSaverEngineRunning: () -> Bool = { false }
+    /// M7m L19 (QA step 7, major 1): a press already ended this screen saver, so its stop opens no grace window.
+    @ObservationIgnored private var screenSaverEndedByPress = false
+    /// M7m pre-build review (security medium): a real engine was seen running during this screen saver (at `didstart`,
+    /// an idle tick or a press). Only then does its end open a grace window, so forged `didstart`s can't swallow presses.
+    @ObservationIgnored private var screenSaverEngineSeen = false
+    /// The engine may not be listed yet when `didstart` arrives, and the idle tick doesn't run while the screen saver
+    /// shows (MMTVL inactive): look again after each of these waits (successive: 0.5 s, then 2 s after `didstart`).
+    @ObservationIgnored var screenSaverEngineRecheckWaits: [Duration] = [.milliseconds(500), .milliseconds(1500)]
+    /// Cancelled by `didstop` and the next `didstart`; readable so tests await it.
+    @ObservationIgnored private(set) var screenSaverEngineRecheckTask: Task<Void, Never>?
+    /// M7m pre-build review (QA minor): a press only woke the screen; a held key's repeats are swallowed too, until the
+    /// next fresh press.
+    @ObservationIgnored private var swallowsRepeatsAfterWake = false
+    /// When a screen saver no press ended stopped (macOS ended it on a touch); the next press within
+    /// `screenSaverWakeGrace` is the waking one and is swallowed.
+    @ObservationIgnored private var screenSaverStoppedAt: ContinuousClock.Instant?
+    @ObservationIgnored var screenSaverWakeGrace: Duration = Theme.screenSaverWakeGrace
+    /// M7m L20 (QA step 7, major 2): the displays sleep (`screensDidSleep` until `screensDidWake`); the dimmer waits.
+    @ObservationIgnored private(set) var areDisplaysAsleep = false
+    /// Runs `idleTick()` every second while MMTVL is active.
+    @ObservationIgnored private var idleTickTask: Task<Void, Never>?
+    private static let idleTickInterval: Duration = .seconds(1)
+    private static let idleLogger = Logger(subsystem: "dev.mmtvl.launcher", category: "Idle")
     /// D20: read at init, on going home and after PIN flows, not on every render.
     private var hasPINCache = false
     /// The PIN screen's model while `screen` is `.pin`.
     private(set) var pinEntry: PINEntryModel?
     /// M7h L15: the power menu, over whatever screen shows (YouTube and Live TV included); it takes every command
     /// while open (Home closes it and goes home).
-    private(set) var powerMenu: PowerMenu?
+    private(set) var powerMenu: PowerMenu? {
+        didSet { if (powerMenu == nil) != (oldValue == nil) { updateStillness() } }
+    }
     /// Relaunch and Restart show a lock: a PIN was set when the menu opened.
     private(set) var powerMenuShowsPINLock = false
+    /// M7m L5, L6 (D50): the focused home tile's menu (Menu on a tile); it takes every command while open (Home closes
+    /// it and goes home).
+    private(set) var tileMenu: TileMenu? {
+        didSet { if (tileMenu == nil) != (oldValue == nil) { updateStillness() } }
+    }
+    /// M7m L8: the home tile being moved (the tile menu's Move): arrows move it, focus stays on it; Select, Back and
+    /// Menu end it, Home ends it and goes home, and so does any change of screen. Step 11 draws it lifted.
+    private(set) var movingTileID: String?
+    /// The edit rows show a lock: a PIN was set when the menu opened.
+    private(set) var tileMenuShowsPINLock = false
+    /// M7m L7: the tile menu's Quit or Restart while it waits for the app to quit (tests await it).
+    @ObservationIgnored private(set) var tileMenuTask: Task<Void, Never>?
+    /// M7m L11: a short message over any app (AppDelegate's default: `OverlayToast`; tests record it).
+    @ObservationIgnored var showToast: (_ text: String, _ symbol: String) -> Void = {
+        OverlayToast.shared.show($0, symbol: $1)
+    }
+    private static let homeLogger = Logger(subsystem: "dev.mmtvl.launcher", category: "Home")
 
     @ObservationIgnored let launcher: AppLauncher
     /// M7 L3: custom tile pictures.
@@ -123,7 +199,8 @@ final class AppRouter {
     /// Where cancelling the PIN screen returns: .home or .settings.
     @ObservationIgnored private var screenBeforePIN: Screen = .home
     /// L8: hover only moves focus after the pointer moved since the last consumed command.
-    @ObservationIgnored private var pointerLocationAtLastCommand: NSPoint?
+    /// Not private so tests can set nil, which makes the pointer count as moved (M7m step 10 QA).
+    @ObservationIgnored var pointerLocationAtLastCommand: NSPoint?
     /// L21: scroll distance not yet turned into a row move, and when it last changed.
     @ObservationIgnored private var scrollAccumulator: CGFloat = 0
     @ObservationIgnored private var lastScrollAt: Date?
@@ -160,6 +237,9 @@ final class AppRouter {
         // M7h step 13e: status changes refresh Settings only while it shows.
         settings.isShowing = { [weak self] in self?.screen == .settings }
         syncCarousel()
+        updateStillness()
+        updateIdleTicks()
+        observeLiveTVVideo()
     }
 
     /// Replaces the tiles (Settings edits), keeping focus on the same tile where possible.
@@ -176,6 +256,10 @@ final class AppRouter {
             newFocus.focus(index: min(oldIndex, visibleItems.count - 1))
         }
         focus = newFocus
+        // M7m L8: a moving tile that's no longer on the home screen ends move mode.
+        if let movingTileID, !visibleItems.contains(where: { $0.id == movingTileID }) {
+            endMoving(reason: "the tile left the home screen")
+        }
         shelfContentChanged()
     }
 
@@ -232,7 +316,8 @@ final class AppRouter {
     /// The channel the home screen should preview now, or nil.
     /// M7c L25: it preloads with any tile focused while the Live TV tile is on the home screen.
     var wantedPreviewChannelID: Channel.ID? {
-        guard screen == .home, livePreviewEnabled, isAppActive, !isIdle,
+        // M7m L18: dimmed counts as idle.
+        guard screen == .home, livePreviewEnabled, isAppActive, !isIdle, idlePhase == .awake,
               let liveItem = visibleItems.first(where: { $0.kind == .internalDestination(.iptv) }),
               !(liveItem.isPINProtected && hasPINCache)
         else { return nil }
@@ -312,8 +397,10 @@ final class AppRouter {
         scheduledPreviewID = nil
     }
 
-    /// L16: any remote command (`InputRouter.onCommandDispatched`).
+    /// L16: any remote command (`InputRouter.onCommandDispatched`, called before `handle`). M7m L19: while dimmed,
+    /// `handle` wakes the dimmer (and swallows the command), so it isn't fed here.
     func noteActivity() {
+        if idlePhase == .awake { stillIdle.activity(at: idleNow()) }
         restartIdleTimer()
         if isIdle {
             isIdle = false
@@ -321,22 +408,122 @@ final class AppRouter {
         }
     }
 
-    /// L16: the displays or the system went to sleep. The next command restarts the preview.
+    /// L16: the displays or the system went to sleep. The next command restarts the preview. M7m L20: the dimmer
+    /// waits until they wake (no screen saver started with the displays off).
     func screensDidSleep() {
+        areDisplaysAsleep = true
+        stopPreviewUntilInput()
+    }
+
+    /// M7m L20 (QA step 7, major 2): the displays woke; the dimmer's wait starts over (the preview still waits for a
+    /// command, L16).
+    func screensDidWake() {
+        guard areDisplaysAsleep else { return }
+        areDisplaysAsleep = false
+        feedIdleActivity(reason: "(the displays woke)")
+    }
+
+    private func stopPreviewUntilInput() {
         idleTask?.cancel()
         idleTask = nil
         isIdle = true
         updateLivePreview()
     }
 
-    /// M7c L26: no stream while the screen saver runs.
+    /// M7c L26: no stream while the screen saver runs. M7m L20: from now on a press only ends it.
     func screenSaverDidStart() {
-        screensDidSleep()
+        isScreenSaverRunning = true
+        screenSaverEndedByPress = false
+        screenSaverEngineSeen = false
+        screenSaverStoppedAt = nil
+        screenSaverEngineRecheckTask?.cancel()
+        screenSaverEngineRecheckTask = nil
+        noteScreenSaverEngine()
+        if !screenSaverEngineSeen { scheduleScreenSaverEngineRecheck() }
+        stopPreviewUntilInput()
     }
 
-    /// M7c L26: counts as activity, so the preview can start again.
+    private func scheduleScreenSaverEngineRecheck() {
+        let waits = screenSaverEngineRecheckWaits
+        screenSaverEngineRecheckTask = Task { [weak self] in
+            for wait in waits {
+                try? await Task.sleep(for: wait)
+                guard !Task.isCancelled, let self else { return }
+                noteScreenSaverEngine()
+                if screenSaverEngineSeen { return }
+            }
+        }
+    }
+
+    /// Records that this screen saver's engine really runs (pre-build review, security medium). Returns whether it does.
+    @discardableResult
+    private func noteScreenSaverEngine() -> Bool {
+        let running = isScreenSaverEngineRunning()
+        if running, isScreenSaverRunning { screenSaverEngineSeen = true }
+        return running
+    }
+
+    /// M7c L26: counts as activity, so the preview can start again. M7m L20: wakes the dimmer. L19 (QA step 7,
+    /// major 1): unless a press ended it, the next press within `screenSaverWakeGrace` is swallowed too: macOS ends
+    /// the screen saver on the Siri Remote's touch, before its press reaches MMTVL.
     func screenSaverDidStop() {
+        // A second report of the same stop (it was found gone first, or reported twice) opens no new window, nor a
+        // session whose engine was never seen (forged `didstart`s, pre-build review).
+        if isScreenSaverRunning {
+            screenSaverStoppedAt = screenSaverEndedByPress || !screenSaverEngineSeen ? nil : idleNow()
+        }
+        isScreenSaverRunning = false
+        screenSaverEndedByPress = false
+        screenSaverEngineSeen = false
+        screenSaverEngineRecheckTask?.cancel()
+        screenSaverEngineRecheckTask = nil
+        stillIdle.screenSaverStopped(at: idleNow())
+        syncIdlePhase(reason: "(the screen saver stopped)")
         noteActivity()
+        updateStillness()
+    }
+
+    /// M7m L19, L20: the screen saver shows: macOS said it started, or the dimmer asked for it and MMTVL went to the
+    /// background (it took the screen); either way only while an engine really runs (security medium).
+    var isScreenSaverShowing: Bool {
+        (isScreenSaverRunning || (idlePhase == .screenSaver && !isAppActive)) && isScreenSaverEngineRunning()
+    }
+
+    /// QA step 7, major 1: a screen saver no press ended stopped less than `screenSaverWakeGrace` ago.
+    private var isInScreenSaverWakeGrace: Bool {
+        guard let screenSaverStoppedAt else { return false }
+        return idleNow() - screenSaverStoppedAt < screenSaverWakeGrace
+    }
+
+    /// M7m L19, L20: the one check for input that arrives while the screen saver shows, from any source (`handle`,
+    /// `ExternalRouter` for the Siri Remote and the phone, phone text): it ends the screen saver and wakes the dimmer,
+    /// and the caller swallows the input (it never reaches the app in front). Also the first press within the grace
+    /// window after a screen saver no press ended (it wakes, without ending anything). False otherwise.
+    @discardableResult
+    func endScreenSaverIfShowing(by reason: String) -> Bool {
+        // QA step 7 (minor): the engine is gone but `didstop` hasn't come yet, and no press ended it (macOS did, on a
+        // touch): stopped now, so this press opens the grace window and is swallowed once.
+        // Pre-build review (security medium): only for a session whose engine was seen.
+        let engineRunning = noteScreenSaverEngine()
+        if isScreenSaverRunning, screenSaverEngineSeen, !screenSaverEndedByPress, !engineRunning {
+            Self.idleLogger.info("The screen saver ended before its didstop")
+            screenSaverDidStop()
+        }
+        if isScreenSaverShowing {
+            swallowsRepeatsAfterWake = true
+            wakeFromIdle(by: reason)
+            return true
+        }
+        guard isInScreenSaverWakeGrace else {
+            screenSaverStoppedAt = nil
+            return false
+        }
+        screenSaverStoppedAt = nil
+        swallowsRepeatsAfterWake = true
+        feedIdleActivity(reason: "by \(reason)")
+        noteActivity()
+        Self.idleLogger.info("Swallowed \(reason, privacy: .public) just after the screen saver")
+        return true
     }
 
     private func restartIdleTimer() {
@@ -348,6 +535,121 @@ final class AppRouter {
             idleTask = nil
             isIdle = true
             updateLivePreview()
+        }
+    }
+
+    // MARK: Still screens (M7m L17–L19, D51)
+
+    /// L17: nothing on screen moves, so it can burn in: the home screen (its dock and clock stay put, preview or
+    /// not), Settings, the PIN screen, the power menu, and Live TV while it shows no moving video. Never YouTube, and
+    /// never while MMTVL isn't in front.
+    var isStillScreen: Bool {
+        guard isAppActive else { return false }
+        if powerMenu != nil || tileMenu != nil { return true }
+        switch screen {
+        case .home, .settings, .pin, .accessibilityOnboarding: return true
+        case .liveTV: return !liveTV.isShowingVideo
+        case .youtube: return false
+        }
+    }
+
+    /// Feeds the screen's stillness to the dimmer; a screen that starts moving wakes it.
+    func updateStillness() {
+        // M7m L20: going to the background for the screen saver isn't the screen starting to move; `didstop` (or a
+        // press) wakes it.
+        if !isAppActive, isScreenSaverRunning || idlePhase == .screenSaver { return }
+        stillIdle.stillnessChanged(isStillScreen, at: idleNow())
+        syncIdlePhase(reason: nil)
+    }
+
+    /// One step of the dimmer (every second while MMTVL is active; tests call it with their clock).
+    func idleTick() {
+        if isScreenSaverRunning { noteScreenSaverEngine() }
+        updateStillness()
+        // QA step 7, major 2: nothing advances while the displays sleep (no screen saver started on a dark screen).
+        guard !areDisplaysAsleep, stillIdle.tick(at: idleNow()) else { return }
+        syncIdlePhase(reason: nil)
+        switch idlePhase {
+        case .dimmed:
+            Self.idleLogger.info("Dimmed (\(self.stillScreenName, privacy: .public))")
+        case .screenSaver:
+            Self.idleLogger.info("Asking for the screen saver (\(self.stillScreenName, privacy: .public))")
+            startScreenSaver()
+        case .awake:
+            break
+        }
+    }
+
+    /// M7m L19 (QA step 6, findings 1–3, 5): input that wakes the dimmer and counts as activity, also when it
+    /// doesn't come through `handle`: the Siri Remote's Power and Power Menu (`PowerMenuPresenter`), the scroll
+    /// wheel, phone text into Live TV, a button Remote Buttons learns. Restarts the home preview's idle timer too.
+    func wakeFromIdle(by reason: String) {
+        // M7m L20: every waking press ends a showing screen saver (`ScreenSaver.end()` ignores repeats); its stop then
+        // opens no grace window.
+        if isScreenSaverShowing {
+            screenSaverEndedByPress = true
+            endScreenSaver()
+        }
+        feedIdleActivity(reason: "by \(reason)")
+        noteActivity()
+    }
+
+    /// The dimmer only: activity now, waking it from either phase.
+    private func feedIdleActivity(reason: String) {
+        stillIdle.activity(at: idleNow())
+        syncIdlePhase(reason: reason)
+    }
+
+    private func syncIdlePhase(reason: String?) {
+        let phase = stillIdle.phase
+        guard phase != idlePhase else { return }
+        let wasDimmed = idlePhase != .awake
+        idlePhase = phase
+        if wasDimmed && phase == .awake {
+            Self.idleLogger.info("Woke \(reason ?? "(the screen is moving)", privacy: .public)")
+        }
+        updateLivePreview()
+    }
+
+    private func updateIdleTicks() {
+        guard isAppActive else {
+            idleTickTask?.cancel()
+            idleTickTask = nil
+            return
+        }
+        guard idleTickTask == nil else { return }
+        idleTickTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.idleTickInterval)
+                guard !Task.isCancelled, let self else { return }
+                idleTick()
+            }
+        }
+    }
+
+    /// L17: Live TV's video starting or stopping changes the stillness at once (the tick would catch it within 1 s).
+    private func observeLiveTVVideo() {
+        withObservationTracking {
+            _ = liveTV.isShowingVideo
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.updateStillness()
+                self?.observeLiveTVVideo()
+            }
+        }
+    }
+
+    /// For the log: which still screen dimmed.
+    private var stillScreenName: String {
+        if powerMenu != nil { return "power menu" }
+        if tileMenu != nil { return "tile menu" }
+        switch screen {
+        case .home: return "home"
+        case .accessibilityOnboarding: return "onboarding"
+        case .settings: return "Settings"
+        case .youtube: return "YouTube"
+        case .liveTV: return "Live TV"
+        case .pin: return "PIN"
         }
     }
 
@@ -445,7 +747,8 @@ final class AppRouter {
 
     /// Mouse hover over a card (with the pointer-moved rule, M1 L8).
     func hoverShelfCard(_ index: Int) {
-        guard screen == .home, pointerMovedSinceLastCommand, shelfContent.cards.indices.contains(index) else { return }
+        guard idlePhase == .awake, screen == .home, movingTileID == nil, pointerMovedSinceLastCommand,
+              shelfContent.cards.indices.contains(index) else { return }
         shelfIndex = index
     }
 
@@ -453,6 +756,11 @@ final class AppRouter {
     func activateShelfCard(_ index: Int) {
         let cards = shelfContent.cards
         guard screen == .home, cards.indices.contains(index) else { return }
+        // M7m L8: a click on a card while a tile moves only ends move mode, like a click on a tile.
+        if movingTileID != nil {
+            endMoving(reason: "click")
+            return
+        }
         shelfIndex = nil
         switch cards[index].action {
         case .playChannel(let id):
@@ -516,6 +824,18 @@ final class AppRouter {
     /// Returns true if the command was consumed. `isRepeat`: a held key's or button's auto-repeat (M7g: Settings
     /// changes page only on a fresh Left or Right).
     func handle(_ command: RemoteCommand, isRepeat: Bool = false) -> Bool {
+        // M7m pre-build review (QA minor): a held key that woke the screen keeps doing nothing until a fresh press.
+        if isRepeat, swallowsRepeatsAfterWake { return true }
+        if !isRepeat { swallowsRepeatsAfterWake = false }
+        // M7m L19: a press while dimmed only wakes the screen; Power and Power Menu wake it and still act. L20: the
+        // same while the screen saver shows (a global binding while MMTVL is behind it; it's ended) and for the first
+        // press just after a screen saver no press ended (QA step 7, major 1).
+        let swallowedForScreenSaver = endScreenSaverIfShowing(by: "\(command)")
+        if swallowedForScreenSaver || idlePhase != .awake {
+            if !swallowedForScreenSaver { wakeFromIdle(by: "\(command)") }
+            swallowsRepeatsAfterWake = true
+            guard command == .power || command == .powerMenu else { return true }
+        }
         // M7h D45: Power and Power Menu work on every screen; a held key's repeats do nothing (security S3: a held
         // Power key would turn things off, then on again).
         if command == .power {
@@ -531,6 +851,14 @@ final class AppRouter {
         } else if command == .powerMenu {
             if !isRepeat { openPowerMenu() }
             return true
+        }
+        if tileMenu != nil {
+            guard command == .home else {
+                // A held Menu key's repeats don't close the menu it just opened.
+                if !(command == .menu && isRepeat) { routeTileMenu(command) }
+                return true
+            }
+            closeTileMenu(reason: "closed (Home)")
         }
         if command == .home { launcher.homePressed() }
         if isLeavingHome {
@@ -556,6 +884,7 @@ final class AppRouter {
         switch screen {
         case .home:
             shelfContentChanged()
+            if let movingTileID { return routeMoving(command, id: movingTileID, isRepeat: isRepeat) }
             if let shelfIndex { return routeShelf(command, index: shelfIndex) }
             switch command {
             case .up where focus.position.row == 0 && !shelfContent.cards.isEmpty:
@@ -584,7 +913,12 @@ final class AppRouter {
                 return true
             case .home:
                 return true
-            case .playPause, .fastForward, .rewind, .menu, .channelUp, .channelDown,
+            case .menu:
+                // M7m L5: the focused tile's menu (the Siri Remote's held centre, the phone's Menu, Tab, Y).
+                guard let index = focus.index else { return false }
+                if !isRepeat { openTileMenu(index) }
+                return true
+            case .playPause, .fastForward, .rewind, .channelUp, .channelDown,
                  .volumeUp, .volumeDown, .mute, .power, .powerMenu:
                 return false
             }
@@ -660,12 +994,16 @@ final class AppRouter {
 
     /// Power's short press: closes the menu, then turns things off or on (`onPowerButton`).
     func pressPower() {
+        // M7m L19: every Power source wakes the dimmer (a bound key's already did in `handle`; this is a no-op then).
+        wakeFromIdle(by: "power")
         closePowerMenu()
         onPowerButton?()
     }
 
     /// Over the current screen, on its first item. Already open: stays as it is.
     func openPowerMenu() {
+        // M7m L19: as for Power; the menu never opens under the dim.
+        wakeFromIdle(by: "powerMenu")
         guard powerMenu == nil else { return }
         powerMenuShowsPINLock = hasPIN
         powerMenu = PowerMenu()
@@ -690,7 +1028,8 @@ final class AppRouter {
 
     /// Hover over a row.
     func hoverPowerMenuItem(_ index: Int) {
-        guard pointerMovedSinceLastCommand, var menu = powerMenu else { return }
+        // M7m pre-build review (QA minor): nothing moves under the dim.
+        guard idlePhase == .awake, pointerMovedSinceLastCommand, var menu = powerMenu else { return }
         menu.focus(index: index)
         powerMenu = menu
     }
@@ -732,6 +1071,196 @@ final class AppRouter {
         requestPIN(action == .relaunch ? .relaunch : .restartMac)
     }
 
+    // MARK: Tile menu (M7m L5–L11, D50)
+
+    /// Over the home screen, on its first item, for the tile at `index` (into `visibleItems`).
+    func openTileMenu(_ index: Int) {
+        guard screen == .home, tileMenu == nil, visibleItems.indices.contains(index) else { return }
+        let item = visibleItems[index]
+        // The tile's own title as the home screen shows it (the default browser's name).
+        var shown = item
+        shown.title = launcher.title(for: item)
+        tileMenuShowsPINLock = hasPIN
+        let menu = TileMenu.make(for: shown, isStartTile: item.id == startTileID, isRunning: launcher.isRunning(item),
+                                 youTubeOpened: youtube.hasOpened, ownBundleID: Bundle.main.bundleIdentifier,
+                                 bundleID: launcher.bundleID(for: item))
+        tileMenu = menu
+        let actions = menu.items.map(\.action.rawValue).joined(separator: ", ")
+        Self.homeLogger.info("Tile menu: \(item.id, privacy: .public) opened (\(actions, privacy: .public))")
+    }
+
+    func closeTileMenu(reason: String = "closed") {
+        guard let menu = tileMenu else { return }
+        tileMenu = nil
+        Self.homeLogger.info("Tile menu: \(menu.tileID, privacy: .public) \(reason, privacy: .public)")
+    }
+
+    /// A click on a row.
+    func chooseTileMenuItem(_ index: Int) {
+        guard var menu = tileMenu else { return }
+        let outcome = menu.choose(index: index)
+        tileMenu = menu
+        performTileMenu(outcome)
+    }
+
+    /// Hover over a row.
+    func hoverTileMenuItem(_ index: Int) {
+        // M7m pre-build review (QA minor): nothing moves under the dim.
+        guard idlePhase == .awake, pointerMovedSinceLastCommand, var menu = tileMenu else { return }
+        menu.focus(index: index)
+        tileMenu = menu
+    }
+
+    /// Every source's commands while the menu is open (a paired phone's too: its Menu button opens it).
+    private func routeTileMenu(_ command: RemoteCommand) {
+        guard var menu = tileMenu else { return }
+        let outcome = menu.handle(command)
+        tileMenu = menu
+        performTileMenu(outcome)
+    }
+
+    /// Closed first (a PIN screen must not sit under it). L9, D20: with a PIN set, the edits ask first.
+    private func performTileMenu(_ outcome: TileMenu.Outcome) {
+        switch outcome {
+        case .none:
+            break
+        case .close:
+            closeTileMenu()
+        case .choose(let action):
+            guard let id = tileMenu?.tileID else { return }
+            tileMenu = nil
+            Self.homeLogger.info("Tile menu: \(id, privacy: .public) \(action.rawValue, privacy: .public)")
+            if action.needsPIN && hasPIN {
+                requestPIN(.tileAction(id: id, action: action))
+            } else {
+                runTileAction(action, id: id)
+            }
+        }
+    }
+
+    /// Runs a tile menu item (after the PIN, when it asked). Edits go through Settings, so its tile list and
+    /// `launch-items.json` stay in step (`settings.perform` → `applyItems` → `setItems`).
+    private func runTileAction(_ action: TileMenuAction, id: String) {
+        guard let item = items.first(where: { $0.id == id }) else { return }
+        switch action {
+        case .move:
+            startMoving(id)
+        case .quit:
+            tileMenuTask = Task { [launcher] in await launcher.quit(item) }
+        case .restart:
+            // L7: quit, then open it as Select would (a protected tile asks for the PIN then).
+            tileMenuTask = Task { [weak self, launcher] in
+                await launcher.quit(item)
+                self?.activateTile(id: id, after: .restart)
+            }
+        case .reloadYouTube:
+            youtube.reload()
+            activateTile(id: id, after: .reloadYouTube)
+        case .hide:
+            guard item.isVisible else { return }
+            settings.perform(.toggleTileVisible(id: id))
+            // L11: where to get it back.
+            showToast("Hidden · Settings → Home Screen shows it again", "eye.slash")
+        case .startHere:
+            settings.perform(.setStartTile(id: id))
+        case .toggleFullScreen:
+            settings.perform(.toggleTileFullScreen(id: id))
+        case .toggleRequiresPIN:
+            settings.perform(.toggleTileRequiresPIN(id: id))
+        case .tileSettings:
+            openSettings(atTile: id)
+        }
+    }
+
+    /// Restart and Reload: Select on the tile, if it's still on the home screen and nothing else took over meanwhile
+    /// (a restart waits up to 6 s for the app to quit).
+    private func activateTile(id: String, after action: TileMenuAction) {
+        let skipped: String? = if !isAppActive {
+            "MMTVL isn't in front"
+        } else if screen != .home {
+            "not on the home screen"
+        } else if isLeavingHome {
+            "another tile is opening"
+        } else if tileMenu != nil || powerMenu != nil {
+            "a menu is open"
+        } else if movingTileID != nil {
+            "a tile is being moved"
+        } else {
+            nil
+        }
+        guard skipped == nil, let index = visibleItems.firstIndex(where: { $0.id == id }) else {
+            let why = skipped ?? "the tile isn't on the home screen"
+            Self.homeLogger.info(
+                "Tile menu: \(id, privacy: .public) \(action.rawValue, privacy: .public): not reopened (\(why, privacy: .public))")
+            return
+        }
+        activate(index)
+    }
+
+    // MARK: Move mode (M7m L8)
+
+    /// The tile menu's Move (after the PIN, when one is set): focus on the tile, out of the top shelf.
+    private func startMoving(_ id: String) {
+        guard screen == .home, let index = visibleItems.firstIndex(where: { $0.id == id }) else {
+            Self.homeLogger.info("Move: \(id, privacy: .public) not started (not on the home screen)")
+            return
+        }
+        shelfIndex = nil
+        withAnimation(Theme.focusAnimation) { _ = focus.focus(index: index) }
+        movingTileID = id
+        Self.homeLogger.info("Move: \(id, privacy: .public) started")
+    }
+
+    private func endMoving(reason: String) {
+        guard let id = movingTileID else { return }
+        movingTileID = nil
+        Self.homeLogger.info("Move: \(id, privacy: .public) ended (\(reason, privacy: .public))")
+    }
+
+    /// Commands while a tile moves. Each arrow saves at once (`settings.moveTile` → `applyItems` → `setItems`, which
+    /// keeps focus on the tile). Up never enters the top shelf.
+    private func routeMoving(_ command: RemoteCommand, id: String, isRepeat: Bool) -> Bool {
+        switch command {
+        case .up, .down, .left, .right:
+            guard let current = visibleItems.firstIndex(where: { $0.id == id }) else {
+                endMoving(reason: "the tile left the home screen")
+                return true
+            }
+            let target = Self.moveTarget(command, from: current, count: visibleItems.count, perRow: Theme.tilesPerRow)
+            guard target != current else { return true }
+            withAnimation(Theme.focusAnimation) { settings.moveTile(id: id, toVisibleIndex: target) }
+            Self.homeLogger.debug("Move: \(id, privacy: .public) to \(target)")
+            return true
+        case .select, .back, .menu, .home:
+            // A held key's repeats (the Select that chose Move, a held Menu) don't end it; Home always does.
+            if isRepeat && command != .home { return true }
+            endMoving(reason: "\(command)")
+            return true
+        case .playPause, .fastForward, .rewind, .channelUp, .channelDown,
+             .volumeUp, .volumeDown, .mute, .power, .powerMenu:
+            return false
+        }
+    }
+
+    /// L8: the neighbouring visible place. Left/Right ±1 and Down ±`perRow`, clamped to the tiles; Up from the first
+    /// row and Down from the last stay put.
+    static func moveTarget(_ command: RemoteCommand, from index: Int, count: Int, perRow: Int) -> Int {
+        guard count > 0 else { return index }
+        let last = count - 1
+        switch command {
+        case .left:
+            return max(index - 1, 0)
+        case .right:
+            return min(index + 1, last)
+        case .up:
+            return index - perRow >= 0 ? index - perRow : index
+        case .down:
+            return index / perRow < last / perRow ? min(index + perRow, last) : index
+        default:
+            return index
+        }
+    }
+
     private func bumpFocusMotion(_ direction: RemoteCommand) {
         focusMotion = FocusMotion(direction: direction, generation: focusMotion.generation + 1)
     }
@@ -740,6 +1269,8 @@ final class AppRouter {
     func goHome() {
         if isLeavingHome { finishLeavingHome(animated: false) }
         closePowerMenu()
+        closeTileMenu(reason: "closed (home)")
+        endMoving(reason: "home")
         if screen == .youtube {
             youtube.pause()
         }
@@ -810,6 +1341,10 @@ final class AppRouter {
             case .restartMac:
                 returnFromPIN()
                 onPowerAction?(.restartMac)
+            case .tileAction(let id, let action):
+                // M7m L9: Tile Settings… opens Settings without asking again.
+                screen = .home
+                runTileAction(action, id: id)
             case .setNew, .change, .turnOff:
                 returnFromPIN()
             }
@@ -884,12 +1419,19 @@ final class AppRouter {
         screen = .settings
     }
 
+    /// M7m L10: Settings on the tile's page (the tile menu's Tile Settings…, after its PIN).
+    func openSettings(atTile id: String) {
+        settings.openTile(id)
+        screen = .settings
+    }
+
     private var pointerMovedSinceLastCommand: Bool {
         NSEvent.mouseLocation != pointerLocationAtLastCommand
     }
 
     func hover(_ index: Int) {
-        guard screen == .home, pointerMovedSinceLastCommand else { return }
+        // M7m L8: focus stays on a moving tile. Pre-build review (QA minor): nothing moves under the dim.
+        guard idlePhase == .awake, screen == .home, movingTileID == nil, pointerMovedSinceLastCommand else { return }
         shelfIndex = nil
         var moved = false
         withAnimation(Theme.focusAnimation) { moved = focus.focus(index: index) }
@@ -903,6 +1445,14 @@ final class AppRouter {
     /// Positive deltas (content moves down) move focus up. Other screens ignore it.
     func scrollWheel(deltaY: CGFloat, precise: Bool) {
         guard screen == .home, deltaY != 0 else { return }
+        // M7m L19 (QA step 6, finding 2): a wheel event while dimmed only wakes; otherwise it's activity.
+        guard idlePhase == .awake else {
+            wakeFromIdle(by: "the scroll wheel")
+            scrollAccumulator = 0
+            lastScrollAt = now()
+            return
+        }
+        noteActivity()
         let time = now()
         if let lastScrollAt, time.timeIntervalSince(lastScrollAt) > 0.3 { scrollAccumulator = 0 }
         lastScrollAt = time
@@ -917,15 +1467,26 @@ final class AppRouter {
         }
     }
 
+    /// M7m pre-build review (QA minor): a click on the dim (it takes clicks only while dimmed) only wakes the screen.
+    func clickOnIdleDim() {
+        guard idlePhase != .awake else { return }
+        wakeFromIdle(by: "click")
+    }
+
     /// `page`: the page of the column the row is in; only the current page's rows take focus.
     func hoverSettingsRow(_ id: String, on page: SettingsPage) {
-        guard screen == .settings, pointerMovedSinceLastCommand else { return }
+        guard idlePhase == .awake, screen == .settings, pointerMovedSinceLastCommand else { return }
         settings.focus(rowID: id, on: page)
     }
 
     /// `index` is into `visibleItems`.
     func activate(_ index: Int) {
         guard visibleItems.indices.contains(index) else { return }
+        // M7m L8: a click on a tile while one moves ends move mode, like Select, and opens nothing.
+        if movingTileID != nil {
+            endMoving(reason: "click")
+            return
+        }
         focus.focus(index: index)
         let item = visibleItems[index]
 
@@ -995,11 +1556,46 @@ struct LauncherRootView: View {
     var body: some View {
         ZStack {
             screenBody
+            // M7m L5: over the home screen, under the power menu.
+            tileMenuOverlay
             // M7h L15: above every screen, YouTube and Live TV (outside the canvas) included.
             powerMenuOverlay
+            // M7m L18: the idle dimmer, above everything (the power menu too); a click on it only wakes (L19).
+            idleDim
         }
         // M7l L4: every glass panel and tile rim below, the canvas, Live TV and the power menu alike.
         .environment(\.glassStyle, router.glassStyle)
+    }
+
+    /// M7m L18: a still screen darkens after a while without input; any press brings it back (`AppRouter.handle`).
+    /// While dimmed it takes clicks, which only wake (pre-build review, QA minor); awake, clicks go through.
+    private var idleDim: some View {
+        Color.black
+            .opacity(router.idlePhase == .awake ? 0 : Theme.idleDimOpacity)
+            .ignoresSafeArea()
+            .contentShape(Rectangle())
+            .onTapGesture { router.clickOnIdleDim() }
+            .allowsHitTesting(router.idlePhase != .awake)
+            .animation(Theme.idleDimAnimation, value: router.idlePhase == .awake)
+    }
+
+    /// M7m L5 (step 11): drawn like the power menu, its sibling: the dim over the whole window, the panel on the
+    /// scaled canvas, the same fade. A click on the dim does nothing, as with the power menu.
+    private var tileMenuOverlay: some View {
+        ZStack {
+            if let menu = router.tileMenu {
+                GeometryReader { geometry in
+                    Theme.menuDim
+                    TileMenuView(menu: menu, hasPIN: router.tileMenuShowsPINLock,
+                                 onHover: router.hoverTileMenuItem, onChoose: router.chooseTileMenuItem)
+                        .scaleEffect(Theme.scale(for: geometry.size))
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                }
+                .ignoresSafeArea()
+                .transition(.opacity)
+            }
+        }
+        .animation(Theme.menuFadeAnimation, value: router.tileMenu == nil)
     }
 
     /// Fades in and out by itself; screen changes underneath aren't animated with it (QA Q4).
@@ -1109,6 +1705,7 @@ struct LauncherRootView: View {
                 isLeaving: router.isLeavingHome,
                 versionLabel: router.homeVersionLabel,
                 remoteBatteryLevel: router.remoteBatteryLevel,
+                movingTileID: router.movingTileID,
                 entryGeneration: router.homeEntryGeneration,
                 onHoverCard: router.hoverShelfCard,
                 onActivateCard: router.activateShelfCard,

@@ -26,13 +26,18 @@ struct MultiviewLiveTVTests {
     """
 
     private func makeSetup(state: IPTVState = IPTVState(lastChannelID: "id:nflnetwork.us"),
-                           playlist: String = IPTVFixtures.playlist) async throws -> Setup {
+                           playlist: String = IPTVFixtures.playlist,
+                           guideIdleReturn: Duration = .seconds(180),
+                           multiviewHighlightDuration: Duration = .seconds(5),
+                           pausedOverlayDuration: Duration = .seconds(15)) async throws -> Setup {
         let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL, texts: [IPTVFixtures.playlistURL: playlist],
                                       state: state)
         let player = FakePlayer()
         let factory = PlayerFactory()
         let model = LiveTVModel(player: player, makePlayer: factory.make, library: fixture.library,
-                                now: { fixture.clock.now })
+                                now: { fixture.clock.now }, guideIdleReturn: guideIdleReturn,
+                                multiviewHighlightDuration: multiviewHighlightDuration,
+                                pausedOverlayDuration: pausedOverlayDuration)
         model.open()
         await model.pendingTask?.value
         return Setup(model: model, player: player, factory: factory, fixture: fixture)
@@ -461,6 +466,42 @@ struct MultiviewLiveTVTests {
         #expect(model.menu?.items.map(\.id) == ["fullScreen", "changeChannel", "retry", "layout", "remove"])
     }
 
+    /// M7m L3: Back from Layout goes back to the window menu, focused on its Layout row; nothing changes.
+    @Test func backFromTheLayoutMenuReturnsToTheWindowMenu() async throws {
+        let setup = try await makeSetup()
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, Self.nba)
+        _ = model.handle(.select)
+        choose(model, "layout")
+        #expect(model.menu?.title == "Layout")
+        #expect(model.handle(.back) == .handled)
+        #expect(model.menu?.title == "NBA TV")
+        #expect(model.menu?.focusedItem?.id == "layout")
+        #expect(model.multiview?.layout == .onePlusFour)
+        #expect(model.mode == .multiview)
+        _ = model.handle(.back)
+        #expect(model.menu == nil)
+        #expect(model.mode == .multiview)
+    }
+
+    /// M7m L3: a layout chosen closes the Layout menu and the window menu under it.
+    @Test func choosingALayoutClosesBothMenus() async throws {
+        let setup = try await makeSetup()
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, Self.nba)
+        _ = model.handle(.select)
+        choose(model, "layout")
+        choose(model, "layout.grid")
+        #expect(model.menu == nil)
+        #expect(model.multiview?.layout == .grid)
+        // Back now leaves Multiview: no window menu was waiting.
+        _ = model.handle(.back)
+        #expect(model.menu == nil)
+        #expect(model.mode == .player)
+    }
+
     @Test func fullScreenFromTheMenu() async throws {
         let setup = try await makeSetup()
         defer { setup.fixture.cleanUp() }
@@ -573,6 +614,126 @@ struct MultiviewLiveTVTests {
         #expect(model.multiview?.focusedSlot == 1)
     }
 
+    /// M7m L16: the picker guide left alone goes back to Multiview, unchanged.
+    @Test func idlePickerReturnsToMultiview() async throws {
+        let setup = try await makeSetup(guideIdleReturn: .milliseconds(30))
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, Self.nba)
+        _ = model.handle(.select)
+        choose(model, "changeChannel")
+        #expect(model.mode == .guide)
+        #expect(model.guidePurpose == .pick(slot: 1))
+        let played = allPlayers(setup).map(\.played)
+        await model.guideIdleTask?.value
+        #expect(model.mode == .multiview)
+        #expect(model.guide == nil)
+        #expect(model.guidePurpose == .watch)
+        #expect(model.multiview?.slots == [Self.nfl, Self.nba, nil, nil, nil])
+        #expect(model.multiview?.focusedSlot == 1)
+        #expect(allPlayers(setup).map(\.played) == played)   // no new player, nothing reloaded
+    }
+
+    /// M7m L16: with every window paused, the picker still goes back to Multiview (paused counts as playing).
+    @Test func idlePickerWithEveryWindowPausedReturnsToMultiview() async throws {
+        let setup = try await makeSetup(guideIdleReturn: .milliseconds(30))
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, Self.nba)
+        _ = model.handle(.select)
+        choose(model, "changeChannel")
+        #expect(model.mode == .guide)
+        for player in allPlayers(setup) where player.state.phase != .idle { player.state.phase = .paused }
+        await model.guideIdleTask?.value
+        #expect(model.mode == .multiview)
+        #expect(model.guidePurpose == .watch)
+        #expect(model.multiview?.slots == [Self.nfl, Self.nba, nil, nil, nil])
+    }
+
+    /// M7m L16: with every window failed nothing moves, so the idle return does nothing; the window menu stays.
+    @Test func idleWithEveryWindowFailedLeavesTheWindowMenuOpen() async throws {
+        let setup = try await makeSetup(guideIdleReturn: .milliseconds(30))
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, Self.nba)
+        for player in allPlayers(setup) { player.state.phase = .failed }
+        #expect(model.handle(.menu) == .handled)
+        #expect(model.menu?.title == "NBA TV")
+        await model.guideIdleTask?.value
+        #expect(model.menu?.title == "NBA TV")
+        #expect(model.mode == .multiview)
+    }
+
+    // MARK: Burn-in (M7m L12, L15)
+
+    @Test func enteringMultiviewShowsTheHighlight() async throws {
+        let setup = try await makeSetup()
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        _ = model.handle(.select)   // the player: banner and bar, not the highlight
+        #expect(!model.multiviewHighlightVisible)
+        addToMultiview(model, Self.nba)
+        #expect(model.mode == .multiview)
+        #expect(model.multiviewHighlightVisible)
+        #expect(model.multiviewHighlightTask != nil)
+    }
+
+    @Test func theHighlightShowsOnAPressAndHidesAfterItsTime() async throws {
+        let setup = try await makeSetup(multiviewHighlightDuration: .milliseconds(30))
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, Self.nba)
+        #expect(model.multiviewHighlightVisible)
+        await model.multiviewHighlightTask?.value
+        #expect(!model.multiviewHighlightVisible)
+        _ = model.handle(.right)   // L13: focus to an empty window; the sound stays on NBA TV
+        #expect(model.multiviewHighlightVisible)
+        #expect(model.multiviewHighlightTask?.isCancelled == false)
+        #expect(model.multiview?.focusedChannelID == nil)
+        #expect(model.multiview?.audioChannelID == Self.nba)
+        await model.multiviewHighlightTask?.value
+        #expect(!model.multiviewHighlightVisible)
+        // Leaving cancels it.
+        _ = model.handle(.up)
+        let task = try #require(model.multiviewHighlightTask)
+        model.leave()
+        #expect(task.isCancelled)
+        #expect(!model.multiviewHighlightVisible)
+    }
+
+    @Test func pausedOverlayHidesAfter15sAndAPressShowsItAgain() async throws {
+        let setup = try await makeSetup(pausedOverlayDuration: .milliseconds(30))
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        addToMultiview(model, Self.nba)
+        let window = setup.factory.made[0]   // NBA TV, focused
+        #expect(model.multiview?.focusedChannelID == Self.nba)
+        window.state.phase = .playing
+        _ = model.handle(.playPause)
+        #expect(window.state.phase == .paused)
+        #expect(model.pausedOverlayVisible)
+        await model.pausedOverlayTask?.value
+        #expect(!model.pausedOverlayVisible)
+        _ = model.handle(.rewind)
+        #expect(model.pausedOverlayVisible)
+    }
+
+    /// QA: entering Multiview hides the overlays, but a paused channel carried in keeps its pause symbol.
+    @Test func enteringMultiviewFromAPausedChannelKeepsThePausedOverlay() async throws {
+        let setup = try await makeSetup()
+        defer { setup.fixture.cleanUp() }
+        let model = setup.model
+        setup.player.state.phase = .playing
+        _ = model.handle(.playPause)
+        #expect(setup.player.state.phase == .paused)
+        addToMultiview(model, Self.nba)
+        #expect(model.mode == .multiview)
+        #expect(model.tilePlayers[Self.nfl] === setup.player)   // the paused player, reused
+        #expect(setup.player.state.phase == .paused)
+        #expect(model.pausedOverlayVisible)
+        #expect(model.pausedOverlayTask?.isCancelled == false)
+    }
+
     @Test func playPauseInThePickerPausesTheWindowWithSound() async throws {
         let setup = try await makeSetup()
         defer { setup.fixture.cleanUp() }
@@ -671,8 +832,13 @@ struct MultiviewLiveTVTests {
         #expect(model.tilePlayers.isEmpty)
         #expect(setup.fixture.library.state.multiview == nil)
         #expect(allPlayers(setup).allSatisfy { $0.state.phase == .idle })
-        // Nothing plays, so Back leaves.
-        #expect(model.handle(.back) == .leave)
+        // M7m L2: nothing plays, so Back plays the last channel again (`currentChannel` is kept).
+        #expect(model.currentChannel?.id == Self.nfl)
+        #expect(model.handle(.back) == .handled)
+        #expect(model.mode == .player)
+        #expect(model.guide == nil)
+        #expect(model.currentChannel?.id == Self.nfl)
+        #expect(model.player.state.phase == .loading)
     }
 
     @Test func retryAfterTwoFailures() async throws {

@@ -6,8 +6,8 @@ import Testing
 struct TeamCatalogTests {
     static let fixture = """
     [
-      { "aliases": ["Michigan"], "conference": "Big Ten", "id": "ncaaw.michigan-wolverines", "league": "ncaaw",
-        "name": "Michigan Wolverines", "nickname": "Wolverines", "school": "Michigan" },
+      { "abbreviations": ["MICH"], "aliases": ["Michigan"], "conference": "Big Ten", "id": "ncaaw.michigan-wolverines",
+        "league": "ncaaw", "name": "Michigan Wolverines", "nickname": "Wolverines", "school": "Michigan" },
       { "aliases": ["Grambling", "Grambling State"], "conference": "SWAC (FCS)", "id": "ncaaf.grambling-tigers",
         "league": "ncaaf", "name": "Grambling Tigers", "nickname": "Tigers", "school": "Grambling" },
       { "conference": "Big East", "id": "ncaam.duke-blue-devils", "league": "ncaam", "name": "Duke Blue Devils",
@@ -39,6 +39,24 @@ struct TeamCatalogTests {
         #expect(TeamCatalog.teams(in: .ncaaf, conference: "Big Ten").contains { $0.id == "ncaaf.michigan-wolverines" })
     }
 
+    /// M7m L29: initials are abbreviations, apart from the aliases; a school that is initials stays an alias.
+    @Test func theBundledCatalogKeepsInitialsApart() throws {
+        let ulm = try #require(TeamCatalog.byID["ncaaf.ul-monroe-warhawks"])
+        #expect(ulm.aliases.contains("Louisiana-Monroe"))
+        #expect(!ulm.aliases.contains("ULM"))
+        #expect(ulm.abbreviations == ["ULM"])
+        let byu = try #require(TeamCatalog.byID["ncaaf.byu-cougars"])
+        #expect(byu.aliases.contains("BYU"))
+        #expect(!byu.abbreviations.contains("BYU"))
+        #expect(TeamCatalog.byID["ncaam.ut-rio-grande-valley-vaqueros"]?.abbreviations.contains("UTRGV") == true)
+        // None is also the school or an alias, and pro teams have none.
+        for team in TeamCatalog.collegeTeams {
+            let forms = Set(([team.school ?? ""] + team.aliases).map(TeamMatcher.normalized))
+            #expect(team.abbreviations.allSatisfy { !forms.contains(TeamMatcher.normalized($0)) }, "\(team.id)")
+        }
+        #expect(TeamCatalog.proTeams.allSatisfy { $0.abbreviations.isEmpty })
+    }
+
     @Test func fixtureEntriesDecode() throws {
         let teams = try TeamCatalog.collegeTeams(fromJSON: Data(Self.fixture.utf8))
         // Unknown and pro leagues, an id outside its league and a repeated id are skipped.
@@ -50,11 +68,14 @@ struct TeamCatalogTests {
         #expect(michigan.nickname == "Wolverines")
         #expect(michigan.conference == "Big Ten")
         #expect(michigan.aliases == ["Michigan"])
+        #expect(michigan.abbreviations == ["MICH"])
         #expect(michigan.pickTitle == "Michigan Wolverines (Women's Basketball)")
         #expect(teams[1].aliases == ["Grambling", "Grambling State"])
         #expect(teams[1].pickTitle == "Grambling Tigers (Football)")
-        // Missing aliases read as none.
+        // Missing aliases and abbreviations read as none.
+        #expect(teams[1].abbreviations == [])
         #expect(teams[2].aliases == [])
+        #expect(teams[2].abbreviations == [])
         #expect(teams[2].pickTitle == "Duke Blue Devils (Basketball)")
         #expect(throws: (any Error).self) { try TeamCatalog.collegeTeams(fromJSON: Data("{}".utf8)) }
     }

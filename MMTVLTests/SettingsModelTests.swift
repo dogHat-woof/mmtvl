@@ -270,6 +270,27 @@ struct SettingsHomeScreenTests {
         #expect(model.page == .homeScreen)
     }
 
+    /// M7m L8: the home screen's move mode saves each step through Settings, without touching its pages.
+    @Test func moveTileFromHomeSavesTheNewOrder() {
+        let items = LaunchItem.defaults.settingHidden(true, id: "youtube")
+        let (model, recorder) = makeSettingsModel(items: items)
+        // Plex to the second visible place: after Live TV, Prime Video next; the hidden YouTube stays after Plex's old
+        // place.
+        model.moveTile(id: "plex", toVisibleIndex: 1)
+        #expect(model.items.map(\.id) == ["youtube", "iptv", "plex", "prime", "browser", "settings", "exit"])
+        #expect(recorder.appliedItems.last == model.items)
+        #expect(model.page == .root)
+        #expect(model.movingTileID == nil)
+        // No change: nothing saved.
+        model.moveTile(id: "plex", toVisibleIndex: 1)
+        model.moveTile(id: "youtube", toVisibleIndex: 0)
+        #expect(recorder.appliedItems.count == 1)
+        // Settings' Home Screen page lists the new order.
+        model.perform(.push(.homeScreen))
+        let tileRows = model.sections.first { $0.id == "tiles" }!.rows
+        #expect(tileRows.map(\.id) == model.items.map { "tile.\($0.id)" })
+    }
+
     @Test func settingsTileCanOnlyMove() {
         let (model, recorder) = modelOnHomeScreen()
         model.perform(.push(.tile(id: "settings")))
@@ -714,8 +735,9 @@ struct SettingsLiveTVTests {
         model.perform(.push(.iptvTeams))
         #expect(model.pageTitle == "My Teams")
         #expect(model.focusableRowIDs == ["league.nfl", "league.nba", "league.nhl", "league.mlb",
-                                          "league.ncaaf", "league.ncaam", "league.ncaaw", "league.ncaabase"])
-        #expect(model.sections.map(\.title) == ["Pro", "College"])
+                                          "league.ncaaf", "league.ncaam", "league.ncaaw", "league.ncaabase",
+                                          "teams.matchInitials", "teams.matchNicknames"])
+        #expect(model.sections.map(\.title) == ["Pro", "College", "Matching"])
         #expect(model.row(id: "league.nba")?.value == "2 On")
         #expect(model.row(id: "league.nfl")?.value == nil)
 
@@ -729,6 +751,40 @@ struct SettingsLiveTVTests {
         model.press(.select)
         model.perform(.toggleTeam(id: "nba.lal"))
         #expect(recorder.teamPicks == [TeamPick(id: "nba.atl", picked: true), TeamPick(id: "nba.lal", picked: false)])
+    }
+
+    /// M7m L29: My Teams → Matching, both Off by default; Select saves the switch and flips its row.
+    @Test func myTeamsMatchingSwitches() {
+        let (model, recorder) = makeSettingsModel()
+        recorder.iptv = Self.status
+        model.refreshStatus()
+        model.perform(.push(.iptvTeams))
+        let matching = model.sections.first { $0.id == "matching" }
+        #expect(matching?.title == "Matching")
+        #expect(matching?.rows.map(\.id) == ["teams.matchInitials", "teams.matchNicknames"])
+        #expect(matching?.footer == "Spelled-out names, such as Louisiana-Monroe or Brigham Young, always count.")
+        let initials = model.row(id: "teams.matchInitials")
+        #expect(initials?.title == "Match Initials")
+        #expect(initials?.value == "Off")
+        #expect(initials?.description
+            == "Games named with initials, such as ULM or BYU, count for your teams. Some initials are also pro teams' (BUF, MIA), so other games may show.")
+        let nicknames = model.row(id: "teams.matchNicknames")
+        #expect(nicknames?.title == "Match Nicknames Alone")
+        #expect(nicknames?.value == "Off")
+        #expect(nicknames?.description
+            == "A game that names only a nickname, such as \"The Cougars meet the Bearcats\", counts for your teams with that nickname, narrowed by the school or conference when the guide names one.")
+
+        model.activate(rowID: "teams.matchInitials")
+        #expect(recorder.appliedSettings.last?.teamMatchInitials == true)
+        #expect(recorder.appliedSettings.last?.teamMatchNicknames == false)
+        #expect(model.row(id: "teams.matchInitials")?.value == "On")
+        #expect(model.row(id: "teams.matchNicknames")?.value == "Off")
+        model.activate(rowID: "teams.matchNicknames")
+        #expect(recorder.appliedSettings.last?.teamMatchOptions == TeamMatchOptions(initials: true, nicknames: true))
+        #expect(model.row(id: "teams.matchNicknames")?.value == "On")
+        model.activate(rowID: "teams.matchInitials")
+        #expect(recorder.appliedSettings.last?.teamMatchOptions == TeamMatchOptions(nicknames: true))
+        #expect(model.row(id: "teams.matchInitials")?.value == "Off")
     }
 
     /// M7l L13: College leagues push conferences, then the conference's teams.

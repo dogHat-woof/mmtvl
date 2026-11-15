@@ -444,3 +444,129 @@ struct AppLauncherRestartTests {
         #expect(launcher.restarting.isEmpty)
     }
 }
+
+// MARK: M7m L7: Quit and Restart from the tile menu
+
+struct AppLauncherQuitTests {
+    static let plex = AppLauncherRestartTests.plex
+    static let other = AppLauncherRestartTests.other
+
+    let fake = FakeLauncherWorkspace()
+
+    @Test func isRunningForAnAppTileAndNotForInternalTiles() {
+        let launcher = AppLauncher(workspace: fake.workspace)
+        #expect(!launcher.isRunning(Self.plex))
+        fake.start("tv.plex.htpc")
+        #expect(launcher.isRunning(Self.plex))
+        #expect(!launcher.isRunning(Self.other))
+        let browser = LaunchItem(id: "web", title: "Web",
+                                 kind: .url(URL(string: "https://example.com")!, browserBundleID: "com.brave.Browser"))
+        #expect(!launcher.isRunning(browser))
+        fake.start("com.brave.Browser")
+        #expect(launcher.isRunning(browser))
+        let youtube = LaunchItem(id: "youtube", title: "YouTube", kind: .internalDestination(.youtube))
+        let settings = LaunchItem(id: "settings", title: "Settings", kind: .internalDestination(.settings))
+        #expect(!launcher.isRunning(youtube))
+        #expect(!launcher.isRunning(settings))
+    }
+
+    @Test func quitTerminatesAndForgetsThePid() async throws {
+        let launcher = AppLauncher(workspace: fake.workspace)
+        try await launcher.launch(Self.plex)
+        let app = try #require(fake.running["tv.plex.htpc"]?.first)
+        #expect(launcher.launchedPIDs == [app.processIdentifier])
+        var returns = 0
+        launcher.onReturnToLauncher = { returns += 1 }
+        var trackedWhenQuitting: Bool?
+        app.onTerminate = { trackedWhenQuitting = launcher.launchedPIDs.contains(app.processIdentifier) }
+        fake.events = []
+
+        await launcher.quit(Self.plex)
+
+        #expect(trackedWhenQuitting == false)
+        #expect(fake.events == ["terminate 100001"])
+        #expect(app.isTerminated)
+        #expect(launcher.launchedPIDs.isEmpty)
+        #expect(!launcher.isRunning(Self.plex))
+        #expect(fake.sleeps.isEmpty)
+        // The quit notification arrives: no return to the launcher, even after the settle delay.
+        launcher.applicationDidTerminate(pid: app.processIdentifier)
+        try await Task.sleep(for: AppLauncher.quitSettleDelay + .milliseconds(300))
+        #expect(returns == 0)
+    }
+
+    @Test func quitForceQuitsAfterFiveSeconds() async {
+        let app = fake.start("tv.plex.htpc")
+        app.quitsWhenAsked = false
+        let launcher = AppLauncher(workspace: fake.workspace)
+        await launcher.quit(Self.plex)
+        #expect(fake.events == ["terminate 100001", "forceTerminate 100001"])
+        #expect(fake.slept == .seconds(5))
+        #expect(app.isTerminated)
+    }
+
+    @Test func quitClearsThePlexHotplugMark() async throws {
+        fake.start("tv.plex.htpc")
+        let launcher = AppLauncher(workspace: fake.workspace)
+        launcher.noteDisplayChange(frontmostBundleID: AppLauncherRestartTests.mmtvl)
+        #expect(launcher.willRestart(Self.plex))
+        await launcher.quit(Self.plex)
+        #expect(launcher.restartOnNextOpen.isEmpty)
+        #expect(!launcher.willRestart(Self.plex))
+        // Restart = quit, then open: a fresh launch, not a second quit.
+        fake.events = []
+        try await launcher.launch(Self.plex)
+        #expect(fake.events == ["open tv.plex.htpc 100002"])
+    }
+
+    /// QA minor: a Select on the tile while the quit waits opens nothing (the old process is on its way out and its
+    /// death would send the user home); after the quit the tile opens a fresh process.
+    @Test func selectDuringAQuitDoesntOpenTheOldProcess() async throws {
+        let old = fake.start("tv.plex.htpc")
+        old.quitsWhenAsked = false
+        let base = fake.workspace
+        var launcher: AppLauncher?
+        var restartingDuringQuit: Set<String>?
+        // The quit's first poll: the Select arrives while the old Plex is still running.
+        let workspace = LauncherWorkspace(appURL: base.appURL, runningApps: base.runningApps,
+                                          openApplication: base.openApplication) { duration in
+            await base.sleep(duration)
+            guard let launcher, restartingDuringQuit == nil else { return }
+            restartingDuringQuit = launcher.restarting
+            try? await launcher.launch(Self.plex)
+        }
+        let quitting = AppLauncher(workspace: workspace)
+        launcher = quitting
+        await quitting.quit(Self.plex)
+
+        #expect(restartingDuringQuit == ["tv.plex.htpc"])
+        #expect(fake.events == ["terminate 100001", "forceTerminate 100001"])
+        #expect(!quitting.launchedPIDs.contains(old.processIdentifier))
+        #expect(quitting.restarting.isEmpty)
+        fake.events = []
+        try await quitting.launch(Self.plex)
+        #expect(fake.events == ["open tv.plex.htpc 100002"])
+    }
+
+    /// QA minor: a process that ignores the force quit too: the quit gives up after 5 + 1 s and returns.
+    @Test func quitOfAStuckAppGivesUpAfterSixSeconds() async {
+        let app = fake.start("tv.plex.htpc")
+        app.quitsWhenAsked = false
+        app.ignoresForceQuit = true
+        let launcher = AppLauncher(workspace: fake.workspace)
+        await launcher.quit(Self.plex)
+        #expect(fake.events == ["terminate 100001", "forceTerminate 100001"])
+        #expect(fake.slept == .seconds(6))
+        #expect(!app.isTerminated)
+        #expect(launcher.restarting.isEmpty)
+        #expect(launcher.launchedPIDs.isEmpty)
+    }
+
+    @Test func quitOfAStoppedAppDoesNothing() async {
+        let launcher = AppLauncher(workspace: fake.workspace)
+        await launcher.quit(Self.plex)
+        await launcher.quit(LaunchItem(id: "settings", title: "Settings", kind: .internalDestination(.settings)))
+        #expect(fake.events.isEmpty)
+        #expect(fake.sleeps.isEmpty)
+    }
+}

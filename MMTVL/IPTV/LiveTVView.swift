@@ -33,7 +33,7 @@ struct LiveTVRootView: View {
                             .transition(.opacity)
                     }
                     if let menu = model.menu {
-                        LiveMenuView(menu: menu)
+                        LiveMenuView(menu: menu, isSubmenu: model.isSubmenu)
                             .transition(.opacity)
                     }
                     // M7l L12: Choose Teams over the guide.
@@ -64,14 +64,15 @@ struct LiveTVRootView: View {
         case .guide:
             if let guide = model.guide {
                 GuideView(model: guide, currentChannel: model.previewChannel, phase: model.previewPlayer.state.phase,
-                          isPicking: model.guidePurpose != .watch, favoriteIDs: Set(model.library.preferences.favorites))
+                          isPicking: model.guidePurpose != .watch, favoriteIDs: Set(model.library.preferences.favorites),
+                          hasChannel: model.canReturnToChannel)
             }
         case .multiview:
             MultiviewOverlayView(model: model)
         case .setupNeeded:
             LiveTVMessageView(title: "Live TV isn't set up",
                               message: "Copy your playlist URL, then open Settings → Live TV → Paste Playlist URL.",
-                              hint: "Select: open Settings · Back: return")
+                              hint: "Select: open Settings · Home: leave Live TV")
         case .loading:
             VStack(spacing: 32) {
                 ProgressView().controlSize(.large)
@@ -80,7 +81,7 @@ struct LiveTVRootView: View {
                     .foregroundStyle(Theme.secondaryText)
             }
         case .unavailable(let message):
-            LiveTVMessageView(title: "Can't load channels", message: message, hint: "Select: try again · Back: return")
+            LiveTVMessageView(title: "Can't load channels", message: message, hint: "Select: try again · Home: leave Live TV")
         }
     }
 }
@@ -135,23 +136,27 @@ private struct PlayerOverlayView: View {
                 errorPanel(error)
             }
             // How far behind live, with the bar: after a seek, then it fades (user choice, 2026-10-06).
-            if showsTimeshift, let timeshift = state.timeshift, !timeshift.isLive {
-                VStack {
-                    HStack {
+            // M7m L15: in a container, so the paused fade animates only this and the bar's panel.
+            ZStack {
+                if showsTimeshift, let timeshift = state.timeshift, !timeshift.isLive {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Text(timeshift.label)
+                                .font(Theme.liveBannerDetailFont.monospacedDigit())
+                                .foregroundStyle(Theme.primaryText)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .glassPanel(in: Capsule(), role: .banner)
+                        }
                         Spacer()
-                        Text(timeshift.label)
-                            .font(Theme.liveBannerDetailFont.monospacedDigit())
-                            .foregroundStyle(Theme.primaryText)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .glassPanel(in: Capsule(), role: .banner)
                     }
-                    Spacer()
+                    .padding(.top, 60)
+                    .padding(.horizontal, Theme.sideMargin)
+                    .transition(.opacity)
                 }
-                .padding(.top, 60)
-                .padding(.horizontal, Theme.sideMargin)
-                .transition(.opacity)
             }
+            .animation(.easeInOut(duration: 0.25), value: showsTimeshift)
             VStack(spacing: 0) {
                 Spacer()
                 VStack(alignment: .leading, spacing: 24) {
@@ -172,6 +177,7 @@ private struct PlayerOverlayView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Theme.liveOverlayGradient)
                 .opacity(model.banner != nil || showsTimeshift ? 1 : 0)
+                .animation(.easeInOut(duration: 0.25), value: showsTimeshift)
             }
         }
         .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height)
@@ -180,9 +186,10 @@ private struct PlayerOverlayView: View {
         .animation(.easeInOut(duration: 0.25), value: state.phase)
     }
 
-    /// The bar and the behind-live badge: 5 s after a seek, and while paused.
+    /// The bar and the behind-live badge: 5 s after a seek, and while paused until 15 s after the last press
+    /// (M7m L15, burn-in).
     private var showsTimeshift: Bool {
-        model.showsTimeshiftBar || state.phase == .paused
+        model.showsTimeshiftBar || (state.phase == .paused && model.pausedOverlayVisible)
     }
 
     private func errorPanel(_ message: String) -> some View {

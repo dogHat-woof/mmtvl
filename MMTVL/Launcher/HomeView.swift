@@ -23,6 +23,8 @@ struct HomeView: View {
     var versionLabel: String? = nil
     /// M7f L8: the lowest Siri Remote battery percent, right of the clock; nil = hidden.
     var remoteBatteryLevel: Int? = nil
+    /// M7m L8: the tile being moved (lifted and wiggling, with a hint at the bottom); nil = no move.
+    var movingTileID: LaunchItem.ID? = nil
     /// Bumped when MMTVL comes back; the dock slides up.
     var entryGeneration = 0
     @State private var isEntering = false
@@ -116,6 +118,9 @@ struct HomeView: View {
             .padding(.horizontal, Theme.sideMargin)
             .opacity(isLeaving ? 0 : 1)
             .zIndex(1)
+
+            moveHint
+                .zIndex(1)
         }
         .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height, alignment: .topLeading)
         // L3: pictures dropped in the folder show up when the home screen appears.
@@ -163,6 +168,28 @@ struct HomeView: View {
             .glassPanel(in: Capsule())
     }
 
+    /// M7m L8: while a tile moves, how to move it, centered at the bottom edge (over the peeking row, under the
+    /// focused row's titles). Fades with the menus.
+    private var moveHint: some View {
+        ZStack {
+            if movingTileID != nil {
+                Text("Arrows: move · Select: done")
+                    .font(Theme.homeMoveHintFont)
+                    .foregroundStyle(Theme.primaryText)
+                    .padding(.horizontal, Theme.homeMoveHintPadding.width)
+                    .padding(.vertical, Theme.homeMoveHintPadding.height)
+                    .glassPanel(in: Capsule(), role: .banner)
+                    .transition(.opacity)
+            }
+        }
+        .padding(.bottom, Theme.homeMoveHintBottom)
+        // The canvas, not the ZStack: the rows below the screen make that taller.
+        .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height, alignment: .bottom)
+        .opacity(isLeaving ? 0 : 1)
+        .allowsHitTesting(false)
+        .animation(Theme.menuFadeAnimation, value: movingTileID != nil)
+    }
+
     /// Item index ranges per row, matching the focus model's chunking.
     private var rowRanges: [Range<Int>] {
         var start = 0
@@ -182,7 +209,8 @@ struct HomeView: View {
             isFocused: focus.index == index && shelfIndex == nil,
             isInstalled: launcher.isInstalled(item),
             shakeTrigger: shakeTriggers[item.id, default: 0],
-            focusMotion: focusMotion
+            focusMotion: focusMotion,
+            isMoving: item.id == movingTileID
         )
         .onHover { hovering in
             if hovering { onHover(index) }

@@ -165,6 +165,19 @@ enum Theme {
     static let previewRevealAnimation = Animation.easeInOut(duration: 0.5)
     /// L16: no remote input for this long stops the preview.
     static let previewIdleTimeout: Duration = .seconds(600)
+    /// M7m L18 (D51, burn-in): a still screen (home, Settings, the PIN screen, the power menu, Live TV with nothing
+    /// moving) dims this long after the later of the last press and the screen becoming still...
+    static let stillScreenDimAfter: Duration = .seconds(300)
+    /// ...and asks for macOS's screen saver this long after dimming.
+    static let screenSaverAfterDim: Duration = .seconds(300)
+    /// M7m L20: how long `ScreenSaver.end()` waits for the declared user activity before terminating the engine.
+    static let screenSaverEndCheckDelay: Duration = .seconds(1)
+    /// M7m L19, L20: after a screen saver that no press ended stops (macOS ended it on a touch), the next press within
+    /// this time is still swallowed: it's the press that woke the screen.
+    static let screenSaverWakeGrace: Duration = .seconds(1)
+    /// The dimmer: black at this opacity over everything, faded in and out with `idleDimAnimation`.
+    static let idleDimOpacity: Double = 0.8
+    static let idleDimAnimation = Animation.easeInOut(duration: 2)
     static let shelfCardSize = CGSize(width: 352, height: 198)
     static let shelfCardSpacing: CGFloat = 40
     static let shelfCardCornerRadius: CGFloat = 12
@@ -251,6 +264,18 @@ enum Theme {
     static let focusShadowOpacity: Double = 0.5
     static let unavailableOpacity: Double = 0.4
     static let shakeDistance: CGFloat = 12
+
+    // MARK: Move mode (M7m L8)
+
+    /// The moving tile lifts this much above a focused one (1.1 × 1.06 ≈ 1.17).
+    static let tileMoveLiftScale: CGFloat = 1.06
+    /// Its wiggle: ± this many degrees, one full back-and-forth per `tileJiggleDuration`; none with Reduce Motion.
+    static let tileJiggleAngle: Double = 1.5
+    static let tileJiggleDuration: TimeInterval = 0.25
+    /// "Arrows: move · Select: done", a glass capsule centered at the canvas's bottom edge, below row 0's titles.
+    static let homeMoveHintFont = Font.system(size: 22, weight: .medium)
+    static let homeMoveHintPadding = CGSize(width: 24, height: 8)
+    static let homeMoveHintBottom: CGFloat = 10
 
     // MARK: Parallax (M7 L1)
 
@@ -394,13 +419,28 @@ enum Theme {
     static let guideUpcomingTimeWidth: CGFloat = 220
     /// M7l 8c: the symbols in My Teams' Choose Teams and upcoming rows.
     static let guideRowSymbolSize: CGFloat = 26
+    /// M7m L16 (D51, burn-in): no input in Live TV for this long closes its menus and search and takes the guide
+    /// back to the playing channel (the picker back to Multiview); nothing happens while nothing plays.
+    static let guideIdleReturn: Duration = .seconds(180)
 
     // MARK: Multiview (M6)
 
     static let multiviewGap = MultiviewLayout.gap
     static let multiviewDiagramSize = CGSize(width: 96, height: 54)
+    /// The bold outline on the focused window, shown for `multiviewHighlightDuration` after each press (M7m L12).
     static let multiviewFocusBorder = Color.white
     static let multiviewFocusBorderWidth: CGFloat = 6
+    /// M7m L12 (D51, burn-in): the bold outline (and the empty and failed windows' text, L14) fades this long after
+    /// the last Multiview press, and when Multiview opens.
+    static let multiviewHighlightDuration: Duration = .seconds(5)
+    static let multiviewHighlightFade = Animation.easeOut(duration: 0.6)
+    /// M7m L12, L13: the thin, faint outline that always marks the window with sound once the bold one is gone
+    /// (replaces M6's speaker badge).
+    static let multiviewRestingBorder = Color.white.opacity(0.4)
+    static let multiviewRestingBorderWidth: CGFloat = 2
+    /// M7m L15: while paused, the timeshift bar, the behind-live badge and Multiview's pause symbol hide this long
+    /// after the last press.
+    static let pausedOverlayDuration: Duration = .seconds(15)
     static let multiviewEmptySymbolSize: CGFloat = 48
     static let multiviewChipFont = Font.system(size: 26, weight: .semibold)
     static let multiviewChipDetailFont = Font.system(size: 20)

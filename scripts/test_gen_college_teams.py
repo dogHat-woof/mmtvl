@@ -78,14 +78,16 @@ class ResponseSizeTests(unittest.TestCase):
 
 def good_entry(**changes):
     item = {"id": "ncaaf.michigan-wolverines", "league": "ncaaf", "name": "Michigan Wolverines",
-            "school": "Michigan", "nickname": "Wolverines", "conference": "Big Ten", "aliases": ["Michigan"]}
+            "school": "Michigan", "nickname": "Wolverines", "conference": "Big Ten", "aliases": ["Michigan"],
+            "abbreviations": []}
     item.update(changes)
     return item
 
 
 class ValidationTests(unittest.TestCase):
     def test_good_entry_passes(self):
-        gen.validate([good_entry(), good_entry(school="Hawaiʻi", aliases=["Texas A&M", "St. John's"])])
+        gen.validate([good_entry(), good_entry(school="Hawaiʻi", aliases=["Texas A&M", "St. John's"],
+                                               abbreviations=["MICH", "TA&M"])])
 
     def test_bad_values_fail(self):
         for changes in [
@@ -94,6 +96,8 @@ class ValidationTests(unittest.TestCase):
             {"name": "Michigan ‮Wolverines"},  # right-to-left override
             {"school": "Mich\u0007igan"},  # control
             {"aliases": "Michigan"}, {"aliases": ["Michigan", None]}, {"aliases": ["Mich igan"]},
+            {"abbreviations": "MICH"}, {"abbreviations": ["MICH", None]}, {"abbreviations": [" MICH"]},
+            {"abbreviations": None},
         ]:
             with self.subTest(changes=changes), self.assertRaises(gen.CatalogError):
                 gen.validate([good_entry(**changes)])
@@ -134,6 +138,107 @@ class BaseballTests(unittest.TestCase):
     def test_maac_title(self):
         self.assertEqual(gen.conference_title("Metro Conference"), "MAAC")
         self.assertEqual(gen.conference_title("Big Ten Conference"), "Big Ten")
+
+
+def team(location, nickname="Eagles", short=None, abbreviation=None):
+    """An ESPN team object as the script reads it."""
+    item = {"location": location, "shortDisplayName": short or location, "displayName": f"{location} {nickname}",
+            "name": nickname}
+    if abbreviation is not None:
+        item["abbreviation"] = abbreviation
+    return item
+
+
+class AliasTests(unittest.TestCase):
+    def test_ul_monroe(self):
+        team = {"location": "UL Monroe", "shortDisplayName": "UL Monroe", "abbreviation": "ULM",
+                "displayName": "UL Monroe Warhawks", "name": "Warhawks"}
+        names = gen.aliases(team)
+        self.assertIn("Louisiana-Monroe", names)
+        self.assertNotIn("ULM", names)  # M7m L29: initials are abbreviations
+        self.assertEqual(gen.abbreviations(team), ["ULM"])  # ESPN's and the hand table's, once
+        self.assertEqual(len(names), len({gen.normalized(n) for n in names}))  # each once
+
+    def test_generated_variants(self):
+        for location, expected in [
+            ("UT Martin", "Tennessee-Martin"),
+            ("UT Arlington", "Texas-Arlington"),
+            ("UNC Wilmington", "North Carolina-Wilmington"),
+            ("UC Davis", "California-Davis"),
+            ("UMass Lowell", "Massachusetts-Lowell"),
+            ("SIU Edwardsville", "Southern Illinois-Edwardsville"),
+            ("St. John's", "Saint John's"),
+            ("Saint Mary's", "St. Mary's"),
+            ("Cal State Fullerton", "CSU Fullerton"),
+            ("Cal State Fullerton", "Cal St. Fullerton"),
+            ("Miami (OH)", "Miami (Ohio)"),
+            ("Ball State", "Ball St."),
+            ("Ball St", "Ball State"),
+        ]:
+            with self.subTest(location=location):
+                self.assertIn(expected, gen.aliases(team(location)))
+        self.assertNotIn("Texas-Martin", gen.aliases(team("UT Martin")))
+
+    def test_hand_aliases_and_their_variants(self):
+        self.assertIn("Brigham Young", gen.aliases(team("BYU", "Cougars")))
+        self.assertIn("Hawaii", gen.aliases(team("Hawai'i", "Rainbow Warriors")))
+        self.assertIn("Appalachian St.", gen.aliases(team("App State", "Mountaineers")))  # a hand alias's variant
+        self.assertIn("Louisiana-Lafayette", gen.aliases(team("Louisiana", "Ragin' Cajuns")))
+
+    def test_abbreviation(self):
+        self.assertEqual(gen.abbreviations(team("Texas A&M", "Aggies", abbreviation="TA&M")), ["TA&M"])
+        self.assertNotIn("TA&M", gen.aliases(team("Texas A&M", "Aggies", abbreviation="TA&M")))
+        self.assertEqual(gen.abbreviations(team("Western Kentucky", "Hilltoppers", abbreviation="WKU")), ["WKU"])
+        for abbreviation in ["UL M", "ABCDEFG", "X", "", "U.M.", None, 12]:
+            with self.subTest(abbreviation=abbreviation):
+                somewhere = team("Somewhere", abbreviation=abbreviation)
+                self.assertEqual(gen.aliases(somewhere), ["Somewhere"])
+                self.assertEqual(gen.abbreviations(somewhere), [])
+
+    def test_an_abbreviation_that_is_a_school_form_stays_an_alias(self):
+        byu = team("BYU", "Cougars", abbreviation="BYU")
+        self.assertIn("BYU", gen.aliases(byu))  # its location: always matched
+        self.assertEqual(gen.abbreviations(byu), [])  # not again
+        self.assertEqual(gen.abbreviations(team("UCF", "Knights", abbreviation="ucf")), [])  # after normalizing
+        # The name itself isn't one either.
+        self.assertEqual(gen.abbreviations(team("Navy", "Midshipmen", short="NAVY MIDSHIPMEN",
+                                                abbreviation="NAVY")), [])
+
+    def test_hand_abbreviations(self):
+        self.assertEqual(gen.abbreviations(team("UT Rio Grande Valley", "Vaqueros", abbreviation="RGV")),
+                         ["RGV", "UTRGV"])
+        self.assertEqual(gen.abbreviations(team("South Florida", "Bulls", abbreviation="USF")), ["USF"])
+        self.assertNotIn("USF", gen.aliases(team("South Florida", "Bulls", abbreviation="USF")))
+        self.assertEqual(gen.abbreviations(team("Long Island University", "Sharks", short="Long Island")), ["LIU"])
+        # Moved out of the hand aliases.
+        hand_aliases = {gen.normalized(name) for names in gen.HAND_ALIASES.values() for name in names}
+        for names in gen.HAND_ABBREVIATIONS.values():
+            for name in names:
+                with self.subTest(name=name):
+                    self.assertNotIn(gen.normalized(name), hand_aliases)
+
+    def test_no_alias_is_the_name(self):
+        self.assertEqual(gen.aliases(team("Michigan", "Wolverines", short="Michigan Wolverines")), ["Michigan"])
+
+
+class SharedAliasTests(unittest.TestCase):
+    def test_a_shared_alias_is_kept_on_both_and_reported(self):
+        a = good_entry(id="ncaaf.a-cougars", name="A Cougars", school="A", aliases=["Cougar U", "Only A"])
+        b = good_entry(id="ncaaf.b-cougars", name="B Cougars", school="B", aliases=["Cougar U"])
+        c = good_entry(id="ncaam.c-cougars", league="ncaam", name="C Cougars", school="C", aliases=["Cougar U"])
+        shared, clashes = gen.drop_ambiguous([a, b, c])
+        self.assertEqual(a["aliases"], ["Cougar U", "Only A"])
+        self.assertEqual(b["aliases"], ["Cougar U"])
+        self.assertEqual(c["aliases"], ["Cougar U"])
+        self.assertEqual(shared, [("ncaaf", "cougar u", ["ncaaf.a-cougars", "ncaaf.b-cougars"])])  # per league
+        self.assertEqual(clashes, [])
+
+    def test_an_alias_another_team_has_as_its_school_is_reported(self):
+        a = good_entry(id="ncaaf.a", name="A Owls", school="A", aliases=["B"])
+        b = good_entry(id="ncaaf.b", name="B Owls", school="B", aliases=[])
+        shared, _ = gen.drop_ambiguous([a, b])
+        self.assertEqual(shared, [("ncaaf", "b", ["ncaaf.a", "ncaaf.b"])])
+        self.assertEqual(a["aliases"], ["B"])
 
 
 if __name__ == "__main__":

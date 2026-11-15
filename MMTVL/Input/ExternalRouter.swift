@@ -14,6 +14,8 @@ struct ExternalRouter {
         case unmapped
         /// Another app is in front and MMTVL may not post events (Accessibility).
         case needsAccessibility
+        /// M7m L19, L20: the screen saver showed; the command ended it and went nowhere.
+        case endedScreenSaver
     }
 
     /// MMTVL is active, or its window shows and was brought forward (M7c L3, `repairForeground`).
@@ -24,10 +26,15 @@ struct ExternalRouter {
     var canPostEvents: () -> Bool
     /// `SyntheticInput.postKey` / `postMediaKey`.
     var postExternal: (ExternalKey) -> Void
+    /// M7m L19, L20: `AppRouter.endScreenSaverIfShowing(by:)`: true when the screen saver showed and the command ended
+    /// it, so it's swallowed (never a synthetic key for ScreenSaverEngine or the app behind it).
+    var endsScreenSaver: (RemoteCommand) -> Bool = { _ in false }
 
-    /// L3's last three rungs: MMTVL in front → MMTVL; Home → global Home; else the command's key for the app in front.
+    /// M7m: a showing screen saver takes the command first. Then L3's last three rungs: MMTVL in front → MMTVL;
+    /// Home → global Home; else the command's key for the app in front.
     @discardableResult
     func route(_ command: RemoteCommand, isRepeat: Bool = false) -> Outcome {
+        if endsScreenSaver(command) { return .endedScreenSaver }
         if isLauncherInFront() {
             dispatch(command, false, isRepeat)
             return .launcher

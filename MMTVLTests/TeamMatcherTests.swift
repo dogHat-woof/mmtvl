@@ -31,10 +31,11 @@ struct TeamMatcherTests {
         get throws { ChannelList.make(from: try M3UParser.parse(Self.playlist)) }
     }
 
-    private func programme(_ title: String, subtitle: String? = nil, category: String? = nil) -> Programme {
+    private func programme(_ title: String, subtitle: String? = nil, category: String? = nil,
+                           summary: String? = nil) -> Programme {
         let start = Date(timeIntervalSince1970: 1_791_200_000)
         return Programme(channelID: "espn.us", start: start, stop: start + 3600, title: title, subtitle: subtitle,
-                         category: category)
+                         summary: summary, category: category)
     }
 
     // MARK: Catalog
@@ -397,9 +398,9 @@ struct TeamMatcherTests {
     // MARK: College (M7l L10), with fixture teams
 
     private static func college(_ league: TeamLeague, _ slug: String, _ name: String, school: String, nickname: String,
-                                conference: String = "Test", aliases: [String] = []) -> Team {
+                                conference: String = "Test", aliases: [String] = [], abbreviations: [String] = []) -> Team {
         Team(id: "\(league.rawValue).\(slug)", league: league, name: name, school: school, nickname: nickname,
-             conference: conference, aliases: aliases)
+             conference: conference, aliases: aliases, abbreviations: abbreviations)
     }
 
     static let collegeFixture: [Team] = [
@@ -457,6 +458,146 @@ struct TeamMatcherTests {
         #expect(TeamMatcher.collegeSides(of: programme("College Football: Georgia at Texas")) == [" georgia ", " texas "])
         #expect(TeamMatcher.collegeSides(of: programme("Live: College Basketball")).isEmpty)
         #expect(TeamMatcher.collegeSides(of: programme("College Football", subtitle: "TBA")).isEmpty)
+    }
+
+    /// M7m L25: the guide's own summaries (2026-11-10), for games with no subtitle.
+    @Test func collegeSidesFromTheSummary() {
+        func sides(_ summary: String, subtitle: String? = nil) -> [String] {
+            TeamMatcher.collegeSides(of: programme("Live: College Basketball", subtitle: subtitle, summary: summary))
+        }
+        #expect(sides("The No. 1 Florida Gators visit the Florida State Seminoles for an NCAA Division I game in Florida. "
+                      + "The Gators lead the series.") == [" florida gators ", " florida state seminoles "])
+        #expect(sides("The No. 6 Michigan State Spartans face the No. 2 Duke Blue Devils for an NCAA Division I game.")
+                == [" michigan state spartans ", " duke blue devils "])
+        #expect(sides("The Ohio Bobcats visit the Miami (OH) RedHawks for a MAC game.")
+                == [" ohio bobcats ", " miami oh redhawks "])
+        #expect(sides("The Nebraska Cornhuskers (5-3) visit the Illinois Fighting Illini (5-3) at Memorial Stadium.")
+                == [" nebraska cornhuskers ", " illinois fighting illini "])
+        #expect(sides("The Louisiana-Monroe Warhawks host the Louisiana Ragin' Cajuns in Sun Belt play.")
+                == [" louisiana monroe warhawks ", " louisiana ragin cajuns "])
+        #expect(sides("The Pittsburgh Panthers meet the Florida State Seminoles.")
+                == [" pittsburgh panthers ", " florida state seminoles "])
+        #expect(sides("The Colorado Buffaloes clash with the No. 17 Houston Cougars in Big 12 play.")
+                == [" colorado buffaloes ", " houston cougars "])
+        // "St." doesn't end a side.
+        #expect(sides("The Villanova Wildcats host the St. John's Red Storm.") == [" villanova wildcats ", " st john s red storm "])
+        // An initial doesn't end a side either.
+        #expect(sides("The Duke Blue Devils host the Stephen F. Austin Lumberjacks for a non-conference game.")
+                == [" duke blue devils ", " stephen f austin lumberjacks "])
+        #expect(TeamMatcher.teams(in: programme("College Basketball", summary: "The Duke Blue Devils host the "
+                                                + "Stephen F. Austin Lumberjacks for a non-conference game."),
+                                  among: TeamMatcher.Index.bundled(.off).byID["ncaam.stephen-f-austin-lumberjacks"].map { [$0] } ?? [])
+                .map(\.id) == ["ncaam.stephen-f-austin-lumberjacks"])
+        // No teams, or no verb the lead knows.
+        #expect(sides("From Breslin Center in East Lansing, Mich.").isEmpty)
+        #expect(sides("The Huskies (5-3, 2-3 Big Ten) try to solve the Nittany Lions (4-4, 1-4).").isEmpty)
+        #expect(sides("Men's college basketball action.").isEmpty)
+        // A subtitle still wins over the summary.
+        #expect(sides("The No. 1 Florida Gators visit the Florida State Seminoles for an NCAA Division I game.",
+                      subtitle: "Duke at Kansas") == [" duke ", " kansas "])
+    }
+
+    /// QA and the security review: only the summary's lead is read (UTF-16 units, whitespace collapsed), so a long or
+    /// hostile description can't backtrack for seconds.
+    @Test func aLongHostileSummaryIsCheap() {
+        let spaces = "the" + String(repeating: "     visits     the", count: 5) + String(repeating: " ", count: 300) + "x"
+        let hostile = [
+            "The A" + String(repeating: " visits the (1", count: 1_500),   // ~21,000 characters
+            spaces,
+            spaces.replacingOccurrences(of: " ", with: "\n"),
+            "the " + String(repeating: "a visits the ", count: 30) + "b" + String(repeating: "\u{301}", count: 200_000),
+        ]
+        for (n, summary) in hostile.enumerated() {
+            let start = Date()
+            #expect(TeamMatcher.summarySides(of: summary).isEmpty, "\(n)")
+            #expect(Date().timeIntervalSince(start) < 0.5, "\(n)")
+        }
+        // Collapsed whitespace still reads a lead split over lines.
+        #expect(TeamMatcher.summarySides(of: "The Duke Blue Devils host\n  the Kansas Jayhawks for a game.")
+                == [" duke blue devils ", " kansas jayhawks "])
+    }
+
+    /// The security review for build 34 (M1): the old regex backtracked on repeated verb phrases within its 400-unit
+    /// cap (~17 ms each, ~27 ms hill-climbed); the scan is linear.
+    @Test func repeatedVerbPhrasesAreCheap() {
+        let attacks = ["#1 x plays the ", "#1 x hosts the ", "no. 1 x plays the ", "(1) x plays the ", "#1 x (1) meets the "]
+        for attack in attacks {
+            let summary = "the " + String(repeating: attack, count: 40)
+            let start = Date()
+            for _ in 0..<10 { _ = TeamMatcher.summarySides(of: summary) }
+            let each = Date().timeIntervalSince(start) / 10
+            #expect(each < 0.005, "\(attack): \(each * 1000) ms")
+        }
+        // As a whole programme, the way `networkChannelIDs` reaches it.
+        let game = programme("Live: College Basketball", category: "Sports",
+                             summary: "the " + String(repeating: "#1 x plays the ", count: 40))
+        // Built on first use (tens of ms in Debug): build it before timing the match.
+        let index = TeamMatcher.Index.bundled(.init(initials: true, nicknames: true))
+        let start = Date()
+        _ = TeamMatcher.teams(in: game, index: index)
+        #expect(Date().timeIntervalSince(start) < 0.005)
+    }
+
+    /// M1: random leads from the pieces the lead reads, each bounded.
+    @Test func fuzzedLeadsAreCheap() {
+        let pieces = ["the", "#1", "no. 1", "(1", ")", "x", "st.", ",", ".", "visits", "faces", "meets", "hosts",
+                      "clashes with", "takes on", "plays", "battles", "squares off against", "for", "at", "in", "on",
+                      "to", "The", "(1-2)", "No.1"]
+        var generator = SplitMix(seed: 34)
+        var worst: TimeInterval = 0
+        for _ in 0..<10_000 {
+            var text = "the "
+            while text.utf16.count < TeamMatcher.summaryLeadLength {
+                text += pieces[Int(generator.next() % UInt64(pieces.count))] + (generator.next() % 4 == 0 ? "" : " ")
+            }
+            let start = Date()
+            _ = TeamMatcher.summarySides(of: text)
+            worst = max(worst, Date().timeIntervalSince(start))
+        }
+        #expect(worst < 0.005, "worst \(worst * 1000) ms")
+    }
+
+    /// The scan reads what the regex read: records, ranks, the end words and the "." exceptions.
+    @Test func theLeadScanKeepsTheRegexsReadings() {
+        func sides(_ summary: String) -> [String] { TeamMatcher.summarySides(of: summary) }
+        #expect(sides("the #3 Duke Blue Devils (5-0) host the (12) Kansas Jayhawks (4-1), in a rematch.")
+                == [" duke blue devils ", " kansas jayhawks "])
+        #expect(sides("THE DUKE BLUE DEVILS VISIT THE KANSAS JAYHAWKS TONIGHT FOR A GAME.")
+                == [" duke blue devils ", " kansas jayhawks tonight "])
+        #expect(sides("The Texas Longhorns take on the Mt. Olive Trojans; it's early.") == [" texas longhorns ", " mt olive trojans "])
+        #expect(sides("The Texas Longhorns squares off against the No. 9 Ohio State Buckeyes at noon.")
+                == [" texas longhorns ", " ohio state buckeyes "])
+        #expect(sides("The Duke Blue Devils clash with the UNC Tar Heels on-campus.") == [" duke blue devils ", " unc tar heels "])
+        // A verb inside a word isn't one; the side runs to a real one.
+        #expect(sides("The Visitors meet the Hosts.") == [" visitors ", " hosts "])
+        // Not a lead.
+        #expect(sides("Duke hosts the Kansas Jayhawks.").isEmpty)
+        #expect(sides("The Duke Blue Devils host Kansas.").isEmpty)
+        #expect(sides("The Duke Blue Devils host the Kansas Jayhawks").isEmpty)
+        #expect(sides("The plays the x.").isEmpty)
+    }
+
+    @Test func aGatorsGameNamedOnlyInTheSummaryMatches() throws {
+        let index = TeamMatcher.Index.bundled(.off)
+        let gators = try #require(index.byID["ncaam.florida-gators"])
+        let seminoles = try #require(index.byID["ncaam.florida-state-seminoles"])
+        let bulls = try #require(index.byID["ncaam.south-florida-bulls"])
+        let duke = try #require(index.byID["ncaam.duke-blue-devils"])
+        let game = programme("Live: College Basketball", category: "Sports",
+                             summary: "The No. 1 Florida Gators visit the Florida State Seminoles for an NCAA Division I "
+                                + "game in Florida. The Gators look to stay unbeaten.")
+        #expect(Set(TeamMatcher.teams(in: game, among: [gators, seminoles]).map(\.id))
+                == ["ncaam.florida-gators", "ncaam.florida-state-seminoles"])
+        #expect(TeamMatcher.teams(in: game, among: [gators]).map(\.id) == ["ncaam.florida-gators"])
+        // Exact sides only: South Florida isn't "Florida State Seminoles" or "Florida Gators".
+        #expect(TeamMatcher.teams(in: game, among: [bulls]).isEmpty)
+        // Not a college programme: the summary isn't read for sides.
+        let movie = programme("The Secret Life of Pets", category: "Movie",
+                              summary: "Max's life is turned upside down when his owner adopts Duke, a big, unruly dog.")
+        #expect(TeamMatcher.teams(in: movie, among: [duke]).isEmpty)
+        let show = programme("SportsCenter", category: "Sports",
+                             summary: "The Duke Blue Devils face the Kansas Jayhawks for a preview.")
+        #expect(TeamMatcher.teams(in: show, among: [duke]).isEmpty)
     }
 
     @Test func collegeProgrammesMatchTheirSportsSchoolsExactly() {
@@ -554,6 +695,433 @@ struct TeamMatcherTests {
         let texas = try #require(Self.index.byID["ncaam.texas-longhorns"])
         #expect(TeamMatcher.teams(in: now["id:espn.us"]!, among: [texas], index: Self.index) == [texas])
     }
+
+    // MARK: Name variants (M7m L27) and the nickname fallback (L28)
+
+    /// Football teams for L27–L28: four Cougars (two in the Big 12), the Bearcats, Miners, Rainbow Warriors, two
+    /// Mountaineers and two Huskies.
+    static let variantFixture: [Team] = [
+        college(.ncaaf, "houston-cougars", "Houston Cougars", school: "Houston", nickname: "Cougars", conference: "Big 12",
+                aliases: ["Houston", "HOU"]),
+        college(.ncaaf, "byu-cougars", "BYU Cougars", school: "BYU", nickname: "Cougars", conference: "Big 12",
+                aliases: ["BYU", "Brigham Young"]),
+        college(.ncaaf, "washington-state-cougars", "Washington State Cougars", school: "Washington State",
+                nickname: "Cougars", conference: "Pac-12", aliases: ["Washington St", "Washington State", "WSU"]),
+        college(.ncaaf, "cincinnati-bearcats", "Cincinnati Bearcats", school: "Cincinnati", nickname: "Bearcats",
+                conference: "Big 12", aliases: ["Cincinnati", "CIN"]),
+        college(.ncaaf, "utep-miners", "UTEP Miners", school: "UTEP", nickname: "Miners", conference: "Mountain West",
+                aliases: ["UTEP", "Texas-El Paso"]),
+        college(.ncaaf, "hawaii-rainbow-warriors", "Hawai'i Rainbow Warriors", school: "Hawai'i",
+                nickname: "Rainbow Warriors", conference: "Mountain West", aliases: ["Hawaii", "HAW"]),
+        college(.ncaaf, "app-state-mountaineers", "App State Mountaineers", school: "App State", nickname: "Mountaineers",
+                conference: "Sun Belt", aliases: ["App State", "Appalachian State", "APP"]),
+        college(.ncaaf, "west-virginia-mountaineers", "West Virginia Mountaineers", school: "West Virginia",
+                nickname: "Mountaineers", conference: "Big 12", aliases: ["West Virginia", "WVU"]),
+        college(.ncaaf, "houston-christian-huskies", "Houston Christian Huskies", school: "Houston Christian",
+                nickname: "Huskies", conference: "Southland (FCS)", aliases: ["Houston Christian", "HCU"]),
+        college(.ncaaf, "washington-huskies", "Washington Huskies", school: "Washington", nickname: "Huskies",
+                conference: "Big Ten", aliases: ["Washington", "WASH"]),
+        college(.ncaaf, "uconn-huskies", "UConn Huskies", school: "UConn", nickname: "Huskies",
+                conference: "FBS Independents", aliases: ["UConn", "Connecticut"]),
+        college(.ncaaf, "seattle-cougars", "Seattle Cougars", school: "Seattle", nickname: "Cougars",
+                conference: "Test", aliases: ["Seattle"]),
+        college(.ncaabase, "mercer-bears", "Mercer Bears", school: "Mercer", nickname: "Bears", aliases: ["Mercer", "MER"]),
+        college(.ncaabase, "mercyhurst-lakers", "Mercyhurst Lakers", school: "Mercyhurst", nickname: "Lakers",
+                aliases: ["Mercyhurst", "MER"]),
+    ]
+
+    /// Both of L29's options off (the default), and each on.
+    static let variantIndex = TeamMatcher.Index(teams: TeamCatalog.proTeams + variantFixture)
+    static let nicknameIndex = TeamMatcher.Index(teams: TeamCatalog.proTeams + variantFixture,
+                                                 options: .init(nicknames: true))
+    static let initials = TeamMatchOptions(initials: true)
+    static let nicknames = TeamMatchOptions(nicknames: true)
+
+    /// The ids of `candidates` (default: every fixture team) a football programme is about.
+    private func variantIDs(_ subtitle: String? = nil, summary: String? = nil, title: String = "College Football",
+                            among candidates: [String]? = nil, index: TeamMatcher.Index = Self.variantIndex) -> Set<Team.ID> {
+        let teams = candidates.map { $0.compactMap { index.byID[$0] } } ?? index.teams
+        return Set(TeamMatcher.teams(in: programme(title, subtitle: subtitle, summary: summary), among: teams, index: index)
+            .map(\.id))
+    }
+
+    @Test func schoolFormsWithTheNicknameMatchFromTheBundledCatalog() {
+        let bundled = TeamMatcher.Index.bundled(.off)
+        // The guide's "Louisiana-Monroe Warhawks"; the catalog's school is "UL Monroe".
+        #expect(variantIDs("Louisiana-Monroe Warhawks at Troy Trojans", index: bundled)
+                == ["ncaaf.ul-monroe-warhawks", "ncaaf.troy-trojans"])
+        // A hand alias with the nickname, and an apostrophe left out.
+        #expect(variantIDs("Brigham Young Cougars at Hawaii Rainbow Warriors", index: bundled)
+                == ["ncaaf.byu-cougars", "ncaaf.hawaii-rainbow-warriors"])
+        #expect(variantIDs("Hawai'i Rainbow Warriors at UTEP", index: bundled)
+                == ["ncaaf.hawaii-rainbow-warriors", "ncaaf.utep-miners"])
+        #expect(variantIDs("St Johns Red Storm at Villanova", title: "College Basketball",
+                           among: ["ncaam.st-johns-red-storm"], index: bundled) == ["ncaam.st-johns-red-storm"])
+        // A school alias with the nickname.
+        #expect(variantIDs("Appalachian State Mountaineers at Nowhere") == ["ncaaf.app-state-mountaineers"])
+    }
+
+    @Test func aKeyTeamsShareMatchesEachOfThem() {
+        #expect(variantIDs("MER at Nowhere", title: "College Baseball") == ["ncaabase.mercer-bears", "ncaabase.mercyhurst-lakers"])
+        #expect(variantIDs("MER at Nowhere", title: "College Baseball", among: ["ncaabase.mercyhurst-lakers"])
+                == ["ncaabase.mercyhurst-lakers"])
+        // The bundled catalog's only shared key, an abbreviation (L29: with Match Initials).
+        #expect(variantIDs("MER at Nowhere", title: "College Baseball", index: .bundled(Self.initials))
+                == ["ncaabase.mercer-bears", "ncaabase.mercyhurst-lakers"])
+        #expect(variantIDs("MER at Nowhere", title: "College Baseball", index: .bundled(.off)).isEmpty)
+    }
+
+    // MARK: The options (M7m L29)
+
+    @Test func withBothOptionsOffInitialsAndNicknamesAloneMatchNothing() throws {
+        let bundled = TeamMatcher.Index.bundled(.off)
+        #expect(bundled.options == .off)
+        #expect(TeamMatchOptions() == .off)
+        let ulm = try #require(bundled.byID["ncaaf.ul-monroe-warhawks"])
+        #expect(ulm.abbreviations == ["ULM"])
+        #expect(!ulm.aliases.contains("ULM"))
+        #expect(variantIDs("ULM Warhawks at Troy", among: ["ncaaf.ul-monroe-warhawks"], index: bundled).isEmpty)
+        #expect(variantIDs("ULM at Troy", among: ["ncaaf.ul-monroe-warhawks"], index: bundled).isEmpty)
+        // Spelled-out forms, and ESPN's short names that are initials, always match.
+        #expect(variantIDs("Louisiana-Monroe Warhawks at Troy", among: ["ncaaf.ul-monroe-warhawks"], index: bundled)
+                == ["ncaaf.ul-monroe-warhawks"])
+        #expect(variantIDs("LSU at Alabama", index: bundled) == ["ncaaf.lsu-tigers", "ncaaf.alabama-crimson-tide"])
+        #expect(variantIDs("BYU Cougars at Utah", among: ["ncaaf.byu-cougars"], index: bundled) == ["ncaaf.byu-cougars"])
+        // A nickname alone: nothing, from the fixture's index and the bundled one.
+        let big12 = "The Cougars meet the Bearcats in Big 12 play."
+        #expect(variantIDs(summary: big12).isEmpty)
+        #expect(variantIDs(summary: big12, index: bundled).isEmpty)
+        #expect(variantIDs("Springfield Cougars at Nowhere").isEmpty)
+        #expect(bundled.collegeNicknames.isEmpty && bundled.collegeSchoolWords.isEmpty && bundled.collegeConferences.isEmpty)
+        // "NE @ BUF" is no game entry.
+        let channels = ChannelList.make(from: try M3UParser.parse(Self.variantGames))
+        let shorthand = try #require(channels.first { $0.id == "id:shorthand" })
+        #expect(!TeamMatcher.isGameEntry(shorthand))
+        #expect(TeamMatcher.gameChannelIDs(channels: channels, picked: ["ncaaf.buffalo-bulls"]).isEmpty)
+    }
+
+    @Test func matchInitialsAddsTheAbbreviations() throws {
+        let bundled = TeamMatcher.Index.bundled(Self.initials)
+        #expect(bundled.options == Self.initials)
+        #expect(variantIDs("ULM Warhawks at Troy", among: ["ncaaf.ul-monroe-warhawks"], index: bundled)
+                == ["ncaaf.ul-monroe-warhawks"])
+        #expect(variantIDs("ULM at Troy", among: ["ncaaf.ul-monroe-warhawks"], index: bundled)
+                == ["ncaaf.ul-monroe-warhawks"])
+        // A hand initial too.
+        #expect(variantIDs("UTRGV Vaqueros at Nowhere", title: "College Basketball",
+                           among: ["ncaam.ut-rio-grande-valley-vaqueros"], index: bundled)
+                == ["ncaam.ut-rio-grande-valley-vaqueros"])
+        // Not the nickname fallback.
+        #expect(variantIDs(summary: "The Cougars meet the Bearcats in Big 12 play.", index: bundled).isEmpty)
+        // "NE @ BUF" counts for Buffalo (BUF is also the Bills' and Sabres' shorthand: accepted, L29's description).
+        let channels = ChannelList.make(from: try M3UParser.parse(Self.variantGames))
+        let shorthand = try #require(channels.first { $0.id == "id:shorthand" })
+        #expect(TeamMatcher.isGameEntry(shorthand, index: bundled))
+        #expect(TeamMatcher.gameChannelIDs(channels: channels, picked: ["ncaaf.buffalo-bulls"], index: bundled)
+                == ["id:shorthand"])
+        // A built index: an abbreviation alone and with the nickname.
+        let built = TeamMatcher.Index(teams: [
+            Self.college(.ncaaf, "ul-monroe-warhawks", "UL Monroe Warhawks", school: "UL Monroe", nickname: "Warhawks",
+                         aliases: ["UL Monroe", "Louisiana-Monroe"], abbreviations: ["ULM"]),
+        ], options: Self.initials)
+        #expect(built.collegeNames[.ncaaf]?[" ulm warhawks "]?.map(\.id) == ["ncaaf.ul-monroe-warhawks"])
+        #expect(built.collegeSchools[" ulm "] == [" ul monroe "])
+        let plain = TeamMatcher.Index(teams: built.teams)
+        #expect(plain.collegeNames[.ncaaf]?[" ulm warhawks "] == nil)
+        #expect(plain.collegeSchools[" ulm "] == nil)
+    }
+
+    @Test func eachCombinationOfTheOptionsHasItsIndex() {
+        for initials in [false, true] {
+            for nicknames in [false, true] {
+                let options = TeamMatchOptions(initials: initials, nicknames: nicknames)
+                #expect(TeamMatcher.Index.bundled(options).options == options)
+                #expect(TeamMatcher.Index.bundled(options).teams.count == TeamCatalog.teams.count)
+            }
+        }
+        // Both on: the abbreviations and the fallback.
+        let both = TeamMatcher.Index.bundled(.init(initials: true, nicknames: true))
+        #expect(variantIDs("ULM Warhawks at Troy", among: ["ncaaf.ul-monroe-warhawks"], index: both)
+                == ["ncaaf.ul-monroe-warhawks"])
+        #expect(variantIDs(summary: "The Rainbow Warriors (2-6, 1-4) visit the Miners (1-7, 0-4) for a Mountain West affair.",
+                           index: both) == ["ncaaf.hawaii-rainbow-warriors", "ncaaf.utep-miners"])
+    }
+
+    // MARK: The nickname fallback (L28), with Match Nicknames Alone (L29)
+
+    @Test func aNicknameAloneFallsBackToItsTeams() {
+        func variantIDs(_ subtitle: String? = nil, summary: String? = nil, title: String = "College Football",
+                        among candidates: [String]? = nil) -> Set<Team.ID> {
+            self.variantIDs(subtitle, summary: summary, title: title, among: candidates, index: Self.nicknameIndex)
+        }
+        // The guide's own text (2026-11-10): one team each.
+        #expect(variantIDs(summary: "The Rainbow Warriors (2-6, 1-4) visit the Miners (1-7, 0-4) for a Mountain West affair.")
+                == ["ncaaf.hawaii-rainbow-warriors", "ncaaf.utep-miners"])
+        // The conference narrows the Cougars: not Washington State (Pac-12) or Seattle.
+        let big12 = "The Cougars meet the Bearcats in Big 12 play."
+        #expect(variantIDs(summary: big12) == ["ncaaf.houston-cougars", "ncaaf.byu-cougars", "ncaaf.cincinnati-bearcats"])
+        // Narrowed among every Cougars team, not just the picked ones.
+        #expect(variantIDs(summary: big12, among: ["ncaaf.washington-state-cougars"]).isEmpty)
+        // No conference named: every Cougars team.
+        #expect(variantIDs(summary: "The Cougars meet the Bearcats.")
+                == ["ncaaf.houston-cougars", "ncaaf.byu-cougars", "ncaaf.washington-state-cougars",
+                    "ncaaf.seattle-cougars", "ncaaf.cincinnati-bearcats"])
+        // A "(FCS)" label isn't in the guide's text: "Southland play" names the Southland (FCS).
+        #expect(variantIDs(summary: "The Huskies host the Miners in Southland play.")
+                == ["ncaaf.houston-christian-huskies", "ncaaf.utep-miners"])
+        // A word before the nickname that no school has, and no conference: every Cougars team.
+        #expect(variantIDs("Springfield Cougars at Nowhere")
+                == ["ncaaf.houston-cougars", "ncaaf.byu-cougars", "ncaaf.washington-state-cougars", "ncaaf.seattle-cougars"])
+        #expect(variantIDs("Springfield Cougars at Nowhere", among: ["ncaaf.houston-cougars"]) == ["ncaaf.houston-cougars"])
+        // A school word narrows ("washington", not "state"); before a conference.
+        #expect(variantIDs(summary: "The Washington Cougars meet the Bearcats in Big 12 play.")
+                == ["ncaaf.washington-state-cougars", "ncaaf.cincinnati-bearcats"])
+        #expect(variantIDs(summary: "The State Cougars meet the Bearcats.")
+                == ["ncaaf.houston-cougars", "ncaaf.byu-cougars", "ncaaf.washington-state-cougars",
+                    "ncaaf.seattle-cougars", "ncaaf.cincinnati-bearcats"])
+        // No nickname at the end: nothing.
+        #expect(variantIDs("Springfield at Nowhere").isEmpty)
+        #expect(variantIDs("Cougars Fans at Nowhere").isEmpty)
+        // A pro programme never falls back.
+        #expect(variantIDs("Cougars at Bearcats", title: "NFL Football").isEmpty)
+    }
+
+    @Test func anExactKeyWinsOverTheNickname() {
+        func variantIDs(_ subtitle: String? = nil, summary: String? = nil, among candidates: [String]? = nil) -> Set<Team.ID> {
+            self.variantIDs(subtitle, summary: summary, among: candidates, index: Self.nicknameIndex)
+        }
+        // Houston Christian's own name: not Houston Cougars (another nickname), nor the other Huskies.
+        #expect(variantIDs("Houston Christian Huskies at Nowhere") == ["ncaaf.houston-christian-huskies"])
+        #expect(variantIDs("Houston Christian Huskies at Nowhere", among: ["ncaaf.houston-cougars"]).isEmpty)
+        // A side that matches exactly never falls back, even when its team isn't a candidate.
+        #expect(variantIDs("Houston Christian Huskies at Nowhere", among: ["ncaaf.washington-huskies", "ncaaf.uconn-huskies"])
+                .isEmpty)
+        #expect(variantIDs(summary: "The Houston Cougars meet the West Virginia Mountaineers in Big 12 play.")
+                == ["ncaaf.houston-cougars", "ncaaf.west-virginia-mountaineers"])
+    }
+
+    /// QA's note for 11e: school words come from the school and multi-word aliases, never one-word ones.
+    @Test func onlyMultiWordAliasesNarrow() {
+        func hawks(_ aliases: [String]) -> TeamMatcher.Index {
+            TeamMatcher.Index(teams: [
+                Self.college(.ncaaf, "monmouth-hawks", "Monmouth Hawks", school: "Monmouth", nickname: "Hawks",
+                             aliases: ["Monmouth"]),
+                Self.college(.ncaaf, "hartford-hawks", "Hartford Hawks", school: "Hartford", nickname: "Hawks",
+                             aliases: ["Hartford"] + aliases),
+            ], options: Self.nicknames)
+        }
+        // "Long Hawks" is itself a key with the alias "Long" (L27), so the side is "Long Beach Hawks".
+        let oneWord = hawks(["Long"])
+        #expect(variantIDs("Long Beach Hawks at Nowhere", index: oneWord) == ["ncaaf.monmouth-hawks", "ncaaf.hartford-hawks"])
+        #expect(variantIDs("Long Hawks at Nowhere", index: oneWord) == ["ncaaf.hartford-hawks"])
+        let multiWord = hawks(["Long Island"])
+        #expect(variantIDs("Long Beach Hawks at Nowhere", index: multiWord) == ["ncaaf.hartford-hawks"])
+        #expect(variantIDs("Long Hawks at Nowhere", index: multiWord) == ["ncaaf.hartford-hawks"])
+        // The words themselves: 3 letters or more, no "state", with and without apostrophes.
+        let bundled = TeamMatcher.Index.bundled(Self.nicknames)
+        #expect(bundled.collegeSchoolWords["ncaaf.ul-monroe-warhawks"] == ["monroe", "louisiana"])
+        #expect(bundled.collegeSchoolWords["ncaaf.washington-state-cougars"] == ["washington"])
+        #expect(bundled.collegeSchoolWords["ncaaf.hawaii-rainbow-warriors"] == ["hawai", "hawaii"])
+        #expect(bundled.collegeConferences["ncaaf.ul-monroe-warhawks"] == [" sun belt "])
+    }
+
+    /// M7m L30: Owls in conferences named by ordinary words, the long forms and the initials.
+    @Test func conferencesAreNamedByTheirPhrases() {
+        let conferences = ["Southern (FCS)", "American", "Mid-American", "Northeast (FCS)", "West Coast", "Big Ten",
+                           "Conference USA", "FBS Independents", "Missouri Valley Football (FCS)",
+                           "Pioneer Football League (FCS)", "UAC (FCS)", "CAA"]
+        let index = TeamMatcher.Index(teams: conferences.enumerated().map { n, conference in
+            Self.college(.ncaaf, "owls-\(n)", "Owls \(n) Owls", school: "Owls \(n)", nickname: "Owls", conference: conference)
+        }, options: Self.nicknames)
+        /// The conferences of the Owls teams a summary narrows to (every one when it names none).
+        func named(_ summary: String) -> [String] {
+            let found = TeamMatcher.teams(in: programme("College Football", summary: "The Owls host the Nowhere Pumas \(summary)"),
+                                          index: index)
+            return found.count == conferences.count ? [] : found.compactMap(\.conference)
+        }
+        #expect(named("in Southern Conference play.") == ["Southern (FCS)"])
+        #expect(named("in a SoCon game.") == ["Southern (FCS)"])
+        #expect(named("in American Athletic play.") == ["American"])
+        #expect(named("for an AAC game.") == ["American"])
+        #expect(named("for a MAC game.") == ["Mid-American"])
+        #expect(named("in Mid-American play.") == ["Mid-American"])
+        #expect(named("in an NEC game.") == ["Northeast (FCS)"])
+        #expect(named("in West Coast Conference play.") == ["West Coast"])
+        #expect(named("in B1G play.") == ["Big Ten"])
+        #expect(named("in C-USA play.") == ["Conference USA"])
+        #expect(named("in MVFC play.") == ["Missouri Valley Football (FCS)"])
+        #expect(named("in Missouri Valley Football Conference play.") == ["Missouri Valley Football (FCS)"])
+        #expect(named("in Pioneer League play.") == ["Pioneer Football League (FCS)"])
+        #expect(named("in United Athletic Conference play.") == ["UAC (FCS)"])
+        #expect(named("in a UAC game.") == ["UAC (FCS)"])
+        #expect(named("in Coastal Athletic Association play.") == ["CAA"])
+        #expect(named("in CAA play.") == ["CAA"])
+        // Ordinary words name nothing.
+        #expect(named("with an All-American guard.").isEmpty)
+        #expect(named("after beating Southern Miss.").isEmpty)
+        #expect(named("in the Northeast.").isEmpty)
+        #expect(named("on the West Coast.").isEmpty)
+        #expect(named("as FBS Independents.").isEmpty)
+        // Two conferences named: both.
+        #expect(named("in a MAC and AAC doubleheader.") == ["American", "Mid-American"])
+        #expect(TeamMatcher.Index.phrases(naming: "Big Sky (FCS)") == [" big sky "])
+        #expect(TeamMatcher.Index.phrases(naming: "FCS Independents").isEmpty)
+        #expect(TeamMatcher.Index.phrases(naming: "Southern (FCS)") == [" southern conference ", " socon "])
+    }
+
+    /// L30: only the summary's first `summaryLeadLength` UTF-16 units are read for a conference.
+    @Test func theConferenceIsReadFromTheSummarysLead() {
+        let lead = "The Cougars meet the Bearcats."
+        let late = lead + String(repeating: " x", count: TeamMatcher.summaryLeadLength) + " in Big 12 play."
+        #expect(TeamMatcher.conferenceSearchText(of: programme("College Football", summary: late)).contains(" big 12 ") == false)
+        #expect(variantIDs(summary: late, index: Self.nicknameIndex)
+                == ["ncaaf.houston-cougars", "ncaaf.byu-cougars", "ncaaf.washington-state-cougars",
+                    "ncaaf.seattle-cougars", "ncaaf.cincinnati-bearcats"])
+        // The title and subtitle are read whole.
+        #expect(variantIDs(summary: late, title: "College Football: Big 12 Showdown", index: Self.nicknameIndex)
+                == ["ncaaf.houston-cougars", "ncaaf.byu-cougars", "ncaaf.cincinnati-bearcats"])
+    }
+
+    // MARK: Teams by side (M7m L31)
+
+    @Test func teamsBySideKeepsEachSidesTeams() throws {
+        let index = Self.nicknameIndex
+        func sides(_ programme: Programme, among candidates: [String]? = nil) -> [[Team.ID]] {
+            let teams = candidates.map { $0.compactMap { index.byID[$0] } } ?? index.teams
+            return TeamMatcher.teamsBySide(in: programme, among: teams, index: index).map { $0.map(\.id) }
+        }
+        // A side that expands to several teams doesn't push the other side's team out.
+        let cougars = programme("College Football", summary: "The Cougars meet the Bearcats.")
+        #expect(sides(cougars) == [["ncaaf.houston-cougars", "ncaaf.byu-cougars", "ncaaf.washington-state-cougars",
+                                    "ncaaf.seattle-cougars"], ["ncaaf.cincinnati-bearcats"]])
+        #expect(TeamMatcher.teams(in: cougars, index: index).map(\.id)
+                == ["ncaaf.houston-cougars", "ncaaf.byu-cougars", "ncaaf.washington-state-cougars",
+                    "ncaaf.seattle-cougars", "ncaaf.cincinnati-bearcats"])
+        // Only the candidates; a side with none is left out.
+        #expect(sides(cougars, among: ["ncaaf.cincinnati-bearcats"]) == [["ncaaf.cincinnati-bearcats"]])
+        // A team is in one side only: of two exact sides, the first.
+        #expect(sides(programme("College Football", subtitle: "Houston at Houston Cougars")) == [["ncaaf.houston-cougars"]])
+        // QA (11f): an exact side claims its team before an earlier nickname-only side.
+        #expect(sides(programme("College Football", subtitle: "Cougars at Houston Cougars"))
+                == [["ncaaf.byu-cougars", "ncaaf.washington-state-cougars", "ncaaf.seattle-cougars"],
+                    ["ncaaf.houston-cougars"]])
+        #expect(TeamMatcher.teams(in: programme("College Football", subtitle: "Cougars at Houston Cougars"), index: index)
+                .map(\.id) == ["ncaaf.byu-cougars", "ncaaf.washington-state-cougars", "ncaaf.seattle-cougars",
+                              "ncaaf.houston-cougars"])
+        // Exact sides, in the programme's order.
+        #expect(sides(programme("College Football", subtitle: "Cincinnati at BYU"))
+                == [["ncaaf.cincinnati-bearcats"], ["ncaaf.byu-cougars"]])
+        // Pro: one team per side.
+        #expect(sides(programme("NBA Basketball", subtitle: "Miami Heat at Los Angeles Lakers"))
+                == [["nba.lal"], ["nba.mia"]])
+        #expect(sides(programme("Movie")).isEmpty)
+        // Without the option, a nickname-only side is no side.
+        #expect(TeamMatcher.teamsBySide(in: cougars, index: Self.variantIndex).isEmpty)
+    }
+
+    /// QA (11f): with the bundled catalog, LSU stays its own side, so the channel menu can offer it.
+    @Test func anExactSideKeepsItsTeamFromAnEarlierFallbackSide() throws {
+        let index = TeamMatcher.Index.bundled(Self.nicknames)
+        let game = programme("College Football", summary: "The Tigers host the LSU Tigers.")
+        let sides = TeamMatcher.teamsBySide(in: game, index: index).map { $0.map(\.id) }
+        #expect(sides.count == 2)
+        #expect(sides.last == ["ncaaf.lsu-tigers"])
+        let tigers = try #require(sides.first)
+        #expect(!tigers.isEmpty)
+        #expect(!tigers.contains("ncaaf.lsu-tigers"))
+        // Flattened: each team once, in the programme's order.
+        let flat = TeamMatcher.teams(in: game, index: index).map(\.id)
+        #expect(flat == tigers + ["ncaaf.lsu-tigers"])
+    }
+
+    /// QA (11f): titles, subtitles and categories are read to `headingReadLength`, so a huge one is cheap.
+    @Test func aHugeTitleOrSubtitleIsCheap() {
+        let filler = String(repeating: " x", count: 500_000)   // 1 MB
+        let cases: [(Programme, Set<Team.ID>)] = [
+            (programme("NBA Basketball: Miami Heat at Los Angeles Lakers" + filler), ["nba.mia", "nba.lal"]),
+            (programme("NBA Basketball", subtitle: "Miami Heat at Los Angeles Lakers" + filler), ["nba.mia", "nba.lal"]),
+            (programme("NBA Basketball", subtitle: "Miami Heat at Los Angeles Lakers", category: "Sports" + filler),
+             ["nba.mia", "nba.lal"]),
+            (programme("College Football" + filler, summary: "The Cougars meet the Bearcats in Big 12 play."),
+             ["ncaaf.houston-cougars", "ncaaf.byu-cougars", "ncaaf.cincinnati-bearcats"]),
+            // Cut, the second side runs into the filler and names no one; the first still matches.
+            (programme("College Football", subtitle: "Cincinnati Bearcats at BYU Cougars" + filler),
+             ["ncaaf.cincinnati-bearcats"]),
+        ]
+        for (n, (game, expected)) in cases.enumerated() {
+            let start = Date()
+            #expect(Set(TeamMatcher.teams(in: game, index: Self.nicknameIndex).map(\.id)) == expected, "\(n)")
+            _ = TeamMatcher.isLiveGame(game)
+            _ = TeamMatcher.conferenceSearchText(of: game)
+            #expect(Date().timeIntervalSince(start) < 0.05, "\(n)")
+        }
+        #expect(TeamMatcher.bounded(cases[0].0).title.utf16.count <= TeamMatcher.headingReadLength)
+        // A combining-mark flood is cut without splitting a character.
+        let marks = programme("NBA Basketball: Miami Heat at Los Angeles Lakers x" + String(repeating: "\u{301}", count: 1_000_000))
+        let start = Date()
+        #expect(Set(TeamMatcher.teams(in: marks, index: Self.nicknameIndex).map(\.id)) == ["nba.mia", "nba.lal"])
+        #expect(Date().timeIntervalSince(start) < 0.05)
+    }
+
+    /// The security review for build 34 (L1): a game entry's name is read to `headingReadLength`.
+    @Test func aHugeGameEntryNameIsCheap() throws {
+        let name = "Los Angeles Lakers @ Miami Heat" + String(repeating: " x", count: 50_000)   // 100 KB
+        let channel = Channel(id: "id:huge", number: 1, name: name, group: "NBA", tvgID: nil, tvgName: nil, logoURL: nil,
+                              streamURL: URL(string: "https://cdn.example/huge.m3u8")!)
+        let start = Date()
+        let game = try #require(TeamMatcher.gameEntry(channel))
+        #expect(game.away == "Los Angeles Lakers")
+        #expect(game.home.utf16.count < TeamMatcher.headingReadLength)
+        #expect(TeamMatcher.isGameEntry(channel))
+        #expect(TeamMatcher.gameChannelIDs(channels: [channel], picked: ["nba.lal"]) == ["id:huge"])
+        #expect(Date().timeIntervalSince(start) < 0.005)
+    }
+
+    static let variantGames = """
+    #EXTM3U
+    #EXTINF:0 tvg-id="ULM" group-title="Live-Games",Louisiana-Monroe Warhawks @ Troy Trojans
+    \(url(31))
+    #EXTINF:0 tvg-id="Nicknames" group-title="Live-Games",Warhawks @ Trojans
+    \(url(32))
+    #EXTINF:0 tvg-id="Shorthand" group-title="Live-Games",NE @ BUF
+    \(url(33))
+    #EXTINF:0 tvg-id="Shared" group-title="Live-Games",MER @ Nowhere
+    \(url(34))
+    """
+
+    @Test func gameEntriesUseEveryKeyButNoNicknameFallback() throws {
+        let channels = ChannelList.make(from: try M3UParser.parse(Self.variantGames))
+        let both = TeamMatcher.Index.bundled(.init(initials: true, nicknames: true))
+        func games(_ picked: Set<Team.ID>, index: TeamMatcher.Index = .bundled(.off)) -> [Channel.ID] {
+            TeamMatcher.gameChannelIDs(channels: channels, picked: picked, index: index)
+        }
+        // The combined key; never the nicknames alone (entries are written with full names), whatever the options.
+        #expect(games(["ncaaf.ul-monroe-warhawks"]) == ["id:ulm"])
+        #expect(games(["ncaaf.troy-trojans"]) == ["id:ulm"])
+        let nicknames = try #require(channels.first { $0.id == "id:nicknames" })
+        #expect(!TeamMatcher.isGameEntry(nicknames))
+        #expect(!TeamMatcher.isGameEntry(nicknames, index: both))
+        // ESPN abbreviations are keys with Match Initials, pro shorthand or not (accepted, QA's note for 11e).
+        #expect(games(["ncaaf.buffalo-bulls"]).isEmpty)
+        #expect(games(["ncaaf.buffalo-bulls"], index: both) == ["id:shorthand"])
+        // A key two schools share counts for each (MER is an abbreviation of both).
+        #expect(games(["ncaabase.mercer-bears"], index: both) == ["id:shared"])
+        #expect(games(["ncaabase.mercyhurst-lakers"], index: both) == ["id:shared"])
+        #expect(games(["ncaabase.mercer-bears"]).isEmpty)
+    }
+
+    /// L25's bounds hold with the fallback: a huge summary is cut before the conference is looked for.
+    @Test func theFallbackStaysCheapOnAHugeSummary() {
+        func variantIDs(_ subtitle: String? = nil, summary: String) -> Set<Team.ID> {
+            self.variantIDs(subtitle, summary: summary, index: Self.nicknameIndex)
+        }
+        let summary = "The Cougars meet the Bearcats " + String(repeating: "in Big 12 play ", count: 100_000)
+        let start = Date()
+        #expect(variantIDs(summary: summary) == ["ncaaf.houston-cougars", "ncaaf.byu-cougars", "ncaaf.cincinnati-bearcats"])
+        #expect(variantIDs("Springfield Cougars at Nowhere Bearcats", summary: summary)
+                == ["ncaaf.houston-cougars", "ncaaf.byu-cougars", "ncaaf.cincinnati-bearcats"])
+        #expect(Date().timeIntervalSince(start) < 0.5)
+    }
 }
 
 /// Holds the first call until `release()`; later calls pass at once. (Also `MyTeamsTests`.)
@@ -572,5 +1140,18 @@ final class SlowFetchGate {
     func release() {
         continuation?.resume()
         continuation = nil
+    }
+}
+
+/// A seeded generator for the fuzz tests (the same strings every run).
+struct SplitMix: RandomNumberGenerator {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
     }
 }

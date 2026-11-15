@@ -6,11 +6,12 @@ struct LiveTVModelTests {
     /// Last watched: NFL Network, the first channel.
     static let watching = IPTVState(lastChannelID: "id:nflnetwork.us")
     private func makeModel(playlist: URL? = IPTVFixtures.playlistURL, state: IPTVState? = nil,
-                           preferences: ChannelPreferences? = nil) throws
+                           preferences: ChannelPreferences? = nil, guideIdleReturn: Duration = .seconds(180)) throws
         -> (LiveTVModel, FakePlayer, LibraryFixture) {
         let fixture = try makeLibrary(playlist: playlist, state: state, preferences: preferences)
         let player = FakePlayer()
-        let model = LiveTVModel(player: player, makePlayer: { FakePlayer() }, library: fixture.library, now: { fixture.clock.now })
+        let model = LiveTVModel(player: player, makePlayer: { FakePlayer() }, library: fixture.library, now: { fixture.clock.now },
+                                guideIdleReturn: guideIdleReturn)
         return (model, player, fixture)
     }
 
@@ -26,7 +27,9 @@ struct LiveTVModelTests {
         #expect(model.mode == .setupNeeded)
         #expect(model.handle(.down) == .handled)
         #expect(model.handle(.select) == .openSettings)
-        #expect(model.handle(.back) == .leave)
+        // M7m L1: Back doesn't leave; only Home does.
+        #expect(model.handle(.back) == .handled)
+        #expect(model.mode == .setupNeeded)
         #expect(player.played.isEmpty)
     }
 
@@ -37,8 +40,23 @@ struct LiveTVModelTests {
         #expect(model.mode == .guide)
         #expect(player.played.isEmpty)
         #expect(model.guide?.focusedChannel?.name == "NFL Network")
-        // Back with nothing playing leaves.
-        #expect(model.handle(.back) == .leave)
+        // M7m L2: Back with no channel to return to does nothing; the guide stays.
+        #expect(model.handle(.back) == .handled)
+        #expect(model.mode == .guide)
+        #expect(player.played.isEmpty)
+    }
+
+    /// M7m L1: Back while the channels load stays in Live TV.
+    @Test func backWhileLoadingDoesNothing() async throws {
+        let (model, player, fixture) = try makeModel(state: Self.watching)
+        defer { fixture.cleanUp() }
+        model.open()
+        #expect(model.mode == .loading)
+        #expect(model.handle(.back) == .handled)
+        #expect(model.mode == .loading)
+        await model.pendingTask?.value
+        #expect(model.mode == .player)
+        #expect(player.played == [IPTVFixtures.streamURL(1)])
     }
 
     @Test func lastChannelResumes() async throws {
@@ -56,7 +74,9 @@ struct LiveTVModelTests {
         let model = LiveTVModel(player: FakePlayer(), makePlayer: { FakePlayer() }, library: fixture.library)
         await open(model)
         #expect(model.mode == .unavailable("The playlist has no channels"))
-        #expect(model.handle(.back) == .leave)
+        // M7m L1: Back doesn't leave; only Home does.
+        #expect(model.handle(.back) == .handled)
+        #expect(model.mode == .unavailable("The playlist has no channels"))
     }
 
     @Test func failedPlaylistIsUnavailableAndSelectRetries() async throws {
@@ -244,12 +264,15 @@ struct LiveTVModelTests {
     // MARK: Guide
 
     /// Playing NBA TV (row 2 of "All Channels"), with the fixture guide imported.
-    private func makeGuideModel(preferences: ChannelPreferences? = nil) async throws -> (LiveTVModel, FakePlayer, LibraryFixture) {
+    private func makeGuideModel(preferences: ChannelPreferences? = nil, guideIdleReturn: Duration = .seconds(180),
+                                pausedOverlayDuration: Duration = .seconds(15))
+        async throws -> (LiveTVModel, FakePlayer, LibraryFixture) {
         let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL, guides: [IPTVFixtures.customGuideURL],
                                       state: IPTVState(lastChannelID: "id:nbatv.us"), preferences: preferences)
         await fixture.library.refreshAll()
         let player = FakePlayer()
-        let model = LiveTVModel(player: player, makePlayer: { FakePlayer() }, library: fixture.library, now: { fixture.clock.now })
+        let model = LiveTVModel(player: player, makePlayer: { FakePlayer() }, library: fixture.library, now: { fixture.clock.now },
+                                guideIdleReturn: guideIdleReturn, pausedOverlayDuration: pausedOverlayDuration)
         await open(model)
         player.state.phase = .playing
         return (model, player, fixture)
@@ -278,23 +301,24 @@ struct LiveTVModelTests {
         var warmed: [URL] = []
         model.warmStream = { warmed.append($0) }
         model.guideWarmDelay = .milliseconds(30)
+        // Each step awaits the warm task itself, never the wall clock (it flaked under load).
         openGuide(model)
-        try await Task.sleep(for: .milliseconds(100))
+        await model.guideWarmTask?.value
         #expect(warmed.isEmpty)   // NBA TV is playing
 
         _ = model.handle(.down)
         _ = model.handle(.down)
-        try await Task.sleep(for: .milliseconds(100))
+        await model.guideWarmTask?.value
         let resting = try #require(model.guide?.focusedChannel)
         #expect(warmed == [resting.streamURL])
 
         _ = model.handle(.right)   // the same channel again, within the rewarm interval
-        try await Task.sleep(for: .milliseconds(100))
+        await model.guideWarmTask?.value
         #expect(warmed.count == 1)
 
         _ = model.handle(.up)
         _ = model.handle(.up)   // back on NBA TV
-        try await Task.sleep(for: .milliseconds(100))
+        await model.guideWarmTask?.value
         #expect(warmed.count == 1)
     }
 
@@ -330,12 +354,97 @@ struct LiveTVModelTests {
         #expect(model.banner?.channel.id == "id:nbatv.us")
     }
 
-    /// M7c L11.
-    @Test func backInTheGuideLeaves() async throws {
-        let (model, _, fixture) = try await makeGuideModel()
+    /// M7m L2 (D49): Back in the watch guide returns to the playing channel, without reloading it.
+    @Test func backInTheGuideReturnsToTheChannel() async throws {
+        let (model, player, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
         openGuide(model)
-        #expect(model.handle(.back) == .leave)
+        #expect(model.mode == .guide)
+        #expect(model.handle(.back) == .handled)
+        #expect(model.mode == .player)
+        #expect(model.guide == nil)
+        #expect(model.player === player)
+        #expect(player.played == [IPTVFixtures.streamURL(2)])
+        #expect(model.banner?.channel.id == "id:nbatv.us")
+    }
+
+    /// M7m L2: after a stream error, Back in the guide plays the failed channel again (a retry).
+    @Test func backInTheGuideAfterAStreamErrorRetriesTheChannel() async throws {
+        let (model, player, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        openGuide(model)
+        player.fail()                           // refreshes the playlist once and plays again
+        await model.pendingTask?.value
+        player.fail()
+        #expect(model.playbackError == "Can't play this channel")
+        #expect(player.played == [IPTVFixtures.streamURL(2), IPTVFixtures.streamURL(2)])
+        #expect(model.canReturnToChannel)
+        #expect(model.handle(.back) == .handled)
+        #expect(model.mode == .player)
+        #expect(model.guide == nil)
+        #expect(model.currentChannel?.id == "id:nbatv.us")
+        #expect(player.played == [IPTVFixtures.streamURL(2), IPTVFixtures.streamURL(2), IPTVFixtures.streamURL(2)])
+        #expect(model.playbackError == nil)
+    }
+
+    /// The fixture playlist without NBA TV (the channel `makeGuideModel` plays).
+    private func dropNBATV(_ model: LiveTVModel, _ fixture: LibraryFixture) async {
+        let withoutNBATV = IPTVFixtures.playlist.components(separatedBy: "\n").enumerated()
+            .filter { ![3, 4].contains($0.offset) }.map(\.element).joined(separator: "\n")
+        fixture.network.setText(withoutNBATV, for: IPTVFixtures.playlistURL)
+        await fixture.library.refreshPlaylist()
+        model.channelsChanged()
+    }
+
+    /// M7m L2, L4: a refresh dropped the playing channel; Back still returns to it while it plays.
+    @Test func backInTheGuideReturnsToAPlayingChannelTheRefreshDropped() async throws {
+        let (model, player, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        openGuide(model)
+        await dropNBATV(model, fixture)
+        #expect(!fixture.library.channels.contains { $0.id == "id:nbatv.us" })
+        #expect(model.canReturnToChannel)
+        #expect(GuideView.hint(focus: .grid, isPicking: false, hasChannel: model.canReturnToChannel)
+                .hasSuffix("Back: back to the channel"))
+        #expect(model.handle(.back) == .handled)
+        #expect(model.mode == .player)
+        #expect(model.guide == nil)
+        #expect(model.player === player)
+        #expect(player.played == [IPTVFixtures.streamURL(2)])
+        #expect(model.banner?.channel.id == "id:nbatv.us")
+    }
+
+    /// M7m L2, L4: a dropped channel that failed or stopped has nothing to return to: Back does nothing, the hint
+    /// doesn't offer it.
+    @Test(arguments: [PlayerState.Phase.failed, .idle])
+    func backInTheGuideDoesNothingForADroppedChannelThatIsntPlaying(_ phase: PlayerState.Phase) async throws {
+        let (model, player, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        openGuide(model)
+        await dropNBATV(model, fixture)
+        player.state.phase = phase
+        #expect(!model.canReturnToChannel)
+        #expect(!GuideView.hint(focus: .grid, isPicking: false, hasChannel: model.canReturnToChannel).contains("Back"))
+        #expect(model.handle(.back) == .handled)
+        #expect(model.mode == .guide)
+        #expect(model.guide != nil)
+        #expect(player.played == [IPTVFixtures.streamURL(2)])
+    }
+
+    /// M7m L2: Back from the group list goes to the grid, then to the channel.
+    @Test func backFromTheGroupListGoesToTheGridThenTheChannel() async throws {
+        let (model, player, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        openGuide(model)
+        _ = model.handle(.left)                 // the now-cell → the channel cell
+        _ = model.handle(.left)                 // → groups
+        #expect(model.guide?.focus == .groups(1))
+        #expect(model.handle(.back) == .handled)
+        #expect(model.mode == .guide)
+        #expect(model.guide?.focus == .grid)
+        #expect(model.handle(.back) == .handled)
+        #expect(model.mode == .player)
+        #expect(player.played == [IPTVFixtures.streamURL(2)])
     }
 
     @Test func playPauseInTheGuidePausesThePreview() async throws {
@@ -538,6 +647,77 @@ struct LiveTVModelTests {
         #expect(model.mode == .guide)
     }
 
+    /// M7m L3: Back from Match Guide goes back to the channel menu, focused on its Match Guide row.
+    @Test func backFromMatchGuideReturnsToTheChannelMenu() async throws {
+        let (model, _, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        openNFLMenu(model)
+        choose("matchGuide", in: model)
+        await model.pendingTask?.value
+        #expect(model.menu?.title == "Guide for NFL Network")
+        #expect(model.isSubmenu)
+        #expect(model.handle(.back) == .handled)
+        #expect(model.menu?.title == "NFL Network")
+        #expect(model.menu?.focusedItem?.id == "matchGuide")
+        #expect(!model.isSubmenu)
+        #expect(model.mode == .guide)
+    }
+
+    /// M7m L3 (QA): a second Match Guide opened while the first's options load cancels the first, so the
+    /// first can't open its channel's menu or clear the second's parent.
+    @Test func aNewerMatchGuideOpenCancelsTheOlderOne() async throws {
+        let (model, _, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        openNFLMenu(model)
+        choose("matchGuide", in: model)
+        let first = model.pendingTask
+        #expect(model.menu == nil)
+        // The options haven't loaded: Red Zone's channel menu (two rows down), then its Match Guide.
+        _ = model.handle(.down)
+        _ = model.handle(.down)
+        _ = model.handle(.select)
+        #expect(model.menu?.title == "Red Zone")
+        choose("matchGuide", in: model)
+        let second = model.pendingTask
+        await first?.value
+        await second?.value
+        #expect(model.menu?.title == "Guide for Red Zone")
+        #expect(model.isSubmenu)
+        _ = model.handle(.back)
+        #expect(model.menu?.title == "Red Zone")
+        #expect(model.menu?.focusedItem?.id == "matchGuide")
+    }
+
+    /// M7m L3: once back in the channel menu, Back closes it (the parent isn't kept twice).
+    @Test func backFromTheChannelMenuClosesIt() async throws {
+        let (model, _, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        openNFLMenu(model)
+        choose("matchGuide", in: model)
+        await model.pendingTask?.value
+        _ = model.handle(.back)
+        #expect(model.menu?.title == "NFL Network")
+        #expect(model.handle(.back) == .handled)
+        #expect(model.menu == nil)
+        #expect(model.mode == .guide)
+    }
+
+    /// M7m L3: a match chosen closes both menus; the next channel menu's Back closes it at once.
+    @Test func choosingAGuideMatchClosesBothMenus() async throws {
+        let (model, _, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        openNFLMenu(model)
+        choose("matchGuide", in: model)
+        await model.pendingTask?.value
+        choose("match.none", in: model)
+        #expect(model.menu == nil)
+        await model.pendingTask?.value
+        _ = model.handle(.select)
+        #expect(model.menu?.title == "NFL Network")
+        _ = model.handle(.back)
+        #expect(model.menu == nil)
+    }
+
     @Test func homeWithTheMenuOpenLeaves() async throws {
         let (model, _, fixture) = try await makeGuideModel()
         defer { fixture.cleanUp() }
@@ -665,6 +845,163 @@ struct LiveTVModelTests {
         #expect(fixture.library.isTeamPicked(team.id))
         _ = model.handle(.select)
         #expect(model.handle(.home) == .leave)
+    }
+
+    // MARK: Guide idle return (M7m L16)
+
+    static let shortIdle: Duration = .milliseconds(30)
+
+    @Test func idleGuideReturnsToThePlayingChannel() async throws {
+        let (model, player, fixture) = try await makeGuideModel(guideIdleReturn: Self.shortIdle)
+        defer { fixture.cleanUp() }
+        openGuide(model)
+        #expect(model.mode == .guide)
+        await model.guideIdleTask?.value
+        #expect(model.mode == .player)
+        #expect(model.guide == nil)
+        #expect(model.player === player)
+        #expect(player.played == [IPTVFixtures.streamURL(2)])   // no reconnect
+        #expect(model.banner?.channel.id == "id:nbatv.us")
+    }
+
+    @Test func idleGuideWithNothingPlayingStays() async throws {
+        let (model, player, fixture) = try makeModel(guideIdleReturn: Self.shortIdle)
+        defer { fixture.cleanUp() }
+        await open(model)
+        #expect(model.mode == .guide)
+        await model.guideIdleTask?.value
+        #expect(model.mode == .guide)
+        #expect(model.guide != nil)
+        #expect(player.played.isEmpty)
+    }
+
+    @Test func idleChannelMenuInThePlayerCloses() async throws {
+        let (model, player, fixture) = try await makeGuideModel(guideIdleReturn: Self.shortIdle)
+        defer { fixture.cleanUp() }
+        _ = model.handle(.menu)
+        #expect(model.menu?.title == "NBA TV")
+        await model.guideIdleTask?.value
+        #expect(model.menu == nil)
+        #expect(!model.isSubmenu)
+        #expect(model.mode == .player)
+        #expect(player.played == [IPTVFixtures.streamURL(2)])
+    }
+
+    @Test func idleSearchOverTheGuideReturnsToTheChannel() async throws {
+        let (model, player, fixture) = try await makeGuideModel(guideIdleReturn: Self.shortIdle)
+        defer { fixture.cleanUp() }
+        openGuide(model)
+        _ = model.handle(.left)     // the channel cell
+        _ = model.handle(.left)     // groups
+        for _ in 0..<10 { _ = model.handle(.up) }
+        #expect(model.guide?.focus == .search)
+        _ = model.handle(.select)
+        #expect(model.search != nil)
+        await model.guideIdleTask?.value
+        #expect(model.search == nil)
+        #expect(model.mode == .player)
+        #expect(model.guide == nil)
+        #expect(player.played == [IPTVFixtures.streamURL(2)])
+    }
+
+    /// L16 with L3: the idle return cancels a Match Guide still loading, so it can't open after it.
+    @Test func idleCancelsAMatchGuideStillLoading() async throws {
+        let (model, player, fixture) = try await makeGuideModel(guideIdleReturn: Self.shortIdle)
+        defer { fixture.cleanUp() }
+        openNFLMenu(model)
+        choose("matchGuide", in: model)
+        let matchGuide = try #require(model.pendingTask)   // also `matchGuideTask`
+        await model.guideIdleTask?.value
+        await matchGuide.value
+        // Pins the cancel: nothing else cancels this task, and `isCancelled` turns true even on a finished task,
+        // so it holds whichever finished first.
+        #expect(matchGuide.isCancelled)
+        #expect(model.menu == nil)
+        #expect(!model.isSubmenu)
+        #expect(model.mode == .player)
+        #expect(player.played == [IPTVFixtures.streamURL(2)])
+    }
+
+    @Test func aPressRestartsTheGuideIdleTimer() async throws {
+        let (model, _, fixture) = try await makeGuideModel(guideIdleReturn: .milliseconds(100))
+        defer { fixture.cleanUp() }
+        openGuide(model)
+        let first = try #require(model.guideIdleTask)
+        _ = model.handle(.down)
+        let second = try #require(model.guideIdleTask)
+        #expect(first.isCancelled)
+        #expect(first != second)
+        #expect(model.mode == .guide)
+        await second.value
+        #expect(model.mode == .player)
+    }
+
+    // MARK: Paused overlays (M7m L15)
+
+    @Test func pausedOverlayHidesAfter15sAndAPressShowsItAgain() async throws {
+        let (model, player, fixture) = try await makeGuideModel(pausedOverlayDuration: .milliseconds(30))
+        defer { fixture.cleanUp() }
+        _ = model.handle(.playPause)
+        #expect(player.state.phase == .paused)
+        #expect(model.pausedOverlayVisible)
+        await model.pausedOverlayTask?.value
+        #expect(!model.pausedOverlayVisible)
+        #expect(player.state.phase == .paused)
+        _ = model.handle(.left)   // any press while paused
+        #expect(model.pausedOverlayVisible)
+        await model.pausedOverlayTask?.value
+        #expect(!model.pausedOverlayVisible)
+    }
+
+    @Test func pausedOverlayDoesntAffectTheBannerTimer() async throws {
+        let (model, player, fixture) = try await makeGuideModel(pausedOverlayDuration: .milliseconds(30))
+        defer { fixture.cleanUp() }
+        _ = model.handle(.playPause)
+        #expect(player.state.phase == .paused)
+        #expect(model.banner != nil)
+        #expect(model.showsTimeshiftBar)
+        await model.pausedOverlayTask?.value
+        #expect(!model.pausedOverlayVisible)
+        // The banner and the 5 s bar run on their own timer.
+        #expect(model.banner != nil)
+        #expect(model.showsTimeshiftBar)
+    }
+
+    /// Select hides the paused bar with the banner (M7c L11 still toggles); the next Select shows both again.
+    @Test func selectWhilePausedTogglesThePausedBar() async throws {
+        let (model, player, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        _ = model.handle(.playPause)
+        #expect(player.state.phase == .paused)
+        _ = model.handle(.select)
+        #expect(model.banner == nil)
+        #expect(!model.showsTimeshiftBar)
+        #expect(!model.pausedOverlayVisible)
+        _ = model.handle(.select)
+        #expect(model.banner != nil)
+        #expect(model.showsTimeshiftBar)
+        #expect(model.pausedOverlayVisible)
+    }
+
+    @Test func leavingCancelsTheGuideIdleTimer() async throws {
+        let (model, _, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        openGuide(model)
+        let task = try #require(model.guideIdleTask)
+        model.leave()
+        #expect(task.isCancelled)
+        #expect(model.guideIdleTask == nil)
+    }
+
+    @Test func leavingCancelsThePausedOverlayTimer() async throws {
+        let (model, _, fixture) = try await makeGuideModel()
+        defer { fixture.cleanUp() }
+        _ = model.handle(.playPause)
+        let task = try #require(model.pausedOverlayTask)
+        model.leave()
+        #expect(task.isCancelled)
+        #expect(model.pausedOverlayTask == nil)
+        #expect(!model.pausedOverlayVisible)
     }
 }
 

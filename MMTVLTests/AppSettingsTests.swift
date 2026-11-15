@@ -304,6 +304,32 @@ struct AppSettingsTests {
         }
     }
 
+    /// M7m L29: Match Initials and Match Nicknames Alone; missing or of another type reads as false, and the rest of
+    /// the file is kept.
+    @Test func teamMatchSwitchesDecode() throws {
+        let missing = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))
+        #expect(!missing.teamMatchInitials)
+        #expect(!missing.teamMatchNicknames)
+        #expect(missing.teamMatchOptions == .off)
+        #expect(AppSettings().teamMatchOptions == .off)
+        let on = try JSONDecoder().decode(AppSettings.self,
+                                          from: Data(#"{"teamMatchInitials": true, "teamMatchNicknames": true}"#.utf8))
+        #expect(on.teamMatchOptions == TeamMatchOptions(initials: true, nicknames: true))
+        #expect(try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(on)) == on)
+        let encoded = try String(decoding: JSONEncoder().encode(on), as: UTF8.self)
+        #expect(encoded.contains(#""teamMatchInitials":true"#))
+        #expect(encoded.contains(#""teamMatchNicknames":true"#))
+        #expect(!encoded.contains("teamMatchOptions"))
+        let one = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"teamMatchNicknames": true}"#.utf8))
+        #expect(one.teamMatchOptions == TeamMatchOptions(nicknames: true))
+        for value in ["1", #""true""#, "null", "[true]"] {
+            let json = #"{"teamMatchInitials": \#(value), "teamMatchNicknames": \#(value), "launchAtLogin": true}"#
+            let settings = try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+            #expect(settings.teamMatchOptions == .off, "\(value)")
+            #expect(settings.launchAtLogin, "\(value)")
+        }
+    }
+
     /// M7h step 13b: Show Volume; missing or of another type reads as true, and the rest of the file is kept.
     @Test func volumeToastDecodes() throws {
         let missing = try JSONDecoder().decode(AppSettings.self, from: Data("{}".utf8))

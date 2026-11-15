@@ -177,6 +177,18 @@ struct LiveSearchTests {
         #expect(texas.count == LiveSearchModel.maxTeamResults)
     }
 
+    /// M7m L29: initials and spelled-out names find their teams, whatever the matching options say.
+    @Test func initialsAndAliasesFindTheirTeams() async throws {
+        let fixture = try await makeFixture()
+        defer { fixture.cleanUp() }
+        let ulm = titles(await search(fixture, "ULM").teamResults)
+        #expect(Array(ulm.prefix(4)) == ["team ncaaf.ul-monroe-warhawks", "team ncaam.ul-monroe-warhawks",
+                                         "team ncaaw.ul-monroe-warhawks", "team ncaabase.ul-monroe-warhawks"])
+        let brigham = titles(await search(fixture, "brigham young").teamResults)
+        #expect(brigham.first == "team ncaaf.byu-cougars")
+        #expect(brigham.allSatisfy { $0.hasSuffix(".byu-cougars") })
+    }
+
     @Test func teamResultsStopAtTwelve() async throws {
         let fixture = try await makeFixture()
         defer { fixture.cleanUp() }
@@ -277,8 +289,9 @@ struct LiveSearchTests {
     @Test func theGuideSearchRowOpensSearchAndBackReturns() async throws {
         let (model, _, fixture) = try await makeLiveTV()
         defer { fixture.cleanUp() }
-        _ = model.handle(.select)   // M7c L11: the banner…
-        _ = model.handle(.back)     // …hidden
+        // M7c L11: Back hides the banner shown on opening, then opens the guide (M7m L2: a further Back would
+        // return to the channel).
+        if model.banner != nil || model.showsTimeshiftBar { _ = model.handle(.back) }
         _ = model.handle(.back)     // the guide
         #expect(model.mode == .guide)
         let group = model.guide?.selectedGroup

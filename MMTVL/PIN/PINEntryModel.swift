@@ -34,6 +34,8 @@ final class PINEntryModel {
             case .quit: "Enter PIN to quit MMTVL"
             case .relaunch: "Enter PIN to relaunch MMTVL"
             case .restartMac: "Enter PIN to restart the Mac mini"
+            case .tileAction(_, .tileSettings): "Enter PIN to open Settings"
+            case .tileAction: "Enter PIN to change this tile"
             default: "Enter PIN"
             }
         case .enterNew:

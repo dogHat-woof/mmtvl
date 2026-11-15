@@ -149,6 +149,9 @@ final class PowerReceiverSelector: PowerReceiver {
 struct PowerEffects {
     var sleepDisplays: () -> Void
     var wakeDisplays: () -> Void
+    /// M7m L23: true from just before the displays sleep (off) until the next on, so the Mac doesn't idle-sleep (and
+    /// a Siri Remote reconnecting in a dark wake doesn't wake the display and the TV with it). Idempotent.
+    var keepMacAwake: (Bool) -> Void
     /// True once the request went out (pmset, else the Apple event); false: it couldn't be sent.
     var sleepMac: () async -> Bool
     /// True once the Apple event went out.
@@ -316,6 +319,7 @@ final class PowerController {
         }
         // Step 9c: a receiver over HDMI-CEC is off now (even when a CEC TV's Standby to all did it).
         receiver?.noteTurnedOff()
+        effects.keepMacAwake(true)
         Self.logger.notice("Power: displays to sleep")
         effects.sleepDisplays()
     }
@@ -324,6 +328,7 @@ final class PowerController {
         Self.logger.notice("Power: turning on")
         phase = .on
         poweredOffByMMTVL = false
+        effects.keepMacAwake(false)
         effects.wakeDisplays()
         onPowerOn()
         onToast("Turning On…")
@@ -395,11 +400,26 @@ extension PowerController {
 extension PowerEffects {
     /// `relaunch`: `AppRelauncher.relaunch` with the kiosk lock's quit guard lifted (AppDelegate).
     static func system(relaunch: @escaping () -> Void) -> PowerEffects {
-        PowerEffects(
+        // M7m L23: one assertion, memory only (a relaunch drops it, like `poweredOffByMMTVL`). Sleep Mac mini still
+        // sleeps (the system-sleep type only stops idle sleep).
+        let awake = SleepAssertion(type: kIOPMAssertionTypePreventUserIdleSystemSleep, name: "MMTVL: TV and receiver off",
+                                   category: "Power")
+        var keepingAwake = false
+        return PowerEffects(
             sleepDisplays: {
                 Task { _ = await SystemPower.run(SystemPower.pmset, ["displaysleepnow"]) }
             },
             wakeDisplays: { SystemPower.declareUserActivity() },
+            keepMacAwake: { on in
+                guard on != keepingAwake else { return }
+                // A failed hold (logged by `SleepAssertion`) leaves it false, so the next off tries again.
+                keepingAwake = awake.hold(on)
+                if on, keepingAwake {
+                    PowerController.logger.notice("Power: keeping the Mac awake while off")
+                } else if !on {
+                    PowerController.logger.notice("Power: the Mac may idle-sleep again")
+                }
+            },
             sleepMac: {
                 if await SystemPower.run(SystemPower.pmset, ["sleepnow"]) { return true }
                 PowerController.logger.notice("Power: pmset sleepnow failed; asking loginwindow")

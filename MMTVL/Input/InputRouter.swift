@@ -20,6 +20,9 @@ final class InputRouter {
     @ObservationIgnored var onScrollWheel: ((CGFloat, Bool) -> Void)?
     /// M7 L8: set while Settings learns a button; the next trigger is captured instead of dispatched.
     @ObservationIgnored var captureHandler: ((InputBinding.Trigger) -> Void)?
+    /// M7m L19 (QA step 6, finding 5): a trigger went to `captureHandler` (every source's learnt press passes
+    /// `capture(_:)`); the idle dimmer wakes.
+    @ObservationIgnored var onTriggerCaptured: (() -> Void)?
 
     /// NSApp.isActive; tests replace it.
     @ObservationIgnored var isActive: () -> Bool = { NSApp.isActive }
@@ -73,6 +76,7 @@ final class InputRouter {
     func capture(_ trigger: InputBinding.Trigger) -> Bool {
         guard let captureHandler, NSApp.isActive else { return false }
         captureHandler(trigger)
+        onTriggerCaptured?()
         return true
     }
 

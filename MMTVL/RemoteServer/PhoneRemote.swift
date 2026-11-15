@@ -32,6 +32,9 @@ struct PhoneRemoteEnvironment {
     /// M7c L3: MMTVL's window shows but MMTVL isn't active (nothing else in front): brings it forward
     /// and returns true, so the command goes to MMTVL instead of out as a synthetic key.
     var repairForeground: () -> Bool = { false }
+    /// M7m L19, L20: `AppRouter.endScreenSaverIfShowing(by:)`: true when the screen saver showed and this input (a
+    /// command, text or Return; the argument names it for the log) ended it, so it's swallowed.
+    var endsScreenSaver: (String) -> Bool = { _ in false }
 }
 
 /// The phone remote coordinator (D24): auth, pairing, command routing, text, volume and status pushes.
@@ -107,12 +110,15 @@ final class PhoneRemote {
             state.lastText = ""
         case .text(let value):
             guard state.phoneID != nil, value.count <= Self.maxTextLength else { return }
+            // M7m L20: text while the screen saver shows only ends it; `lastText` stays, so the next edit types it all.
+            guard !environment.endsScreenSaver("phone text") else { return }
             let edit = TextEdit.between(state.lastText, value)
             state.lastText = value
             guard !edit.isEmpty, canType(session: session) else { return }
             environment.typeEdit(edit)
         case .submit:
             guard state.phoneID != nil else { return }
+            guard !environment.endsScreenSaver("phone return") else { return }
             state.lastText = ""
             guard canType(session: session) else { return }
             environment.postReturn()
@@ -246,7 +252,8 @@ final class PhoneRemote {
             isLauncherInFront: { [self] in launcherInFront() },
             dispatch: { [environment] command, isGlobal, _ in environment.dispatch(command, isGlobal) },
             canPostEvents: environment.canPostEvents,
-            postExternal: environment.postExternal
+            postExternal: environment.postExternal,
+            endsScreenSaver: { [environment] in environment.endsScreenSaver("phone \($0.rawValue)") }
         )
         if router.route(command) == .needsAccessibility {
             transport.send(.toast(Self.accessibilityMessage), to: session)

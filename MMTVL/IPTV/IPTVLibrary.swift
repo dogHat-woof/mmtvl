@@ -67,6 +67,11 @@ final class IPTVLibrary {
     var usePlaylistGuide = false {
         didSet { updateGuideSources() }
     }
+    /// M7m L29: `settings.json` `teamMatchInitials` and `teamMatchNicknames`, set by AppDelegate at launch (live
+    /// changes: `applyTeamMatchOptions`). My Teams and the channel menu match with `teamMatchIndex`.
+    var teamMatchOptions = TeamMatchOptions.off
+    /// The bundled catalog's matcher index for `teamMatchOptions`.
+    var teamMatchIndex: TeamMatcher.Index { .bundled(teamMatchOptions) }
 
     @ObservationIgnored private let sources: IPTVSourceStore
     @ObservationIgnored private let store: EPGStore?
@@ -321,6 +326,19 @@ final class IPTVLibrary {
         await rematch()
         onStatusChange?()
         await refreshGuideIfStale()
+    }
+
+    /// M7m L29: Settings → Live TV → My Teams → Matching changed: My Teams is recomputed with the new options.
+    func applyTeamMatchOptions(_ options: TeamMatchOptions) async {
+        guard options != teamMatchOptions else { return }
+        teamMatchOptions = options
+        TeamMatcher.Index.prepareBundled(options)
+        logger.info("Team matching: initials \(options.initials ? "on" : "off", privacy: .public), nicknames alone \(options.nicknames ? "on" : "off", privacy: .public)")
+        // As a team pick: the newest update decides.
+        teamUpdateTask?.cancel()
+        let task = Task { await updateTeams() }
+        teamUpdateTask = task
+        await task.value
     }
 
     /// Moves a pasted guide up (−1) or down (+1) in priority, and rematches (no download).
@@ -587,13 +605,17 @@ final class IPTVLibrary {
     /// team picked, and every 5 minutes (AppDelegate). Sets the lineup on change.
     func updateTeams() async {
         let picked = Set(preferences.teams)
+        // M7m L29: the options in use when the update started; a change meanwhile starts its own update.
+        let index = teamMatchIndex
         var nowPlaying: [Channel.ID: Programme] = [:]
         var upcoming: [UpcomingTeamGame] = []
         // QA (8c): a read that was cancelled or failed keeps the network channels and upcoming games from before.
         var didRead = true
+        // A cancelled matching of the upcoming games keeps the ones from before.
+        var didFinishUpcoming = true
         if !picked.isEmpty {
             let date = now()
-            let networks = channels.filter { !TeamMatcher.isGameEntry($0) && epgMatches[$0.id] != nil }
+            let networks = channels.filter { !TeamMatcher.isGameEntry($0, index: index) && epgMatches[$0.id] != nil }
             await beforeTeamProgrammesFetch?()
             // One read for both: the programme on now and the next 72 h.
             if let programmes = await programmesIfRead(for: networks,
@@ -601,23 +623,33 @@ final class IPTVLibrary {
                 for (id, list) in programmes {
                     nowPlaying[id] = list.first { $0.start <= date && date < $0.stop }
                 }
-                // M7l 8c: matching three days of programmes stays off the main actor.
-                upcoming = await Task.detached(priority: .utility) {
-                    TeamMatcher.upcomingGames(channels: networks, programmes: programmes, picked: picked, now: date)
-                }.value
+                // M7l 8c: matching three days of programmes stays off the main actor. The security review for build
+                // 34: cancelling the update cancels the matching, which then stops and keeps the upcoming games from
+                // before (a partial result is never used).
+                let matching = Task.detached(priority: .utility) {
+                    TeamMatcher.finishedUpcomingGames(channels: networks, programmes: programmes, picked: picked,
+                                                      now: date, index: index)
+                }
+                if let finished = await withTaskCancellationHandler(operation: { await matching.value },
+                                                                    onCancel: { matching.cancel() }) {
+                    upcoming = finished
+                } else {
+                    didFinishUpcoming = false
+                }
             } else {
                 didRead = false
             }
             await afterTeamProgrammesFetch?()
         }
-        // M7l: a team was picked or unpicked meanwhile; its own update sets the group. (Not `Task.isCancelled`: a
-        // cancelled 5-minute refresh, restarted by AppDelegate, must still set it.)
-        guard Set(preferences.teams) == picked else { return }
-        let games = TeamMatcher.gameChannelIDs(channels: channels, picked: picked)
+        // M7l: a team was picked or unpicked meanwhile (M7m L29: or the match options changed); its own update sets
+        // the group. (Not `Task.isCancelled`: a cancelled 5-minute refresh, restarted by AppDelegate, must still
+        // set it.)
+        guard Set(preferences.teams) == picked, index.options == teamMatchOptions else { return }
+        let games = TeamMatcher.gameChannelIDs(channels: channels, picked: picked, index: index)
         let networks = didRead
-            ? TeamMatcher.networkChannelIDs(channels: channels, nowPlaying: nowPlaying, picked: picked)
+            ? TeamMatcher.networkChannelIDs(channels: channels, nowPlaying: nowPlaying, picked: picked, index: index)
             : teamNetworkChannelIDs
-        if !didRead { upcoming = upcomingTeamGames }
+        if !didRead || !didFinishUpcoming { upcoming = upcomingTeamGames }
         let ids = games + networks
         guard ids != teamChannelIDs || upcoming != upcomingTeamGames else { return }
         // M7l L14: counts only, never team or channel names.

@@ -25,6 +25,10 @@ protocol LiveTVHosting: AnyObject {
     func stopPreview()
     /// M7f L5: the playlist was re-fetched; a preview whose channel left it stops.
     func playlistDidChange()
+    /// M7m L17: Live TV shows moving video (the idle dimmer leaves it alone): the full-screen channel loading or
+    /// playing (not paused), the watch guide's preview of the playing channel, or a Multiview window loading or
+    /// playing. Observable.
+    var isShowingVideo: Bool { get }
 }
 
 extension LiveTVHosting {
@@ -60,11 +64,21 @@ final class LiveTVModel: LiveTVHosting {
     private(set) var currentChannel: Channel?
     private(set) var banner: Banner?
     private(set) var showsTimeshiftBar = false
+    /// M7m L12 (D51, burn-in): Multiview's bold outline on the focused window (and the empty and failed windows'
+    /// text, L14). True on every command in Multiview and when it opens; false `multiviewHighlightDuration` after.
+    private(set) var multiviewHighlightVisible = false
+    /// M7m L15: while paused, the timeshift bar, the behind-live badge and Multiview's pause symbol show only while
+    /// this is true: on every command (a pause is one), false `pausedOverlayDuration` after.
+    private(set) var pausedOverlayVisible = false
     /// "Can't play this channel"
     private(set) var playbackError: String?
     private(set) var guide: GuideModel?
     /// A menu over Live TV (M6 L10); it takes every command but Home while open.
     private(set) var menu: LiveMenu?
+    /// M7m L3: the menu a submenu (Layout, Match Guide) was opened from, focus included; Back goes back to it.
+    private var menuParent: LiveMenu?
+    /// M7m L3: the open menu is a submenu (Back goes back to `menuParent`).
+    var isSubmenu: Bool { menu != nil && menuParent != nil }
     /// M7f L12: search over Live TV (the guide, the player or Multiview); it takes every command but Home while open.
     private(set) var search: LiveSearchModel?
     /// M7l L12: Choose Teams over the guide, and its top level's menu; it takes every command but Home while open.
@@ -88,12 +102,25 @@ final class LiveTVModel: LiveTVHosting {
     @ObservationIgnored var channelUpMovesUpList = true
     /// The last async work started by open()/commands; tests await it.
     @ObservationIgnored private(set) var pendingTask: Task<Void, Never>?
+    /// M7m L3 (QA): the Match Guide options load in flight; a newer open (or leave) cancels it.
+    @ObservationIgnored private var matchGuideTask: Task<Void, Never>?
     /// M7f L5: the playlist and guide check of an open that adopted the preview; tests await it. Not cancelled by
     /// leaving (a fetch in flight finishes).
     @ObservationIgnored private(set) var adoptRefreshTask: Task<Void, Never>?
     @ObservationIgnored private let now: () -> Date
     /// 5 s; tests assert state right after a command, never wait for hiding.
     @ObservationIgnored private let overlayDuration: Duration
+    /// M7m L16: `Theme.guideIdleReturn` (3 min); tests pass milliseconds.
+    @ObservationIgnored private let guideIdleReturn: Duration
+    /// M7m L16: restarted by every command, `open` and `openGuide`; cancelled by `leave`. Tests await it.
+    @ObservationIgnored private(set) var guideIdleTask: Task<Void, Never>?
+    /// M7m L12: `Theme.multiviewHighlightDuration` (5 s), `Theme.pausedOverlayDuration` (15 s); tests pass
+    /// milliseconds.
+    @ObservationIgnored private let multiviewHighlightDuration: Duration
+    @ObservationIgnored private let pausedOverlayDuration: Duration
+    /// M7m L12, L15: replaced on each show, cancelled by `leave`. Tests await them.
+    @ObservationIgnored private(set) var multiviewHighlightTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var pausedOverlayTask: Task<Void, Never>?
     @ObservationIgnored private var refreshedAfterFailure = false
     /// The pool (M6 L2); players[0] is the init player. Never shrinks.
     @ObservationIgnored private var players: [any LivePlayer]
@@ -114,18 +141,25 @@ final class LiveTVModel: LiveTVHosting {
     @ObservationIgnored var guideWarmDelay: Duration = .milliseconds(400)
     /// A channel warmed this recently isn't warmed again (Left/Right in its row).
     static let guideRewarmInterval: TimeInterval = 5
-    @ObservationIgnored private var guideWarmTask: Task<Void, Never>?
+    /// Readable so tests await the warm instead of sleeping on the wall clock (M7m pre-build review, a flake).
+    @ObservationIgnored private(set) var guideWarmTask: Task<Void, Never>?
     /// M7f L12: the programme query waits this long after the last keystroke; tests use zero.
     @ObservationIgnored var searchDebounce: Duration = .milliseconds(300)
     @ObservationIgnored private var lastWarm: (id: Channel.ID, at: Date)?
 
     init(player: any LivePlayer, makePlayer: @escaping () -> any LivePlayer, library: IPTVLibrary,
-         now: @escaping () -> Date = Date.init, overlayDuration: Duration = .seconds(5)) {
+         now: @escaping () -> Date = Date.init, overlayDuration: Duration = .seconds(5),
+         guideIdleReturn: Duration = Theme.guideIdleReturn,
+         multiviewHighlightDuration: Duration = Theme.multiviewHighlightDuration,
+         pausedOverlayDuration: Duration = Theme.pausedOverlayDuration) {
         self.player = player
         self.makePlayer = makePlayer
         self.library = library
         self.now = now
         self.overlayDuration = overlayDuration
+        self.guideIdleReturn = guideIdleReturn
+        self.multiviewHighlightDuration = multiviewHighlightDuration
+        self.pausedOverlayDuration = pausedOverlayDuration
         players = [player]
         configure(player)
     }
@@ -134,6 +168,7 @@ final class LiveTVModel: LiveTVHosting {
 
     func open(channelID: Channel.ID? = nil) {
         pendingTask?.cancel()
+        restartGuideIdle()
         playbackError = nil
         guard library.hasPlaylist else {
             stopPreview()
@@ -289,6 +324,16 @@ final class LiveTVModel: LiveTVHosting {
     func leave(keepingPreview: Bool) {
         pendingTask?.cancel()
         pendingTask = nil
+        matchGuideTask?.cancel()
+        matchGuideTask = nil
+        guideIdleTask?.cancel()
+        guideIdleTask = nil
+        multiviewHighlightTask?.cancel()
+        multiviewHighlightTask = nil
+        multiviewHighlightVisible = false
+        pausedOverlayTask?.cancel()
+        pausedOverlayTask = nil
+        pausedOverlayVisible = false
         let phase = player.state.phase
         let kept = keepingPreview && multiview == nil && playbackError == nil && (phase == .loading || phase == .playing)
             ? currentChannel : nil
@@ -302,6 +347,7 @@ final class LiveTVModel: LiveTVHosting {
         guidePurpose = .watch
         guide = nil
         menu = nil
+        menuParent = nil
         closeSearch()
         closeTeamPicker()
         banner = nil
@@ -320,6 +366,12 @@ final class LiveTVModel: LiveTVHosting {
 
     func handle(_ command: RemoteCommand) -> LiveTVOutcome {
         if command == .home { return .leave }
+        restartGuideIdle()
+        // M7m L15: unconditionally, since mpv reports a pause a moment after `togglePause`; the views read it only
+        // while paused.
+        showPausedOverlay()
+        // M7m L12: every command in Multiview (its menus included), and one that opens it (the picker's Select).
+        defer { if mode == .multiview { showMultiviewHighlight() } }
         if teamPicker != nil {
             handleTeamPicker(command)
             return .handled
@@ -331,9 +383,15 @@ final class LiveTVModel: LiveTVHosting {
             case .none:
                 break
             case .close:
-                self.menu = nil
+                // M7m L3: Back from a submenu goes back to its menu; from a menu, closes it.
+                self.menu = menuParent
+                menuParent = nil
             case .choose(let action):
                 self.menu = nil
+                switch action {
+                case .chooseLayout, .openMatchGuide: menuParent = menu
+                default: menuParent = nil
+                }
                 perform(action)
             }
             return .handled
@@ -354,19 +412,17 @@ final class LiveTVModel: LiveTVHosting {
         case .setupNeeded:
             switch command {
             case .select: return .openSettings
-            case .back: return .leave
-            default: return .handled
+            default: return .handled   // M7m L1 (D49): Back stays; only Home leaves Live TV.
             }
         case .unavailable:
             switch command {
             case .select:
                 open()
                 return .handled
-            case .back: return .leave
-            default: return .handled
+            default: return .handled   // M7m L1 (D49): Back stays; only Home leaves Live TV.
             }
         case .loading:
-            return command == .back ? .leave : .handled
+            return .handled   // M7m L1 (D49): Back stays; only Home leaves Live TV.
         case .player:
             return handlePlayer(command)
         case .guide:
@@ -463,7 +519,7 @@ final class LiveTVModel: LiveTVHosting {
                 showTimeshiftBar()
             }
         case .back:
-            // M7c L11: Back hides the overlays, else opens the guide (Back in the guide leaves Live TV).
+            // M7c L11: Back hides the overlays, else opens the guide (M7m L2: Back in the guide comes back here).
             if banner != nil || showsTimeshiftBar {
                 hideOverlays()
             } else {
@@ -473,7 +529,10 @@ final class LiveTVModel: LiveTVHosting {
             return .leave
         case .menu:
             // M7 L5: the channel menu of the playing channel (no Move Up/Down: the guide isn't open).
-            if let current = currentChannel { menu = channelMenu(for: current.id) }
+            if let current = currentChannel {
+                menuParent = nil
+                menu = channelMenu(for: current.id)
+            }
         case .channelUp, .channelDown:
             zap(channelStep(command))
         case .volumeUp, .volumeDown, .mute, .power, .powerMenu:
@@ -513,7 +572,7 @@ final class LiveTVModel: LiveTVHosting {
         }
         // M7 L5: the picker has no channel menu.
         if command == .menu, case .pick = guidePurpose { return .handled }
-        guard var guide else { return .leave }
+        guard var guide else { return .handled }
         let action = guide.handle(command, now: now())
         self.guide = guide
         scheduleGuideWarm()
@@ -532,6 +591,7 @@ final class LiveTVModel: LiveTVHosting {
                 assignWindow(id, to: slot)
                 closePicker()
             } else {
+                menuParent = nil
                 menu = channelMenu(for: id)
             }
         case .groupChanged(let group):
@@ -546,8 +606,8 @@ final class LiveTVModel: LiveTVHosting {
                 closePicker()
                 break
             }
-            // M7c L11: Back in the watch guide leaves Live TV.
-            return .leave
+            // M7m L2 (D49): Back in the watch guide goes back to the channel; with none, the guide stays.
+            returnToChannel()
         }
         return .handled
     }
@@ -569,6 +629,97 @@ final class LiveTVModel: LiveTVHosting {
         }
     }
 
+    /// M7m L2 (D49): Back in the watch guide has a channel to go back to: the one playing (even when a playlist
+    /// refresh dropped it), or a failed or stopped one that is still in the playlist. The guide's hint follows it (L4).
+    var canReturnToChannel: Bool {
+        guard let current = currentChannel else { return false }
+        return isPlaying || channel(current.id) != nil
+    }
+
+    /// M7m L2: full screen on the playing channel without a reconnect; else plays the current channel again
+    /// (a failed one retries); with neither, nothing.
+    private func returnToChannel() {
+        guard canReturnToChannel, let current = currentChannel else { return }
+        if isPlaying {
+            mode = .player
+            guide = nil
+            showBanner()
+        } else {
+            watch(current.id)
+        }
+    }
+
+    // MARK: - Guide idle return (M7m L16, D51)
+
+    private func restartGuideIdle() {
+        guideIdleTask?.cancel()
+        let delay = guideIdleReturn
+        guideIdleTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            self.returnToVideo()
+        }
+    }
+
+    /// Something on screen is moving: the full-screen channel (or the watch guide's preview of it), or a Multiview
+    /// window (Multiview and the picker guide). Paused counts, as for `isPlaying`.
+    private var hasVideo: Bool {
+        if multiview != nil {
+            return tilePlayers.values.contains { $0.state.phase != .idle && $0.state.phase != .failed }
+        }
+        return isPlaying
+    }
+
+    var isShowingVideo: Bool {
+        switch mode {
+        case .player:
+            return isPlaying && player.state.phase != .paused
+        case .guide:
+            // The watch guide previews the playing channel (paused too, as in L17); the picker guide the window with
+            // sound, alike.
+            if case .pick = guidePurpose, multiview != nil {
+                let phase = previewPlayer.state.phase
+                return phase != .idle && phase != .failed
+            }
+            return isPlaying
+        case .multiview:
+            return isMultiviewMoving
+        case .setupNeeded, .loading, .unavailable:
+            return false
+        }
+    }
+
+    /// A Multiview window is loading or playing (paused and failed ones are still).
+    private var isMultiviewMoving: Bool {
+        tilePlayers.values.contains { $0.state.phase == .loading || $0.state.phase == .playing }
+    }
+
+    /// After `guideIdleReturn` without input: menus, search and Choose Teams close, the watch guide goes back to the
+    /// playing channel without a reconnect, the picker guide back to Multiview. Never starts a play; with nothing
+    /// playing it does nothing (the idle dimmer handles still screens).
+    private func returnToVideo() {
+        guard mode == .player || mode == .guide || mode == .multiview, hasVideo else { return }
+        let startMode = mode
+        let closed = menu != nil || matchGuideTask != nil || search != nil || teamPicker != nil
+        menu = nil
+        menuParent = nil
+        matchGuideTask?.cancel()
+        matchGuideTask = nil
+        closeSearch()
+        closeTeamPicker()
+        if mode == .guide {
+            if case .pick = guidePurpose {
+                closePicker()
+            } else if isPlaying {
+                returnToChannel()
+            }
+        }
+        // Only when something changed, not each time the timer runs out while a channel plays full screen.
+        if closed || mode != startMode {
+            logger.info("No input for a while: back to the video")
+        }
+    }
+
     /// The watch guide's Select: full screen on that channel, without reloading the one already playing.
     private func watch(_ id: Channel.ID) {
         guard let channel = library.channels.first(where: { $0.id == id }) else { return }
@@ -586,7 +737,9 @@ final class LiveTVModel: LiveTVHosting {
     /// Phone text (L11) while Live TV shows a channel, the guide or Multiview: opens search with it typed.
     func typeText(_ edit: TextEdit) {
         guard mode == .player || mode == .guide || mode == .multiview else { return }
+        restartGuideIdle()   // M7m L16: typing is input too
         menu = nil
+        menuParent = nil
         closeTeamPicker()
         if search == nil { openSearch() }
         search?.apply(edit)
@@ -595,6 +748,7 @@ final class LiveTVModel: LiveTVHosting {
     /// Phone Return: the first result, as if selected.
     func submitText() {
         guard let result = search?.firstResult else { return }
+        restartGuideIdle()
         choose(result)
     }
 
@@ -733,7 +887,7 @@ final class LiveTVModel: LiveTVHosting {
                 items.append(.init(id: "moveDown", title: "Move Down", action: .moveFavorite(id, by: 1)))
             }
         }
-        for team in teams(shownOn: channel).prefix(2) {
+        for team in teamSides(shownOn: channel).joined() {
             let picked = library.isTeamPicked(team.id)
             items.append(.init(id: "team.\(team.id)",
                                title: picked ? "Remove \(team.pickTitle) from My Teams" : "Add \(team.pickTitle) to My Teams",
@@ -769,6 +923,7 @@ final class LiveTVModel: LiveTVHosting {
             tilePlayers[id]?.play(channel.streamURL)
         case .chooseLayout:
             menu = layoutMenu()
+            if menu == nil { menuParent = nil }
         case .setLayout(let layout):
             for id in multiview?.setLayout(layout) ?? [] {
                 if let player = tilePlayers.removeValue(forKey: id) { release(player) }
@@ -801,17 +956,29 @@ final class LiveTVModel: LiveTVHosting {
             break
         case .openMatchGuide(let id):
             // Opens once its options load (M6b L9); nothing shows meanwhile.
-            guard let channel = channel(id) else { return }
+            guard let channel = channel(id) else {
+                menuParent = nil
+                return
+            }
             let library = library
             let mode = mode
-            pendingTask = Task {
+            // M7m L3 (QA): an older open still loading would open the wrong channel's menu or clear this parent.
+            matchGuideTask?.cancel()
+            let task = Task {
                 let options = await library.guideMatchOptions(for: channel)
+                // Cancelled: whatever replaced this task (or leave) owns menuParent now.
+                guard !Task.isCancelled else { return }
                 // M7: also from the player's channel menu (Menu in the player). M7l: not over Choose Teams or
-                // search opened meanwhile, nor in another mode.
-                guard !Task.isCancelled, self.mode == mode, mode == .guide || mode == .player, self.menu == nil,
-                      self.teamPicker == nil, self.search == nil else { return }
+                // search opened meanwhile, nor in another mode. M7m L3: the channel menu waits in menuParent.
+                guard self.mode == mode, mode == .guide || mode == .player, self.menu == nil,
+                      self.teamPicker == nil, self.search == nil else {
+                    self.menuParent = nil
+                    return
+                }
                 self.menu = self.matchMenu(channel, options)
             }
+            matchGuideTask = task
+            pendingTask = task
         case .matchGuide(let id, let choice):
             // The guide reloads through guideRevision when the rematch lands.
             guard let channel = channel(id) else { return }
@@ -820,14 +987,32 @@ final class LiveTVModel: LiveTVHosting {
         }
     }
 
-    /// M7f L13: the teams of a game entry (by its name), else of the programme on now (from the guide or the banner).
-    private func teams(shownOn channel: Channel) -> [Team] {
-        let game = TeamMatcher.teams(inGame: channel)
-        if !game.isEmpty { return game }
-        let date = now()
-        let programme = guide?.programmes[channel.id]?.first { $0.start <= date && date < $0.stop }
-            ?? (banner?.channel.id == channel.id ? banner?.now : nil)
-        return programme.map { TeamMatcher.teams(in: $0) } ?? []
+    /// M7m L31: the most teams the channel menu offers for one side of a game.
+    static let menuTeamsPerSide = 3
+
+    /// M7f L13: the teams of a game entry (by its name), else of the programme on now (from the guide or the banner),
+    /// matched with the library's options (M7m L29). M7m L31: per side, the first two sides; a game entry, a pro
+    /// programme one team each, a college side up to `menuTeamsPerSide` (the nickname fallback, a shared key), picked
+    /// teams first, then catalog order.
+    private func teamSides(shownOn channel: Channel) -> [[Team]] {
+        let index = library.teamMatchIndex
+        let sides: [[Team]]
+        let game = TeamMatcher.teams(inGame: channel, index: index)
+        if !game.isEmpty {
+            sides = game.map { [$0] }
+        } else {
+            let date = now()
+            let programme = guide?.programmes[channel.id]?.first { $0.start <= date && date < $0.stop }
+                ?? (banner?.channel.id == channel.id ? banner?.now : nil)
+            sides = programme.map { TeamMatcher.teamsBySide(in: $0, index: index) } ?? []
+        }
+        let library = library
+        return sides.prefix(2).map { side in
+            // Each side is in catalog order; a stable split keeps it within the picked and the others.
+            let picked = side.filter { library.isTeamPicked($0.id) }
+            let others = side.filter { !library.isTeamPicked($0.id) }
+            return Array((picked + others).prefix(Self.menuTeamsPerSide))
+        }
     }
 
     /// M6b L9: Automatic, No Guide, then the current match and the suggestions. Focus on the selected row.
@@ -926,7 +1111,10 @@ final class LiveTVModel: LiveTVHosting {
         guide = nil
         guidePurpose = .watch
         menu = nil
+        menuParent = nil
         hideOverlays()
+        // M7m L15: a paused channel carried into Multiview keeps its pause symbol for the full time.
+        showPausedOverlay()
         playbackError = nil
         tilePlayers = [:]
         failedWindows = []
@@ -945,6 +1133,7 @@ final class LiveTVModel: LiveTVHosting {
         applyAudio()
         saveSnapshot(true)
         showWindowChip()
+        showMultiviewHighlight()
     }
 
     /// Plays `id` on a free pool player.
@@ -991,6 +1180,7 @@ final class LiveTVModel: LiveTVHosting {
         case .select:
             guard let multiview else { break }
             if multiview.focusedChannelID != nil {
+                menuParent = nil
                 menu = windowMenu()
             } else {
                 openPicker(slot: multiview.focusedSlot)
@@ -1010,7 +1200,10 @@ final class LiveTVModel: LiveTVHosting {
             return .leave
         case .menu:
             // M7 L5: the window menu, as Select on a filled window; nothing on an empty one.
-            if multiview?.focusedChannelID != nil { menu = windowMenu() }
+            if multiview?.focusedChannelID != nil {
+                menuParent = nil
+                menu = windowMenu()
+            }
         case .channelUp, .channelDown:
             zapWindow(channelStep(command))
         case .volumeUp, .volumeDown, .mute, .power, .powerMenu:
@@ -1068,6 +1261,7 @@ final class LiveTVModel: LiveTVHosting {
         guide = nil
         guidePurpose = .watch
         menu = nil
+        menuParent = nil
         mode = .player
         if target == nil, let channel {
             play(channel)
@@ -1092,6 +1286,7 @@ final class LiveTVModel: LiveTVHosting {
         guidePurpose = .watch
         mode = .multiview
         showWindowChip()
+        showMultiviewHighlight()
     }
 
     /// L11. Releases the displaced channel's player before acquiring one, so a full 1 + 4 never needs a sixth.
@@ -1148,6 +1343,7 @@ final class LiveTVModel: LiveTVHosting {
     }
 
     private func openGuide() {
+        restartGuideIdle()
         guide = GuideModel(lineup: library.lineup, group: library.state.lastGroup,
                            focusedChannelID: currentChannel?.id, now: now())
         mode = .guide
@@ -1212,11 +1408,15 @@ final class LiveTVModel: LiveTVHosting {
         showTimeshiftBar()
     }
 
+    /// Also the paused bar (M7m L15): Select or Back hides it while paused; the next press shows it again.
     private func hideOverlays() {
         banner = nil
         showsTimeshiftBar = false
         bannerGeneration += 1
         barGeneration += 1
+        pausedOverlayTask?.cancel()
+        pausedOverlayTask = nil
+        pausedOverlayVisible = false
     }
 
     private func showBanner() {
@@ -1242,7 +1442,31 @@ final class LiveTVModel: LiveTVHosting {
         }
     }
 
-    /// Hides after `overlayDuration`; the view keeps it while paused.
+    /// M7m L12: the bold outline, for `multiviewHighlightDuration`.
+    private func showMultiviewHighlight() {
+        multiviewHighlightTask?.cancel()
+        multiviewHighlightVisible = true
+        let duration = multiviewHighlightDuration
+        multiviewHighlightTask = Task { [weak self] in
+            try? await Task.sleep(for: duration)
+            guard !Task.isCancelled, let self else { return }
+            self.multiviewHighlightVisible = false
+        }
+    }
+
+    /// M7m L15: the paused overlays, for `pausedOverlayDuration`.
+    private func showPausedOverlay() {
+        pausedOverlayTask?.cancel()
+        pausedOverlayVisible = true
+        let duration = pausedOverlayDuration
+        pausedOverlayTask = Task { [weak self] in
+            try? await Task.sleep(for: duration)
+            guard !Task.isCancelled, let self else { return }
+            self.pausedOverlayVisible = false
+        }
+    }
+
+    /// Hides after `overlayDuration`; while paused the view keeps it as long as `pausedOverlayVisible` (M7m L15).
     private func showTimeshiftBar() {
         barGeneration += 1
         let generation = barGeneration

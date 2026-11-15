@@ -48,6 +48,9 @@ final class FakeLiveTV: LiveTVHosting {
         previewChannelID = channelID
     }
 
+    /// M7m L17.
+    var isShowingVideo = false
+
     var playlistChanges = 0
     func playlistDidChange() {
         calls.append("playlistDidChange")

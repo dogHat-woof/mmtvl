@@ -21,6 +21,43 @@ struct LaunchItemEditingTests {
         #expect(items.movingItem(id: "nope", by: 1) == items)
     }
 
+    // MARK: M7m L8: home move mode
+
+    /// a, H (hidden), b, c, exit: visible a b c exit.
+    private var withHidden: [LaunchItem] {
+        var items = items
+        items.insert(LaunchItem(id: "h", title: "H", kind: .application(bundleID: "com.example.h")), at: 1)
+        return items.settingHidden(true, id: "h")
+    }
+
+    @Test func movingVisibleItemKeepsHiddenTilesInPlace() {
+        // Right by one: after b, and H stays between a's old place and b.
+        #expect(withHidden.movingVisibleItem(id: "a", toVisibleIndex: 1).map(\.id) == ["h", "b", "a", "c", "exit"])
+        // c to the front: before a; H stays right before b.
+        #expect(withHidden.movingVisibleItem(id: "c", toVisibleIndex: 0).map(\.id) == ["c", "a", "h", "b", "exit"])
+        // b left by one: before a, H still right after a.
+        #expect(withHidden.movingVisibleItem(id: "b", toVisibleIndex: 0).map(\.id) == ["b", "a", "h", "c", "exit"])
+        // The visible order is what the home screen shows.
+        #expect(withHidden.movingVisibleItem(id: "a", toVisibleIndex: 2).visible.map(\.id) == ["b", "c", "a", "exit"])
+        // Its own place, a hidden item or an unknown id: unchanged.
+        #expect(withHidden.movingVisibleItem(id: "b", toVisibleIndex: 1) == withHidden)
+        #expect(withHidden.movingVisibleItem(id: "h", toVisibleIndex: 0) == withHidden)
+        #expect(withHidden.movingVisibleItem(id: "nope", toVisibleIndex: 0) == withHidden)
+    }
+
+    @Test func movingVisibleItemToTheEnd() {
+        // After the last visible item, before trailing hidden ones.
+        let trailing = withHidden.movingItem(id: "h", by: 10)
+        #expect(trailing.map(\.id) == ["a", "b", "c", "exit", "h"])
+        #expect(trailing.movingVisibleItem(id: "a", toVisibleIndex: 3).map(\.id) == ["b", "c", "exit", "a", "h"])
+        // Past the end is clamped to the end; below zero to the front.
+        #expect(trailing.movingVisibleItem(id: "a", toVisibleIndex: 99).map(\.id) == ["b", "c", "exit", "a", "h"])
+        #expect(trailing.movingVisibleItem(id: "exit", toVisibleIndex: -5).map(\.id) == ["exit", "a", "b", "c", "h"])
+        // The only visible item stays where it is.
+        let lone = [items[0], items[1]].settingHidden(true, id: "b")
+        #expect(lone.movingVisibleItem(id: "a", toVisibleIndex: 1).map(\.id) == ["a", "b"])
+    }
+
     @Test func hidesAndShows() {
         let hidden = items.settingHidden(true, id: "b")
         #expect(hidden[1].isHidden == true)

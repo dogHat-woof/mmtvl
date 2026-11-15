@@ -15,9 +15,9 @@ FBS and FCS football, D-I men's and women's basketball, and D-I baseball. Run by
 Only https to site.api.espn.com and sports.core.api.espn.com is fetched, redirects included; responses are capped
 at 8 MB, and every value written is checked (non-empty text, no control, zero-width or bidi characters).
 
-Prints the count per league and per conference, the baseball schools dropped, every alias dropped because two
-schools of one league would share it, and any team without a conference. A league far outside its expected size
-stops the script, and nothing is written.
+Prints the count per league and per conference, the baseball schools dropped, every alias or abbreviation two
+schools of one league share (kept on both, M7m L26: the app matches them all), and any team without a conference.
+A league far outside its expected size stops the script, and nothing is written.
 
 Usage (from the repo root): python3 -I scripts/gen-college-teams.py
 Tests: python3 -I scripts/test_gen_college_teams.py
@@ -79,14 +79,69 @@ CONFERENCE_TITLES = {
     "Metro Conference": "MAAC",  # ESPN's name for the Metro Atlantic Athletic Conference
 }
 
-# Hand aliases (L8), keyed by ESPN's location (the school) or shortDisplayName: names guides use that ESPN doesn't.
+# Hand aliases (L8, M7m L26), keyed by ESPN's location (the school) or shortDisplayName: names guides use that ESPN
+# doesn't, chiefly spelled-out forms of the schools ESPN names only by initials. A key no team has is printed.
 HAND_ALIASES = {
     "App State": ["Appalachian State"],
     "Grambling": ["Grambling State"],
     "Ole Miss": ["Mississippi"],
     "UConn": ["Connecticut"],
     "Miami": ["Miami (FL)"],
+    "SMU": ["Southern Methodist"],
+    "UAB": ["Alabama-Birmingham", "Alabama at Birmingham"],
+    "UTSA": ["Texas-San Antonio", "UT San Antonio"],
+    "BYU": ["Brigham Young"],
+    "Chattanooga": ["UT Chattanooga"],  # ESPN writes only "Chattanooga"; the UT rule adds "Tennessee-Chattanooga"
+    "TCU": ["Texas Christian"],
+    "UCF": ["Central Florida"],
+    "USC": ["Southern California"],
+    "UCLA": ["California-Los Angeles"],
+    "UNLV": ["Nevada-Las Vegas"],
+    "UTEP": ["Texas-El Paso", "UT El Paso"],
+    "LSU": ["Louisiana State"],
+    "VMI": ["Virginia Military", "Virginia Military Institute"],
+    "NJIT": ["New Jersey Tech"],
+    "UMBC": ["Maryland-Baltimore County"],
+    "VCU": ["Virginia Commonwealth"],
+    "UIC": ["Illinois-Chicago"],
+    "Louisiana": ["Louisiana-Lafayette", "UL Lafayette"],
+    "UL Monroe": ["Louisiana-Monroe"],
+    "NC State": ["North Carolina State"],
+    "Southern Miss": ["Southern Mississippi"],
+    "Hawai'i": ["Hawaii"],
+    "Miami (OH)": ["Miami (Ohio)", "Miami University"],
 }
+
+# Hand initials (M7m L29), keyed like HAND_ALIASES: initials guides use that ESPN's abbreviation isn't. Written to
+# `abbreviations`, not `aliases`: the app matches them only with Settings' Match Initials on. A key no team has is
+# printed.
+HAND_ABBREVIATIONS = {
+    "UL Monroe": ["ULM"],
+    "UT Rio Grande Valley": ["UTRGV"],
+    "South Florida": ["USF"],
+    "Long Island University": ["LIU"],
+}
+
+# ESPN's abbreviation ("ULM", "UCF", "TA&M") is an abbreviation when it's 2-6 letters, digits or "&" (M7m L26, L29).
+ABBREVIATION = re.compile(r"[A-Za-z0-9&]{2,6}")
+
+# Variants generated from each school form (M7m L26): (pattern, replacement), each applied once to the form.
+SCHOOL_VARIANTS = [
+    (r"^UL (.+)$", r"Louisiana-\1"),
+    (r"^UNC (.+)$", r"North Carolina-\1"),
+    (r"^UC (.+)$", r"California-\1"),
+    (r"^UT (Martin|Chattanooga)$", r"Tennessee-\1"),
+    (r"^UT (?!Martin$|Chattanooga$)(.+)$", r"Texas-\1"),
+    (r"^UMass (.+)$", r"Massachusetts-\1"),
+    (r"^SIU (.+)$", r"Southern Illinois-\1"),
+    (r"^Cal State (.+)$", r"CSU \1"),
+    (r"^Cal State (.+)$", r"Cal St. \1"),
+    (r"^St\.? (.+)$", r"Saint \1"),
+    (r"^Saint (.+)$", r"St. \1"),
+    (r"^(.+) St\.?$", r"\1 State"),  # L8's rule
+    (r"^(.+) State$", r"\1 St."),
+    (r"\(OH\)", r"(Ohio)"),
+]
 
 # D-I schools in ESPN's college-baseball list that have no D-I baseball team (2026-11-08: absent from Wikipedia's
 # "List of NCAA Division I baseball programs" for the 2027 season, and known to have dropped or never had the sport).
@@ -287,19 +342,18 @@ def normalized(text):
     return " ".join(re.sub(r"[^0-9a-z]+", " ", folded).split())
 
 
-def aliases(team):
-    """shortDisplayName and location when they differ from the name, " St"/" St." also as " State", the hand table."""
-    names = []
-    for value in (team.get("shortDisplayName", ""), team.get("location", "")):
-        if isinstance(value, str) and value:
-            names.append(value)
-            state = re.sub(r" St\.?$", " State", value)
-            if state != value:
-                names.append(state)
-    for key in (team.get("location"), team.get("shortDisplayName")):
-        if isinstance(key, str):
-            names += HAND_ALIASES.get(key, [])
-    seen = {normalized(team["displayName"]) if isinstance(team.get("displayName"), str) else ""}
+def school_variants(form):
+    """SCHOOL_VARIANTS' rewrites of one school form ("UL Monroe" -> "Louisiana-Monroe"), in table order."""
+    variants = []
+    for pattern, replacement in SCHOOL_VARIANTS:
+        variant = re.sub(pattern, replacement, form)
+        if variant != form:
+            variants.append(variant)
+    return variants
+
+
+def unique(names, seen):
+    """`names` without blanks and repeats (normalized), and without any in `seen`, which gains the ones kept."""
     result = []
     for name in names:
         key = normalized(name)
@@ -307,6 +361,41 @@ def aliases(team):
             seen.add(key)
             result.append(name)
     return result
+
+
+def name_key(team):
+    return normalized(team["displayName"]) if isinstance(team.get("displayName"), str) else ""
+
+
+def aliases(team):
+    """The school forms (shortDisplayName, location, the hand table) with their generated variants; each once, and
+    none the same as the name. ESPN's abbreviation is in `abbreviations` (M7m L29), unless it's one of these."""
+    forms = [value for value in (team.get("shortDisplayName"), team.get("location"))
+             if isinstance(value, str) and value]
+    for key in (team.get("location"), team.get("shortDisplayName")):
+        if isinstance(key, str):
+            forms += HAND_ALIASES.get(key, [])
+    names = []
+    for form in forms:
+        names.append(form)
+        names += school_variants(form)
+    return unique(names, {name_key(team)})
+
+
+def abbreviations(team):
+    """M7m L29: ESPN's abbreviation, then the hand initials (HAND_ABBREVIATIONS); each once, and none the same as the
+    name, the school or an alias after normalizing ("BYU" is BYU's school: it stays an alias)."""
+    names = []
+    abbreviation = team.get("abbreviation")
+    if isinstance(abbreviation, str) and ABBREVIATION.fullmatch(abbreviation):
+        names.append(abbreviation)
+    for key in (team.get("location"), team.get("shortDisplayName")):
+        if isinstance(key, str):
+            names += HAND_ABBREVIATIONS.get(key, [])
+    taken = {name_key(team)} | {normalized(name) for name in aliases(team)}
+    if isinstance(team.get("location"), str):
+        taken.add(normalized(team["location"]))
+    return unique(names, taken)
 
 
 def entry(league, team, conference):
@@ -321,6 +410,7 @@ def entry(league, team, conference):
         "nickname": team.get("name"),
         "conference": conference,
         "aliases": aliases(team),
+        "abbreviations": abbreviations(team),
     }
 
 
@@ -338,32 +428,33 @@ def validate(entries):
         where = item.get("id") if isinstance(item.get("id"), str) else repr(item.get("id"))
         for key in ("id", "league", "name", "school", "nickname", "conference"):
             check_text(item.get(key), f"{where} {key}")
-        if not isinstance(item.get("aliases"), list):
-            raise CatalogError(f"{where} aliases isn't a list; nothing written")
-        for alias in item["aliases"]:
-            check_text(alias, f"{where} alias")
+        for key in ("aliases", "abbreviations"):
+            if not isinstance(item.get(key), list):
+                raise CatalogError(f"{where} {key} isn't a list; nothing written")
+            for alias in item[key]:
+                check_text(alias, f"{where} {key[:-1]}")
 
 
 def drop_ambiguous(entries):
-    """Drops an alias from every school of a league whose name, school or alias it would share; returns the drops."""
+    """Reports the aliases (and M7m L29 abbreviations) two or more teams of a league share as a name, school, alias or
+    abbreviation (M7m L26: they're kept on every team, and the app matches them all), and the names or schools teams
+    share. Changes nothing.
+    Returns (shared: [(league, normalized alias, [ids])], clashes: [(league, normalized name, [ids])])."""
     owners = {}  # (league, normalized name) -> ids of the teams with it as name, school or alias
-    fixed = {}  # the same, for name and school only (which are never dropped)
+    fixed = {}  # the same, for name and school only
+    aliased = set()  # (league, normalized alias) of every alias
     for item in entries:
-        for name in [item["name"], item["school"]] + item["aliases"]:
+        extra = item["aliases"] + item.get("abbreviations", [])
+        for name in [item["name"], item["school"]] + extra:
             owners.setdefault((item["league"], normalized(name)), set()).add(item["id"])
         for name in (item["name"], item["school"]):
             fixed.setdefault((item["league"], normalized(name)), set()).add(item["id"])
-    dropped = []
-    for item in entries:
-        kept = []
-        for alias in item["aliases"]:
-            if len(owners[(item["league"], normalized(alias))]) > 1:
-                dropped.append((item["league"], alias, item["id"]))
-            else:
-                kept.append(alias)
-        item["aliases"] = kept
+        for alias in extra:
+            aliased.add((item["league"], normalized(alias)))
+    shared = sorted((league, key, sorted(owners[(league, key)])) for league, key in aliased
+                    if len(owners[(league, key)]) > 1)
     clashes = sorted((league, key, sorted(ids)) for (league, key), ids in fixed.items() if len(ids) > 1)
-    return dropped, clashes
+    return shared, clashes
 
 
 def check_range(label, count):
@@ -414,12 +505,12 @@ def main():
     if duplicates:
         raise CatalogError(f"duplicate ids {duplicates}; nothing written")
 
-    dropped, clashes = drop_ambiguous(entries)
+    shared, clashes = drop_ambiguous(entries)
     used_keys = set()
     for league_members in members.values():
         for team, _ in league_members:
             used_keys.update((team.get("location"), team.get("shortDisplayName")))
-    unused = sorted(set(HAND_ALIASES) - used_keys)
+    unused = sorted((set(HAND_ALIASES) | set(HAND_ABBREVIATIONS)) - used_keys)
 
     order = {league: index for index, (league, _) in enumerate(LEAGUES)}
     entries.sort(key=lambda i: (order[i["league"]], i["conference"].casefold(), i["name"].casefold(), i["id"]))
@@ -440,17 +531,16 @@ def main():
         print(f"  {slug}")
     for slug in baseball_unknown:
         print(f"Warning: NO_BASEBALL has \"{slug}\", which no baseball team has")
-    print("\nAmbiguous aliases dropped:" + ("" if dropped else " none"))
-    for league, alias, team_id in sorted(dropped):
-        print(f"  {league}: \"{alias}\" from {team_id}")
+    print("\nShared aliases and abbreviations (kept on every team that has them):" + ("" if shared else " none"))
+    for league, key, team_ids in shared:
+        print(f"  {league}: \"{key}\" {', '.join(team_ids)}")
     if clashes:
         print("\nNames or schools two teams of one league share (kept, can't be told apart):")
         for league, key, team_ids in clashes:
             print(f"  {league}: \"{key}\" {', '.join(team_ids)}")
     missing = [i["id"] for i in entries if not i["conference"]]
     print("\nTeams without a conference: " + (", ".join(missing) if missing else "none"))
-    if unused:
-        print("\nHand aliases whose key no team has: " + ", ".join(unused))
+    print("\nHand aliases or abbreviations whose key no team has: " + (", ".join(unused) if unused else "none"))
 
 
 if __name__ == "__main__":

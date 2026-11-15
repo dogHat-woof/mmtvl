@@ -10,6 +10,8 @@ struct GuideView: View {
     var isPicking = false
     /// Starred in the channel cell (M6b).
     var favoriteIDs: Set<Channel.ID> = []
+    /// M7m L4: Back in the watch guide returns to a channel (`LiveTVModel.canReturnToChannel`); the hint says so.
+    var hasChannel = false
 
     var body: some View {
         TimelineView(.everyMinute) { context in
@@ -33,7 +35,8 @@ struct GuideView: View {
                 case .grid, .channel:
                     EmptyView()
                 }
-                Text(Self.hint(focus: model.focus, isPicking: isPicking, row: model.focusedRow?.kind ?? .channel))
+                Text(Self.hint(focus: model.focus, isPicking: isPicking, row: model.focusedRow?.kind ?? .channel,
+                               hasChannel: hasChannel))
                     .font(Theme.settingsHintFont)
                     .foregroundStyle(Theme.secondaryText)
                     .frame(width: Theme.canvasSize.width)
@@ -44,23 +47,26 @@ struct GuideView: View {
     }
 
     /// The bottom hint per focus and purpose (M6), and (M7l 8c) My Teams' Choose Teams and upcoming rows.
-    nonisolated static func hint(focus: GuideModel.Focus, isPicking: Bool, row: GuideModel.Row.Kind = .channel) -> String {
+    /// M7m L4: in the watch guide Back goes back to the channel (`hasChannel`); with no channel it does nothing.
+    nonisolated static func hint(focus: GuideModel.Focus, isPicking: Bool, row: GuideModel.Row.Kind = .channel,
+                                 hasChannel: Bool = false) -> String {
+        let back = hasChannel ? " · Back: back to the channel" : ""
         switch (focus, row, isPicking) {
         case (.grid, .chooseTeams, false), (.channel, .chooseTeams, false):
-            return "Select: choose your teams · Left: groups · Back: leave Live TV"
+            return "Select: choose your teams · Left: groups" + back
         case (.grid, .chooseTeams, true), (.channel, .chooseTeams, true):
             return "Select: choose your teams · Left: groups · Back: cancel"
         case (.grid, .upcoming, false), (.channel, .upcoming, false):
-            return "Select: watch this channel · Left: groups · Back: leave Live TV"
+            return "Select: watch this channel · Left: groups" + back
         case (.grid, .upcoming, true), (.channel, .upcoming, true):
             return "Select: show this channel in window · Left: groups · Back: cancel"
         default:
             break
         }
         return switch (focus, isPicking) {
-        case (.grid, false): "Select: watch · Left at now: channel options · Back: leave Live TV"
+        case (.grid, false): "Select: watch · Left at now: channel options" + back
         case (.grid, true): "Select: show in window · Left at now: channel · Back: cancel"
-        case (.channel, false): "Select: options · Left: groups · Right: programmes · Back: leave Live TV"
+        case (.channel, false): "Select: options · Left: groups · Right: programmes" + back
         case (.channel, true): "Select: show in window · Left: groups · Right: programmes · Back: cancel"
         case (.groups, _): "Select: show group · Back: close list"
         case (.search, _): "Select: search channels and programmes · Back: close list"

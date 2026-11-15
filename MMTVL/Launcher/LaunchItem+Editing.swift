@@ -15,6 +15,25 @@ nonisolated extension Array where Element == LaunchItem {
         return result
     }
 
+    /// M7m L8: home move mode. Puts a visible item at `toVisibleIndex` among the visible items (clamped): right before
+    /// the visible item now at that index once it's taken out, or after the last visible one. Hidden items keep their
+    /// places relative to the others. A hidden or unknown id returns the array unchanged.
+    func movingVisibleItem(id: String, toVisibleIndex: Int) -> [LaunchItem] {
+        guard let index = firstIndex(where: { $0.id == id }), self[index].isVisible else { return self }
+        var result = self
+        let item = result.remove(at: index)
+        let others = result.visible
+        let target = Swift.min(Swift.max(toVisibleIndex, 0), others.count)
+        if target < others.count, let anchor = result.firstIndex(where: { $0.id == others[target].id }) {
+            result.insert(item, at: anchor)
+        } else if let last = others.last, let lastIndex = result.firstIndex(where: { $0.id == last.id }) {
+            result.insert(item, at: lastIndex + 1)
+        } else {
+            result.insert(item, at: index)
+        }
+        return result
+    }
+
     /// Stores `true` when hidden and `nil` when shown, keeping the JSON clean.
     func settingHidden(_ hidden: Bool, id: String) -> [LaunchItem] {
         updating(id: id) { $0.isHidden = hidden ? true : nil }

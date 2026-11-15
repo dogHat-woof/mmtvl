@@ -20,6 +20,9 @@ final class PhoneRemoteRecorder {
     var pointerActions: [PointerAction] = []
     var repairs = false
     var repairCalls = 0
+    /// M7m L20: the screen saver shows; each input it swallows is recorded.
+    var screenSaverShowing = false
+    var screenSaverInputs: [String] = []
 
     var environment: PhoneRemoteEnvironment {
         PhoneRemoteEnvironment(
@@ -45,6 +48,11 @@ final class PhoneRemoteRecorder {
             repairForeground: {
                 self.repairCalls += 1
                 return self.repairs
+            },
+            endsScreenSaver: { input in
+                guard self.screenSaverShowing else { return false }
+                self.screenSaverInputs.append(input)
+                return true
             }
         )
     }
@@ -269,6 +277,27 @@ struct PhoneRemoteTests {
         #expect(recorder.edits.isEmpty)
         send(#"{"type":"text","value":"a"}"#)
         #expect(recorder.edits == [TextEdit(deletions: 0, insertion: "a")])
+    }
+
+    /// M7m L19, L20: while the screen saver shows, a command, text or Return only ends it: nothing is dispatched,
+    /// posted or typed, and the text typed meanwhile goes in with the next edit.
+    @Test func inputWhileTheScreenSaverShowsOnlyEndsIt() {
+        paired()
+        recorder.isActive = false
+        recorder.screenSaverShowing = true
+        send(#"{"type":"command","command":"down"}"#)
+        send(#"{"type":"command","command":"home"}"#)
+        send(#"{"type":"text","value":"a"}"#)
+        send(#"{"type":"submit"}"#)
+        #expect(recorder.screenSaverInputs == ["phone down", "phone home", "phone text", "phone return"])
+        #expect(recorder.dispatched.isEmpty)
+        #expect(recorder.posted.isEmpty)
+        #expect(recorder.edits.isEmpty)
+        #expect(recorder.returns == 0)
+        #expect(recorder.repairCalls == 0)
+        recorder.screenSaverShowing = false
+        send(#"{"type":"text","value":"ab"}"#)
+        #expect(recorder.edits == [TextEdit(deletions: 0, insertion: "ab")])
     }
 
     @Test func submitPostsReturnAndResets() {

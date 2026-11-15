@@ -180,6 +180,17 @@ final class SettingsModel {
         syncPlexLink()
     }
 
+    /// M7m L10 (D50): Settings opened on a tile's page from the home tile menu: root (on Home Screen) → Home Screen
+    /// (on the tile's row) → the tile, so Back walks out as if it had been opened by hand. An unknown tile: the root.
+    func openTile(_ id: String) {
+        reset()
+        guard item(id: id) != nil else { return }
+        setFocus("homeScreen")
+        push(.homeScreen)
+        setFocus(Self.tileRowID(id))
+        push(.tile(id: id))
+    }
+
     /// Settings closed (the router went home): ends phone pairing, button learning and the Plex link code.
     func screenDidClose() {
         syncLearning(closed: true)
@@ -940,6 +951,14 @@ final class SettingsModel {
 
     private func setFocus(_ id: String?) {
         stack[stack.count - 1].focusedRowID = id
+    }
+
+    /// M7m L8: the home screen's move mode, one step at a time; saved and given to the router like any tile edit
+    /// (`applyItems`). Never touches the Settings stack or Settings' own move mode.
+    func moveTile(id: String, toVisibleIndex index: Int) {
+        let new = items.movingVisibleItem(id: id, toVisibleIndex: index)
+        guard new != items else { return }
+        updateItems(new)
     }
 
     private func updateItems(_ new: [LaunchItem]) {

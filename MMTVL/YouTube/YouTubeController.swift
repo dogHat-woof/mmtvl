@@ -11,6 +11,10 @@ protocol YouTubeHosting: AnyObject {
     func pause()
     /// Opens YouTube on `https://www.youtube.com/tv?<query>` (a cold cast, M7b L2), creating the web view if needed.
     func launch(query: String)
+    /// Loads the start URL again (M7m L7: the tile menu's Reload YouTube). No-op before the first open.
+    func reload()
+    /// True once the web view exists (an open or a cast); the tile menu offers Reload YouTube only then.
+    var hasOpened: Bool { get }
     /// Leanback exited (window.close / webViewDidClose). May be called several times in a row.
     var onExit: (() -> Void)? { get set }
 }
@@ -27,6 +31,7 @@ final class YouTubeController: YouTubeHosting {
 
     private(set) var phase: Phase = .idle
     private(set) var webView: WKWebView?
+    var hasOpened: Bool { webView != nil }
     @ObservationIgnored var onExit: (() -> Void)?
     @ObservationIgnored private let userAgent: String
     @ObservationIgnored private let delegate = YouTubeWebDelegate()

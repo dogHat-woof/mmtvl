@@ -12,12 +12,19 @@
 #   scripts/deploy-mm.sh --rollback      install the newest kept build older than the installed one
 #
 # Needs SSH key login to the mini (Remote Login on). Override with MM_HOST=user@host and MM_KEY=<private key>.
+# The key is used through macOS's SSH agent, found even when SSH_AUTH_SOCK isn't set (a Claude Code shell). Load it
+# in Terminal: once ever, ssh-add --apple-use-keychain ~/.ssh/id_ed25519_example (saves the passphrase in the Keychain);
+# after each restart of this Mac, ssh-add --apple-load-keychain (no passphrase asked).
 set -euo pipefail
 
 host=${MM_HOST:-user@mm.example}
 key=${MM_KEY:-$HOME/.ssh/id_ed25519_example}
 keep=3
-opts=(-i "$key" -o IdentitiesOnly=yes -o ConnectTimeout=5)
+opts=(-i "$key" -o IdentitiesOnly=yes -o ConnectTimeout=5 -o UseKeychain=yes)
+if [[ -z ${SSH_AUTH_SOCK:-} ]]; then
+    sock=$(launchctl print "gui/$(id -u)/com.openssh.ssh-agent" 2>/dev/null | awk '/SSH_AUTH_SOCK =>/ {print $3; exit}')
+    if [[ -S ${sock:-} ]]; then export SSH_AUTH_SOCK=$sock; fi
+fi
 
 # prune <dir> <n>: deletes all but the newest n MMTVL-*-build<N>.zip in dir, by build number. Used here and on the mini.
 prune_fn=$(cat <<'FN'
@@ -63,7 +70,13 @@ stop_mmtvl() {
 }
 
 start_mmtvl() {
-    open "$app"
+    # Right after the swap, LaunchServices can refuse the new bundle (error -600, build 34); a second open works.
+    local try
+    for try in 1 2 3; do
+        open "$app" && break
+        echo "open failed (try $try of 3); trying again in 2 s"
+        sleep 2
+    done
     for _ in {1..25}; do
         if pgrep -x MMTVL >/dev/null; then
             echo "MMTVL $(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Contents/Info.plist") build $(installed_build) is running"
@@ -118,7 +131,8 @@ REMOTE
 )
 
 if ! ssh "${opts[@]}" -o BatchMode=yes "$host" true 2>/dev/null; then
-    echo "Can't log in to ${host} with an SSH key (is the mini awake, and is the key loaded?)."
+    echo "Can't log in to ${host} with an SSH key. Is the mini awake? Is the key in the SSH agent?"
+    echo "In Terminal: ssh-add --apple-load-keychain (or, the first time: ssh-add --apple-use-keychain ${key})"
     exit 1
 fi
 

@@ -57,6 +57,9 @@ nonisolated struct Team: Identifiable, Hashable, Sendable {
     let nickname: String
     /// Other full names: renames, moves, "LA" spellings; for college, the school's other names ("Grambling State").
     let aliases: [String]
+    /// College (M7m L29): ESPN's abbreviation and the hand initials ("ULM", "BUF"), none of them the school or an
+    /// alias. Matched only with `TeamMatchOptions.initials`; Search always finds them. Empty for pro teams.
+    let abbreviations: [String]
     /// College (M7l): "Michigan"; nil for pro teams.
     let school: String?
     /// College (M7l): "Big Ten", "Big Sky (FCS)"; nil for pro teams.
@@ -69,18 +72,20 @@ nonisolated struct Team: Identifiable, Hashable, Sendable {
         self.name = name
         self.nickname = nickname
         self.aliases = aliases
+        self.abbreviations = []
         self.school = nil
         self.conference = nil
     }
 
     /// A college team; `id` is the whole id ("ncaaf.michigan-wolverines").
     init(id: String, league: TeamLeague, name: String, school: String, nickname: String, conference: String,
-         aliases: [String] = []) {
+         aliases: [String] = [], abbreviations: [String] = []) {
         self.id = id
         self.league = league
         self.name = name
         self.nickname = nickname
         self.aliases = aliases
+        self.abbreviations = abbreviations
         self.school = school
         self.conference = conference
     }
@@ -142,6 +147,7 @@ nonisolated enum TeamCatalog {
         let nickname: String
         let conference: String
         let aliases: [String]?
+        let abbreviations: [String]?
     }
 
     /// The college teams of a catalog file. Entries whose league isn't a college league, whose id doesn't start with
@@ -154,7 +160,8 @@ nonisolated enum TeamCatalog {
                   entry.id.hasPrefix("\(league.rawValue)."), seen.insert(entry.id).inserted
             else { return nil }
             return Team(id: entry.id, league: league, name: entry.name, school: entry.school, nickname: entry.nickname,
-                        conference: entry.conference, aliases: entry.aliases ?? [])
+                        conference: entry.conference, aliases: entry.aliases ?? [],
+                        abbreviations: entry.abbreviations ?? [])
         }
     }
 

@@ -66,7 +66,11 @@ final class PowerMenuPresenter {
         case .power:
             router.pressPower()
         case .powerMenu:
-            guard router.powerMenu == nil else { return }
+            guard router.powerMenu == nil else {
+                // M7m L19: an open menu under the dim still wakes it.
+                router.wakeFromIdle(by: "powerMenu")
+                return
+            }
             let active = isLauncherActive()
             previousApp = active ? nil : frontApp()
             router.openPowerMenu()

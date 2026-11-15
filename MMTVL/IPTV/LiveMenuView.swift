@@ -4,6 +4,13 @@ import SwiftUI
 /// rows with chevrons where rows are hidden (M6b L10).
 struct LiveMenuView: View {
     let menu: LiveMenu
+    /// M7m L3: a submenu (Layout, Match Guide), where Back goes back to the menu it came from.
+    var isSubmenu = false
+
+    /// M7m L3: the footer; Back goes back from a submenu and closes a menu.
+    static func hint(isSubmenu: Bool) -> String {
+        isSubmenu ? "Select: choose · Back: back" : "Select: choose · Back: close"
+    }
 
     var body: some View {
         ZStack {
@@ -19,7 +26,7 @@ struct LiveMenuView: View {
                     row(menu.items[index], isFocused: index == menu.focusedIndex)
                 }
                 chevron("chevron.down", shows: menu.hasHiddenBelow)
-                Text("Select: choose · Back: close")
+                Text(Self.hint(isSubmenu: isSubmenu))
                     .font(Theme.settingsHintFont)
                     .foregroundStyle(Theme.secondaryText)
                     .padding(.top, 16)

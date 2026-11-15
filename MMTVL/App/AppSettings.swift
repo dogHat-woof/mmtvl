@@ -78,7 +78,15 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
     /// M7l L2 (D46): how see-through every glass panel and tile rim is (Settings → System → Glass). Unknown values
     /// read as `clear`.
     var glassStyle = GlassStyle.clear
+    /// M7m L29: initials ("ULM", "BUF") count as team names in programmes and game entries (Settings → Live TV →
+    /// My Teams → Match Initials).
+    var teamMatchInitials = false
+    /// M7m L29: a programme naming only a nickname ("The Cougars meet the Bearcats") counts for the teams with it
+    /// (Settings → Live TV → My Teams → Match Nicknames Alone).
+    var teamMatchNicknames = false
 
+    /// M7m L29: the matcher's options from the two switches (`IPTVLibrary.teamMatchOptions`).
+    var teamMatchOptions: TeamMatchOptions { TeamMatchOptions(initials: teamMatchInitials, nicknames: teamMatchNicknames) }
     var volumeMode: VolumeMode { VolumeMode(rawValue: phoneRemoteVolume) ?? .auto }
     /// Step 9c (build 25 security L2): a receiver is set up in Settings (a brand, or HDMI-CEC), whether or not its
     /// connection is usable (a network receiver without a usable `receiverHost` counts). The TV gets the volume
@@ -152,5 +160,10 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
         // M7l step 2: like `receiverBrand`, an unknown step or a value of another type reads as the default (S6).
         glassStyle = ((try? container.decodeIfPresent(String.self, forKey: .glassStyle)) ?? nil)
             .flatMap(GlassStyle.init(rawValue:)) ?? defaults.glassStyle
+        // M7m L29: like `siriRemoteSwipes`, a value of another type reads as the default (S6).
+        teamMatchInitials = ((try? container.decodeIfPresent(Bool.self, forKey: .teamMatchInitials)) ?? nil)
+            ?? defaults.teamMatchInitials
+        teamMatchNicknames = ((try? container.decodeIfPresent(Bool.self, forKey: .teamMatchNicknames)) ?? nil)
+            ?? defaults.teamMatchNicknames
     }
 }

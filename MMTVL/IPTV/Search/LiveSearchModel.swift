@@ -136,11 +136,12 @@ final class LiveSearchModel {
             .map(String.init)
     }
 
-    /// M7l L12: at most `maxTeamResults` teams whose name, school, league and conference hold every word. Teams
-    /// whose school or an alias is exactly the words come first ("michigan": Michigan, not Michigan State), then
-    /// those whose name or school has every word as a whole word ("duke": Duke's teams), then those where every
-    /// word starts a word of the name or school (Duquesne and James Madison "Dukes"), then the rest; catalog order
-    /// within each.
+    /// M7l L12: at most `maxTeamResults` teams whose name, school, league and conference (M7m L29: or aliases and
+    /// abbreviations, whatever the matching options say: typing "ULM" asks for UL Monroe) hold every word. Teams
+    /// whose school, an alias or an abbreviation is exactly the words come first ("michigan": Michigan, not Michigan
+    /// State), then those whose name or school has every word as a whole word ("duke": Duke's teams), then those
+    /// where every word starts a word of the name or school (Duquesne and James Madison "Dukes"), then the rest;
+    /// catalog order within each.
     /// Words found in the team's league title or conference ("basketball", "big") don't count for the rank.
     static func teams(matching words: [String]) -> [Team] {
         teamSearchTexts.enumerated()
@@ -172,15 +173,17 @@ final class LiveSearchModel {
             .map(String.init)
     }
 
-    /// Each team with its folded search text, its folded league title and conference, the words of its name and
-    /// school, and its school and aliases (words joined by one space), made once.
+    /// Each team with its folded search text (name, school, league, conference, aliases, abbreviations), its folded
+    /// league title and conference, the words of its name and school, and its school, aliases and abbreviations
+    /// (words joined by one space), made once.
     private static let teamSearchTexts:
         [(team: Team, text: String, groupText: String, nameWords: Set<String>, schoolNames: Set<String>)] =
         TeamCatalog.teams.map { team in
             let fold = { (text: String) in text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
-            let text = fold([team.name, team.school ?? "", team.league.title, team.conference ?? ""].joined(separator: " "))
+            let text = fold(([team.name, team.school ?? "", team.league.title, team.conference ?? ""]
+                + team.aliases + team.abbreviations).joined(separator: " "))
             let groupText = fold(team.league.title + " " + (team.conference ?? ""))
-            let schoolNames = Set(([team.school].compactMap { $0 } + team.aliases)
+            let schoolNames = Set(([team.school].compactMap { $0 } + team.aliases + team.abbreviations)
                 .map { tokens(in: $0).joined(separator: " ") }.filter { !$0.isEmpty })
             return (team, text, groupText, Set(tokens(in: team.name + " " + (team.school ?? ""))), schoolNames)
         }

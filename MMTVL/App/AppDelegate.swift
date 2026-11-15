@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import IOKit.pwr_mgt
 import Network
 import SwiftUI
 import os
@@ -12,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let displayLogger = Logger(subsystem: "dev.mmtvl.launcher", category: "Display")
     private static let receiverLogger = Logger(subsystem: "dev.mmtvl.launcher", category: "Receiver")
     private static let tvLogger = Logger(subsystem: "dev.mmtvl.launcher", category: "TV")
+    private static let powerLogger = Logger(subsystem: "dev.mmtvl.launcher", category: "Power")
 
     private let launcher = AppLauncher()
     private var youtube: YouTubeController?
@@ -75,6 +77,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var powerOffObserver: NSObjectProtocol?
     /// M7c L16: the displays or the system went to sleep; the Live TV preview stops.
     private var screensSleepObservers: [NSObjectProtocol] = []
+    /// M7m L20: macOS's screen saver, started after the dim and ended on a press.
+    private let screenSaver = ScreenSaver()
+    /// M7m L24: in kiosk mode the Mac never idle-sleeps, so a TV turned off by its own remote, its button or its
+    /// standby timer doesn't let it sleep. Held from launch, never released (process exit releases it). Sleep Mac mini
+    /// still sleeps, and the displays still sleep.
+    private let noIdleSleep = SleepAssertion(type: kIOPMAssertionTypePreventUserIdleSystemSleep,
+                                             name: "MMTVL: TV may be off", category: "Power")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !AppEnvironment.isRunningTests else { return }
@@ -102,6 +111,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let bindings = restoreSiriRemoteBindings(migrateBindings(KeyBindings(stored.bindings)))
         let inputRouter = InputRouter(bindings: bindings)
         let kiosk = !AppEnvironment.windowedMode
+        if kiosk, noIdleSleep.hold(true) {
+            // M7m L24. A failed hold is logged by `SleepAssertion`.
+            Self.powerLogger.notice("Power: the Mac won't idle-sleep while MMTVL runs")
+        }
 
         let store = LaunchItemStore()
         let storedItems = store.load()
@@ -115,6 +128,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let iptvLibrary = makeIPTVLibrary(directory: directory)
         iptvLibrary.usePlaylistGuide = settings.usePlaylistGuide
+        // M7m L29: the matcher's index for these options is built off the main actor before its first use.
+        iptvLibrary.teamMatchOptions = settings.teamMatchOptions
+        TeamMatcher.Index.prepareBundled(settings.teamMatchOptions)
         self.iptvLibrary = iptvLibrary
         let plex = PlexAccount(network: .live,
                                configFile: JSONConfigFile(url: directory.appending(path: PlexConfig.fileName),
@@ -185,6 +201,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return router?.handle(command, isRepeat: isRepeat) ?? false
         }
         inputRouter.onScrollWheel = { [weak router] deltaY, precise in router?.scrollWheel(deltaY: deltaY, precise: precise) }
+        // M7m L19: a button Remote Buttons learns wakes the idle dimmer.
+        inputRouter.onTriggerCaptured = { [weak router] in router?.wakeFromIdle(by: "a learnt button") }
         inputRouter.onGlobalCommand = { [weak self] command in self?.handleGlobal(command) }
         // Reads the current setting, which Settings can change live.
         inputRouter.onCommandDispatched = { [weak self] in
@@ -199,6 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         router.homeVersionLabel = settings.showVersionOnHome ? AppVersion.current.label : nil
         router.homeExitDelay = Theme.homeExitDuration
         router.isAppActive = NSApp.isActive
+        setUpScreenSaver(router: router)
         observeScreensSleep()
         observeScreenParameters()
         observeDisplayHotplugs()
@@ -583,7 +602,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 inputRouter?.dispatchFromRemote(command, isGlobal: isGlobal, isRepeat: isRepeat)
             },
             canPostEvents: { SyntheticInput.canPost },
-            postExternal: Self.postExternal
+            postExternal: Self.postExternal,
+            // M7m L19, L20: a press while the screen saver shows only ends it.
+            endsScreenSaver: { [weak self] in self?.router?.endScreenSaverIfShowing(by: "Siri Remote \($0.rawValue)") ?? false }
         )
     }
 
@@ -692,6 +713,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // M7f L11: in Live TV, phone text types into its search (no synthetic events); YouTube gets keys.
             typeEdit: { [weak self, weak router] edit in
                 if router?.screen == .liveTV, NSApp.isActive {
+                    // M7m L19 (QA step 6, finding 3): typing is activity and wakes the dimmer; the text still goes in.
+                    router?.wakeFromIdle(by: "phone text")
                     self?.liveTV?.typeText(edit)
                     return
                 }
@@ -700,6 +723,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             postReturn: { [weak self, weak router] in
                 if router?.screen == .liveTV, NSApp.isActive {
+                    router?.wakeFromIdle(by: "phone text")
                     self?.liveTV?.submitText()
                     return
                 }
@@ -715,7 +739,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             makeCode: { PairingCode.random() },
             makeToken: { PhoneToken.make() },
             pointer: { [weak self] in self?.phonePointer.perform($0) },
-            repairForeground: { [weak self] in self?.repairForeground() ?? false }
+            repairForeground: { [weak self] in self?.repairForeground() ?? false },
+            // M7m L19, L20: phone input while the screen saver shows only ends it.
+            endsScreenSaver: { [weak router] in router?.endScreenSaverIfShowing(by: $0) ?? false }
         ))
         server.onMessage = { [weak phoneRemote] id, data in phoneRemote?.receive(data, from: id) }
         server.onSessionClosed = { [weak phoneRemote] id in phoneRemote?.sessionClosed(id) }
@@ -1054,8 +1080,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func observeDisplayWake() {
         displayObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main
-        ) { _ in
+        ) { [weak self] _ in
             Self.displayLogger.notice("Displays woke")
+            // M7m L20: the idle dimmer's wait starts over.
+            MainActor.assumeIsolated { self?.router?.screensDidWake() }
         })
     }
 
@@ -1086,6 +1114,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func systemDidWake() {
+        // M7m L20: after a system sleep (`willSleep` set the displays asleep), in case no display wake follows.
+        router?.screensDidWake()
         Task {
             try? await Task.sleep(for: .seconds(2))
             router?.goHome()
@@ -1124,18 +1154,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 MainActor.assumeIsolated { self?.router?.screensDidSleep() }
             }
         }
-        // M7c L26: the screen saver stops the Live TV preview; its end counts as activity.
+        // M7c L26: the screen saver stops the Live TV preview; its end counts as activity. M7m L20: `ScreenSaver`
+        // follows it too; its `onStop` tells the router (`setUpScreenSaver`). Delivered at once (security medium):
+        // AppKit holds distributed notifications back while MMTVL isn't active, which is when the screen saver shows.
         let distributed = DistributedNotificationCenter.default()
-        screensSleepObservers.append(distributed.addObserver(
-            forName: Notification.Name("com.apple.screensaver.didstart"), object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.router?.screenSaverDidStart() }
-        })
-        screensSleepObservers.append(distributed.addObserver(
-            forName: Notification.Name("com.apple.screensaver.didstop"), object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.router?.screenSaverDidStop() }
-        })
+        distributed.addObserver(self, selector: #selector(screenSaverDidStartNotification(_:)),
+                                name: Notification.Name("com.apple.screensaver.didstart"), object: nil,
+                                suspensionBehavior: .deliverImmediately)
+        distributed.addObserver(self, selector: #selector(screenSaverDidStopNotification(_:)),
+                                name: Notification.Name("com.apple.screensaver.didstop"), object: nil,
+                                suspensionBehavior: .deliverImmediately)
+    }
+
+    @objc private func screenSaverDidStartNotification(_ notification: Notification) {
+        screenSaver.didStart()
+        router?.screenSaverDidStart()
+    }
+
+    @objc private func screenSaverDidStopNotification(_ notification: Notification) {
+        screenSaver.didStop()
+    }
+
+    /// M7m L20 (D51): the dimmer starts macOS's screen saver after `Theme.screenSaverAfterDim`; a press ends it. When
+    /// it stops (`didstop`, or `end()` terminated it) the router wakes, and MMTVL comes back in front if it had
+    /// started the screen saver (D35).
+    private func setUpScreenSaver(router: AppRouter) {
+        router.startScreenSaver = { [weak self] in self?.screenSaver.start() }
+        router.endScreenSaver = { [weak self] in self?.screenSaver.end() }
+        router.isScreenSaverEngineRunning = { [weak self] in self?.screenSaver.isEngineRunning ?? false }
+        screenSaver.onStop = { [weak self] wasOurs in
+            self?.router?.screenSaverDidStop()
+            if wasOurs { self?.returnAfterScreenSaver() }
+        }
+    }
+
+    /// MMTVL was in front when it started the screen saver: if it isn't again a moment after the screen saver ended,
+    /// and nothing else took the screen (only the screen saver, Finder or nothing), it's brought forward.
+    private func returnAfterScreenSaver() {
+        Task { [weak self] in
+            try? await Task.sleep(for: Theme.screenSaverEndCheckDelay)
+            guard let self, !NSApp.isActive, let windowController, windowController.window.isVisible,
+                  !windowController.isExitedToDesktop else { return }
+            let front = NSWorkspace.shared.frontmostApplication
+            guard front == nil || front?.bundleIdentifier == ScreenSaver.bundleID
+                    || front?.bundleIdentifier == "com.apple.finder"
+                    || front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+            else { return }
+            windowController.show(reason: "screenSaverEnded")
+        }
     }
 
     /// L9: a logout, restart or shutdown may always quit MMTVL.
@@ -1233,6 +1299,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if new.usePlaylistGuide != old.usePlaylistGuide, let iptvLibrary {
             Task { await iptvLibrary.applyUsePlaylistGuide(new.usePlaylistGuide) }
         }
+        if new.teamMatchOptions != old.teamMatchOptions, let iptvLibrary {
+            Task { await iptvLibrary.applyTeamMatchOptions(new.teamMatchOptions) }
+        }
         updateKioskLock()
         if kiosk && new.launchAtLogin != old.launchAtLogin {
             LoginItem.apply(enabled: new.launchAtLogin)
@@ -1321,6 +1390,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // while Settings shows; opening it re-reads everything).
         router?.settings.refreshStatusIfShowing()
         router?.isAppActive = true
+        // M7m L20 (QA minor): a later screen saver stop isn't one MMTVL must come back from.
+        screenSaver.appDidBecomeActive()
         windowController?.appDidBecomeActive()
     }
 

@@ -8,6 +8,8 @@ nonisolated enum PINPurpose: Hashable, Sendable {
     case quit
     /// M7h L15: the power menu's Relaunch MMTVL and Restart Mac mini.
     case relaunch, restartMac
+    /// M7m L9 (D50): a home tile menu item that edits the tile, or Tile Settings… (`AppRouter.finishPIN` runs it).
+    case tileAction(id: String, action: TileMenuAction)
     /// Settings → PIN section.
     case setNew, change, turnOff
 }
@@ -45,7 +47,7 @@ nonisolated struct PINFlow: Equatable, Sendable {
                 return .next
             case .turnOff:
                 return .removed
-            case .openSettings, .openTile, .exitToDesktop, .quit, .relaunch, .restartMac, .setNew:
+            case .openSettings, .openTile, .exitToDesktop, .quit, .relaunch, .restartMac, .tileAction, .setNew:
                 return .verified
             }
         case .enterNew:

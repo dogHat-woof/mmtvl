@@ -42,6 +42,16 @@ struct PINFlowTests {
         }
     }
 
+    /// M7m L9: the tile menu's edits and Tile Settings….
+    @Test func tileActionVerifies() {
+        for action in [TileMenuAction.hide, .tileSettings] {
+            var flow = PINFlow(purpose: .tileAction(id: "plex", action: action))
+            #expect(flow.stage == .verify)
+            #expect(flow.submit("4321", storedPIN: "1234") == .wrongPIN)
+            #expect(flow.submit("1234", storedPIN: "1234") == .verified)
+        }
+    }
+
     @Test func turnOff() {
         var flow = PINFlow(purpose: .turnOff)
         #expect(flow.submit("4321", storedPIN: "1234") == .wrongPIN)

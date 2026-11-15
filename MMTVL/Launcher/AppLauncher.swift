@@ -314,6 +314,10 @@ final class AppLauncher {
                 throw LaunchError.notInstalled(bundleID: "default browser")
             }
             let bundleID = Bundle(url: browserURL)?.bundleIdentifier
+            if let bundleID, restarting.contains(bundleID) {
+                Self.logger.debug("\(bundleID, privacy: .public) is restarting; it opens when that's done")
+                return
+            }
             if let bundleID {
                 onOpened?([bundleID])
                 cancellation.began(bundleID, at: Date())
@@ -327,6 +331,10 @@ final class AppLauncher {
         case .url(let url, let browserBundleID?):
             guard let browserURL = appURL(for: browserBundleID) else {
                 throw LaunchError.notInstalled(bundleID: browserBundleID)
+            }
+            if restarting.contains(browserBundleID) {
+                Self.logger.debug("\(browserBundleID, privacy: .public) is restarting; it opens when that's done")
+                return
             }
             Self.logger.notice("Opening \(url.absoluteString, privacy: .public) in \(browserBundleID, privacy: .public)")
             onOpened?([browserBundleID])
@@ -384,10 +392,8 @@ final class AppLauncher {
         return workspace.runningApps(bundleID).filter { !$0.isTerminated && pids.contains($0.processIdentifier) }
     }
 
-    /// L16: a marked app quits before it opens: its pids leave `launchedPIDs` first (so its quitting doesn't bring
-    /// the launcher back), `terminate()`, up to 5 s, then `forceTerminate()`. Waits without blocking the main actor.
-    /// Returns the pids it quit (empty: no restart); while it runs, `restarting` holds the bundle id (the caller
-    /// removes it after opening).
+    /// L16: a marked app quits before it opens (`terminateAndWait`). Returns the pids it quit (empty: no restart);
+    /// while it runs, `restarting` holds the bundle id (the caller removes it after opening).
     private func restartIfMarked(_ bundleID: String) async -> Set<pid_t> {
         let apps = markedApps(bundleID)
         guard markedPIDs.removeValue(forKey: bundleID) != nil else { return [] }
@@ -397,21 +403,52 @@ final class AppLauncher {
         }
         restarting.insert(bundleID)
         Self.logger.notice("Restarting \(bundleID, privacy: .public) after a display change")
+        if await !terminateAndWait(apps, bundleID: bundleID) {
+            Self.logger.error("\(bundleID, privacy: .public) is still running after a force quit; opening it anyway")
+        }
+        return Set(apps.map(\.processIdentifier))
+    }
+
+    // MARK: Quit from the tile menu (M7m L7)
+
+    /// True when the tile's app (a web app's shim, a browser tile's browser) is running; false for internal and
+    /// system tiles.
+    func isRunning(_ item: LaunchItem) -> Bool {
+        guard let bundleID = bundleID(for: item) else { return false }
+        return !workspace.runningApps(bundleID).isEmpty
+    }
+
+    /// Quits the tile's app (a browser tile: the whole browser) as a restart does: 5 s, then a force quit, then 1 s.
+    /// Its quitting doesn't bring the launcher back, and a hot-plug mark is cleared (the next open is fresh anyway).
+    /// While it waits, `restarting` holds the bundle id, so a Select on the tile doesn't open the quitting process.
+    func quit(_ item: LaunchItem) async {
+        guard let bundleID = bundleID(for: item) else { return }
+        markedPIDs.removeValue(forKey: bundleID)
+        let apps = workspace.runningApps(bundleID).filter { !$0.isTerminated }
+        guard !apps.isEmpty else { return }
+        let inserted = restarting.insert(bundleID).inserted
+        defer { if inserted { restarting.remove(bundleID) } }
+        Self.logger.notice("Quit \(bundleID, privacy: .public) (tile menu)")
+        if await !terminateAndWait(apps, bundleID: bundleID) {
+            Self.logger.error("\(bundleID, privacy: .public) is still running after a force quit")
+        }
+    }
+
+    /// L16, M7m L7: the apps' pids leave `launchedPIDs` (and web app launches) first, so their quitting doesn't bring
+    /// the launcher back; then `terminate()`, up to 5 s, then `forceTerminate()` and up to 1 s more. Waits without
+    /// blocking the main actor. False when one outlived the force quit.
+    private func terminateAndWait(_ apps: [any LauncherRunningApp], bundleID: String) async -> Bool {
         for app in apps {
             launchedPIDs.remove(app.processIdentifier)
             webAppLaunches.removeValue(forKey: app.processIdentifier)
             app.terminate()
         }
-        let pids = Set(apps.map(\.processIdentifier))
-        if await waitUntilTerminated(apps, for: Self.restartQuitWait) { return pids }
+        if await waitUntilTerminated(apps, for: Self.restartQuitWait) { return true }
         for app in apps where !app.isTerminated {
-            Self.logger.notice("\(bundleID, privacy: .public) didn't quit in 5 s; force quitting")
+            Self.logger.notice("\(bundleID, privacy: .public) didn't quit in 5 s; force quit")
             app.forceTerminate()
         }
-        if await !waitUntilTerminated(apps, for: Self.restartForceWait) {
-            Self.logger.error("\(bundleID, privacy: .public) is still running after a force quit; opening it anyway")
-        }
-        return pids
+        return await waitUntilTerminated(apps, for: Self.restartForceWait)
     }
 
     /// True once every app has quit, false after `limit`.
