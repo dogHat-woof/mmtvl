@@ -3,7 +3,7 @@
 #
 # Bumps CURRENT_PROJECT_VERSION by 1 in all four configurations (project.pbxproj), builds Release, checks the
 # signature and zips the app to ~/Desktop/MMTVL-<version>-build<N>.zip. The version (MARKETING_VERSION) is changed
-# by hand. Development-signed, not notarized (M8's scripts/release.sh makes public releases).
+# by hand. Development-signed, not notarized (MR's scripts/release.sh makes public releases).
 #
 # Usage: scripts/test-build.sh            (from the repo root)
 set -euo pipefail

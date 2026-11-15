@@ -1,8 +1,8 @@
-# M8 — Release & distribution
+# MR — Release & distribution
 
 | | |
 |---|---|
-| Status | Planned |
+| Status | Planned (renumbered from M8 on 2026-11-15; MR stays the last milestone and takes the next number when it starts) |
 | Depends on | M7b (code complete; its hardware checks, now M7d, can run in parallel) |
 | Master plan decisions used | D4, D9, D10, D13, D15, D19, D22, D24, D28; new **D33** (Developer ID + notarized releases on GitHub, no Homebrew, no App Store), **D34** (open source: MIT, notices, scrubbed public history) |
 | Planned | 2026-10-06 |
@@ -282,7 +282,7 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
   - Done when: both scans report nothing outside the allowlist, the private-terms grep finds nothing except what step 9 will replace, and the user agrees. Commit `scripts/gitleaks.toml` only.
 
 - [ ] **9. Rewrite the history in a fresh clone**: no files in the working copy (the rewrite happens in `$TMPDIR/mmtvl-public`)
-  - Merge `m8-release` into `master` locally first (or finish the branch and merge its PR into the private repo), so the rewritten history contains M8's work so far.
+  - Merge `mr-release` into `master` locally first (or finish the branch and merge its PR into the private repo), so the rewritten history contains MR's work so far.
   - `git clone --no-local /Users/user/Developer/mmtvl $TMPDIR/mmtvl-public` (a fresh clone, as filter-repo wants), then in it, for every remote branch you need, `git branch --track <name> origin/<name>` (at least `master`), and `git fetch origin 'refs/tags/*:refs/tags/*'`.
   - `$TMPDIR/replacements.txt` (order matters: longest first):
     ```
@@ -330,7 +330,7 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
 
 - [ ] **13. Docs and status**: `CLAUDE.md`, `docs/plans/MASTER_PLAN.md`, this file
   - CLAUDE.md: the repo is public at `dwolcot1/mmtvl` (archive `mmtvl-private`); the release checklist in four lines (bump version and build → commit → `scripts/release.sh` → tag + `gh release create` with the zip and checksum); commit email is the noreply address.
-  - Master plan: §3 *Distribution* row → "Developer ID + notarized zip on GitHub Releases; Debug builds Apple Development (D33)"; M8 → `Done`; resolve Q16 if step 2 or a user report answered it, Q17 with step 7's findings, Q5 (the public name is MMTVL).
+  - Master plan: §3 *Distribution* row → "Developer ID + notarized zip on GitHub Releases; Debug builds Apple Development (D33)"; MR → `Done`; resolve Q16 if step 2 or a user report answered it, Q17 with step 7's findings, Q5 (the public name is MMTVL).
   - Done when: the docs match what was done.
 
 ## Tests
@@ -370,4 +370,4 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
 ## Deviations & questions
 
 Executors append here when the plan is wrong or ambiguous: the date, the step, what happened, and what they need. Do not silently diverge.
-- **2026-10-09, from M7c step 27 (question for when M8 starts):** M7c set `MARKETING_VERSION = 1.1.0`, and every test build for the mini bumps `CURRENT_PROJECT_VERSION` (`scripts/test-build.sh`), so by M8 the build number will be well past 2. L7 (1.0.1, build 2) and step 11 need new numbers: probably the version at that time (1.1.x) and the next build number. `scripts/release.sh` should keep incrementing the same counter, never reset it.
+- **2026-10-09, from M7c step 27 (question for when MR starts):** M7c set `MARKETING_VERSION = 1.1.0`, and every test build for the mini bumps `CURRENT_PROJECT_VERSION` (`scripts/test-build.sh`), so by M8 the build number will be well past 2. L7 (1.0.1, build 2) and step 11 need new numbers: probably the version at that time (1.1.x) and the next build number. `scripts/release.sh` should keep incrementing the same counter, never reset it.
