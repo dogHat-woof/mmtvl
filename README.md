@@ -26,7 +26,7 @@ The Siri Remote's touch surface is read through a private macOS framework, so it
 
 ## Install
 
-Download `MMTVL-<version>.zip` from the [latest release](https://github.com/dwolcot1/mmtvl/releases/latest), unzip it, move `MMTVL.app` to Applications and open it. To update, quit MMTVL and replace the app the same way; settings are kept.
+Download the MMTVL zip from the [latest release](https://github.com/dwolcot1/mmtvl/releases/latest), unzip it, move `MMTVL.app` to Applications and open it. To update, quit MMTVL and replace the app the same way; settings are kept.
 
 ## First run
 
