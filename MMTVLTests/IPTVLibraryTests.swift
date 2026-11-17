@@ -342,6 +342,31 @@ struct IPTVLibraryTests {
         #expect(library.guideSources.map(\.id) == [secondID, customID])
     }
 
+    /// M7n step 4b: rematches asked for at once (the matching runs off the main actor) run one at a time: each
+    /// finishes and they give the matches a single one does; one asked for while another runs, after a guide is
+    /// removed, leaves the current guides' matches.
+    @Test func concurrentRematchesRunOneAtATime() async throws {
+        let fixture = try await twoGuides()
+        defer { fixture.cleanUp() }
+        let library = fixture.library
+        let expected = library.epgMatches
+        let revision = library.guideRevision
+        async let first: Void = library.rematch()
+        async let second: Void = library.rematch()
+        async let third: Void = library.rematch()
+        _ = await (first, second, third)
+        #expect(library.guideRevision == revision + 3)
+        #expect(library.epgMatches == expected)
+
+        let running = Task { await library.rematch() }
+        await library.removeGuideSource(customID)
+        await running.value
+        let nba = try channel("NBA TV", in: library)
+        #expect(library.epgMatches[nba.id] == EPGRef(sourceID: secondID, epgID: "nba.tv.alt.us"))
+        #expect(library.epgMatches.values.allSatisfy { $0.sourceID == secondID })
+        #expect(library.guideSourceInfo[secondID]?.matchedChannels == library.matchedChannelCount)
+    }
+
     @Test func removeGuideRematchesWithoutDownload() async throws {
         let fixture = try await twoGuides()
         defer { fixture.cleanUp() }

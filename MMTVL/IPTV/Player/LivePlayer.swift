@@ -101,6 +101,8 @@ final class MPVPlayerController: LivePlayer {
     @ObservationIgnored private var statsGeneration = 0
     /// M7n step 3a: vo_libmpv's render-stuck lines since the last stats line; the first of each load is logged.
     @ObservationIgnored private var renderStuck = PlaybackStats.RenderStuckCounter()
+    /// M7n step 4a: the `display-fps-override` last set (nil: none).
+    @ObservationIgnored private var appliedDisplayRate: Double?
     @ObservationIgnored private let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "MPV")
 
     init() {
@@ -112,9 +114,7 @@ final class MPVPlayerController: LivePlayer {
     func prepare() {
         guard mpv == nil else { return }
         do {
-            // M7n step 3a: plus the hidden experiment switches (none set: exactly `MPVOptions.all`).
-            let mpv = try MPVHandle(options: MPVOptions.all(adding: .fromDefaults),
-                                    logLevel: MPVOptions.logLevel) { [weak self] event in
+            let mpv = try MPVHandle(options: MPVOptions.all, logLevel: MPVOptions.logLevel) { [weak self] event in
                 Task { @MainActor in self?.handle(event) }
             }
             self.mpv = mpv
@@ -124,6 +124,7 @@ final class MPVPlayerController: LivePlayer {
             view.videoLayer.onReady = { [weak self] replacedContext in
                 Task { @MainActor in self?.videoContextReady(replacedContext: replacedContext) }
             }
+            view.onDisplayRate = { [weak self] rate in self?.applyDisplayRate(rate) }
             videoView = view
             logger.info("mpv core created (player \(self.index))")
         } catch {
@@ -217,6 +218,20 @@ final class MPVPlayerController: LivePlayer {
         guard let mpv else { return }
         mpv.setString("volume", "\(volumeLevel)")
         mpv.setString("mute", volumeMuted || !audible ? "yes" : "no")
+    }
+
+    /// M7n step 4a: mpv's `video-sync=display-resample` needs the display's rate, which the render API never gives
+    /// it. Set only when it changes; an unusable rate after a usable one clears the override (mpv then keeps audio
+    /// timing, as before).
+    private func applyDisplayRate(_ rate: Double?) {
+        guard let mpv, rate != appliedDisplayRate else { return }
+        appliedDisplayRate = rate
+        mpv.setString("display-fps-override", DisplayRefresh.overrideValue(for: rate))
+        if let rate {
+            logger.notice("Display rate \(String(format: "%.2f", rate), privacy: .public) Hz (player \(self.index))")
+        } else {
+            logger.notice("Display rate unknown; no override (player \(self.index))")
+        }
     }
 
     /// Takes effect on a playing stream; shrinking prunes the buffer (M6 Research).

@@ -195,8 +195,74 @@ The user's findings from build 35 on the MM (2026-11-15):
     stats lines (`log show … category == "MPV"`) and runs `sample MMTVL 3` for each.
   - Done when: the results are in a table here (setting, channel, drops and late frames per minute, longest render,
     main-thread render share, what the user saw), and the cause is named.
+  - **3b results (2026-11-16, build 38, the MM at 1920 × 1080 @ 60.00 Hz; a playlist game, 720p 59.94 fps,
+    VideoToolbox).** "33 ms repeats" = 10-s periods whose longest gap between draws is over 25 ms (one frame shown for
+    two refreshes):
+
+    | Setting | Periods | Drops | 33 ms repeats | Draws per 10 s | Longest render | avsync | What the user saw |
+    |---|---|---|---|---|---|---|---|
+    | None (baseline), 20:10–21:09 | 354 | 7 periods with 1–5 (see below) | 216 of 354 (one per ~16.7 s) | 599–600 | 4.1 ms | ≤ 6 ms | the stutter (finding 4) |
+    | `mpvVideoSync display-resample` alone, 21:12–21:15 | 15 | 1 (after launch) | 9 of 15 | 599–600 | 3.9 ms | ≤ 3 ms | not judged; the stats show no change |
+    | `display-resample` + `mpvDisplayFPS 60`, 21:15–21:18 | 17 | 1 (21:17:48, unexplained) | **0** | **600** | 5.6 ms | ≤ 7 ms | **smooth; audio in sync** (also on other channels) |
+    | the same, an antenna channel (1080 29.97 fps MPEG-2, software decoding, deinterlaced to 59.94), 21:20 | 2 | 0 | 0 | 600 | 8.6 ms | ≤ 1 ms | (briefly) |
+
+    - **Cause 1 (the regular hitch):** 59.94 fps video on a 60.00 Hz display with mpv's default `video-sync=audio`
+      repeats a frame every 1 / (60 − 59.94) ≈ 16.7 s (216 seen, ~212 expected). `display-resample` alone does
+      nothing: with the render API mpv isn't told the display's rate (the stats line shows no "display … fps"), so it
+      falls back silently. With `display-fps-override` it shows one frame per refresh and resamples audio by 0.1 %.
+    - **Cause 2 (drops after the playlist refresh):** each 15-minute refresh in the baseline (20:07:41, 20:22:42,
+      21:03:43; the others were relaunches) was followed within 6 s by a period with 1–2 drops and a draw 30–50 ms
+      late. Main-actor work in `IPTVLibrary.refreshPlaylist()` (M3U parse, `EPGMatcher.match` in `rematch()`, the
+      lineup and My Teams updates) is suspected; a `sample MMTVL` across the 21:30 refresh is to confirm which.
+    - **Unexplained:** isolated drops with nothing else logged (20:42:20, 20:43:00, 21:17:48; about 3 an hour, 1–3
+      frames). And 21:18:38: 13 drops and a 211 ms gap in the 10 s before a channel change, while the user was
+      navigating (what was pressed: asked).
 - [ ] **4. Live TV stutter: the fix** `[implementer]`: chosen with the user from step 3's table (candidates in
   finding 4). Planned in detail here once step 3 is done.
+  - 2026-11-16, chosen with the user ("do both"): (a) Live TV's mpv uses `video-sync=display-resample` with the
+    display's real refresh rate as `display-fps-override` (from the screen the player is on, updated when the
+    screen or its mode changes, so a 59.94 or 50 Hz TV mode is right too), replacing the hand-set switches;
+    (b) the playlist refresh's heavy work leaves the main actor, per the sample (cause 2).
+  - **4a. The display's rate** `[implementer]`, files: `MMTVL/IPTV/Player/MPVOptions.swift`,
+    `MMTVL/IPTV/Player/LivePlayer.swift`, `MMTVL/IPTV/Player/MPVVideoView.swift` (or a new `DisplayRefresh.swift`
+    beside them), `CLAUDE.md`, tests.
+    - `MPVOptions.all` adds `("video-sync", "display-resample")` for every Live TV core (full screen, Multiview, the
+      home preview).
+    - A player whose video view is on a screen sets mpv's `display-fps-override` (a runtime property) to that screen's
+      refresh rate: the mode's `CGDisplayCopyDisplayMode(id)?.refreshRate` (exact, e.g. 59.94), else
+      `NSScreen.maximumFramesPerSecond`; a rate outside 1…240 or 0 sets nothing (mpv then keeps audio timing, as
+      before). Set again when the view's window changes screen and on `NSApplication.didChangeScreenParameters`
+      (a TV mode change). One notice line per change: "Display rate 60.00 Hz (player N)".
+    - The step 3a switches (`mpvHwdecCodecs`, `mpvOpenGLPBO`, `mpvVideoSync`, `mpvDisplayFPS`) and `MPVSwitches` are
+      removed, with their `CLAUDE.md` lines and tests; the stats line stays (it shows "display … fps").
+    - Tests: the rate choice (mode rate, fallback, 0, out of range), `MPVOptions.all` has the video-sync option.
+    - Done when: the build and the full suite pass; on the dev Mac (`-windowed YES`) a playing channel logs the
+      display rate and its stats line shows "display … fps". On the MM (step 5): `defaults delete` the two switches,
+      then 600 draws per 10 s and no 33 ms repeats with no switch set.
+  - **4b. Refresh work off the main actor** `[implementer]`. Measured 2026-11-16 21:30 on the MM (`sample MMTVL 40 1`
+    across a refresh, both switches on; 25 375 samples of ~1.6 ms; the main thread draws the video, in
+    `CAOpenGLLayer` display during the CA commit, so main-thread work in one piece holds frames back). The refresh's
+    10-s period had 7 drops, 4 delayed frames and an 84 ms gap. Main-thread samples outside drawing:
+    - `IPTVLibrary.refreshPlaylist()` 79 (~125 ms): `M3UParser.parse` 34 (~55 ms; `parseAttributes` builds the
+      attribute regex anew for every line, `Regex.init` 10 samples), `rematch()` 26 (`EPGMatcher.match` 10,
+      `antennaMatches` 5, `updateTeams` → `TeamMatcher.networkChannelIDs` 14 and `programmesIfRead` 8).
+    - The 5-minute My Teams timer (`AppDelegate.startIPTVRefreshTimer`, closure #2 → `updateTeams()`) 51 (~80 ms),
+      almost all in `TeamMatcher.networkChannelIDs` (`teamsBySide`, case- and diacritic-insensitive `contains`). Both
+      timers start at launch, so every third team update meets the 15-minute refresh.
+    - Not the cause: `MPVPlayerController.pollTimeshift` 52 over the 40 s, in small pieces.
+    Files: `MMTVL/IPTV/Sources/M3UParser.swift`, `MMTVL/IPTV/IPTVLibrary.swift`, `MMTVL/IPTV/IPTVLibrary+Antenna.swift`
+    if needed, tests.
+    - `M3UParser.parseAttributes`: the regex is built once (a static, or a hand scan with the same result).
+    - `refreshPlaylist()`: `M3UParser.parse` and `ChannelList.make` run off the main actor (`Task.detached`, as
+      `updateTeams` already does for the upcoming games); the URL check and assignments stay on the main actor after.
+    - `rematch()`: `EPGMatcher.match` and `antennaMatches` run off the main actor; `epgMatches` is assigned on the
+      main actor afterwards.
+    - `updateTeams()`: `TeamMatcher.gameChannelIDs` and `networkChannelIDs` run off the main actor in the same detached
+      task style; the existing guards after each await (picked teams or options changed: return) stay, and
+      cancellation keeps the previous result, as the upcoming games do.
+    - Behaviour and results unchanged; existing tests keep passing; a test that parsing gives the same entries as
+      before for a playlist with many attributes (the regex change).
+    - Done when: build and full suite pass; on the MM a refresh shows no drops in its stats period (step 5).
 - [ ] **5. Build for the MM and the user's checks** `[human]` (after the user says yes to a test build):
   - Restart the MM with the antenna on and antenna favorites: Live TV shows Antenna and the favorites within about a
     minute of login, without Settings. `log show` (Antenna, IPTV) shows the retry line and `Found 1 tuners`.
@@ -243,4 +309,20 @@ Steps 3b and 5 above; the TV checks are the user's.
   Down on the last group is Search, Up on Search the last group; a page (now 7 rows) stops at either end and wraps
   only from it, and reaches Search. A loop jumps (`groupWrapCount`).
   Pre-build security review of the diff since build 37: nothing at medium or above.
+- 2026-11-16, step 4a (implementer, QA PASS): an unusable rate after a usable one resets `display-fps-override` to
+  "0" (mpv's default, audio timing) rather than keeping the old screen's rate.
+- 2026-11-16, step 4b (implementer, QA-deep PASS): the team matching moved off the main actor isn't cancelled with the
+  update (the plan said "cancellation keeps the previous result"), because `aCancelledUpdateWithTheSamePicksStillSetsTheGroup`
+  pins that a cancelled update with the same picks still sets the group. Added beyond the plan: `rematch()` runs one at a
+  time (FIFO), and `matchGuides()` / `updateTeams()` match again on the main actor when their inputs changed during
+  the detached match. The attribute regex is built once per `parse` (a static `Regex` isn't Sendable). QA-deep minors,
+  not fixed: no test reaches the "changed meanwhile" fallbacks (needs a tests-only hook); Remove Live TV Source during a
+  rematch can leave antenna refs to deleted guide rows until the next antenna guide download (pre-existing, no visible
+  effect); two team updates can still finish out of order until the next 5-minute update (pre-existing). Possibly
+  still on the main actor: `EPGStore.channelsBySource` / `programmes(refs:)` grouping, `updateChannels` and
+  `updateLineup`; step 5's sample will show it.
+- 2026-11-16, pre-build security review for build 39 (steps 4a, 4b): nothing at medium or above. Low, pre-existing,
+  not fixed: no size limit on the playlist body (`IPTVNetwork.swift:20-25`), and the attribute regex may be quadratic
+  on one huge `#EXTINF` line; since 4b that ties up a background thread instead of the main actor. If wanted: a size
+  cap (`tooLarge`, as the antenna guide has) and a 1 MB-line timing test.
 - 2026-11-15, finding 4 added at the user's request (Live TV stutter): steps 3–4 added, the build step is now 5.

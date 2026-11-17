@@ -41,6 +41,7 @@ nonisolated enum M3UParser {
         var entries: [M3UEntry] = []
         var currentGroup: String?
         var pending: (name: String, attributes: [String: String])?
+        let attributePattern = makeAttributePattern()
 
         // Split on "\n" by scalars: Swift treats "\r\n" as one Character, so splitting Characters on "\n" would miss CRLF.
         for rawLine in text.unicodeScalars.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -49,7 +50,7 @@ nonisolated enum M3UParser {
 
             if line.hasPrefix("#EXTM3U") {
                 sawHeader = true
-                let attributes = parseAttributes(line)
+                let attributes = parseAttributes(line, pattern: attributePattern)
                 for key in ["url-tvg", "x-tvg-url"] {
                     guard let value = attributes[key] else { continue }
                     for part in value.split(separator: ",") {
@@ -62,7 +63,7 @@ nonisolated enum M3UParser {
                 }
             } else if line.hasPrefix("#EXTINF:") {
                 sawEntry = true
-                pending = (name: displayName(line), attributes: parseAttributes(line))
+                pending = (name: displayName(line), attributes: parseAttributes(line, pattern: attributePattern))
             } else if line.hasPrefix("#EXTGRP:") {
                 let group = line.dropFirst("#EXTGRP:".count).trimmingCharacters(in: .whitespaces)
                 currentGroup = group.isEmpty ? nil : group
@@ -84,9 +85,15 @@ nonisolated enum M3UParser {
         return M3UPlaylist(guideURLs: guideURLs, entries: entries)
     }
 
-    private static func parseAttributes(_ line: String) -> [String: String] {
+    /// `key="value"`, for `parseAttributes`. M7n step 4b: built once per `parse` (building it for every line was a
+    /// tenth of a refresh's parse time); not a static, since `Regex` isn't `Sendable` and parsing runs off the main
+    /// actor.
+    private typealias AttributePattern = Regex<(Substring, Substring, Substring)>
+    private static func makeAttributePattern() -> AttributePattern { /([A-Za-z0-9_-]+)="([^"]*)"/ }
+
+    private static func parseAttributes(_ line: String, pattern: AttributePattern) -> [String: String] {
         var attributes: [String: String] = [:]
-        for match in line.matches(of: /([A-Za-z0-9_-]+)="([^"]*)"/) {
+        for match in line.matches(of: pattern) {
             let key = String(match.1).lowercased()
             if attributes[key] == nil { attributes[key] = String(match.2) }
         }

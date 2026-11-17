@@ -67,6 +67,9 @@ final class IPTVLibrary {
     /// Guide imports run one at a time; requests made meanwhile join the running loop (M6b L4).
     @ObservationIgnored private var queuedSourceIDs: Set<String> = []
     @ObservationIgnored private var isImportingGuide = false
+    /// M7n step 4b: a rematch is matching; the ones asked for meanwhile wait here, in order (`rematch()`).
+    @ObservationIgnored private var isRematching = false
+    @ObservationIgnored private var rematchWaiters: [CheckedContinuation<Void, Never>] = []
     /// AppDelegate → settings.refreshStatus().
     @ObservationIgnored var onStatusChange: (() -> Void)?
     /// M7f L5: the lineup changed (a re-fetch, or favorites and hiding); AppDelegate → `AppRouter.playlistDidChange()`.
@@ -192,10 +195,14 @@ final class IPTVLibrary {
         setPlaylistStatus(.loading)
         do {
             let text = try await network.fetchText(url)
-            let playlist = try M3UParser.parse(text)
+            // M7n step 4b: parsing and the channel list stay off the main actor, which draws Live TV's video.
+            let (guideURLs, parsedChannels) = try await Task.detached(priority: .userInitiated) {
+                let playlist = try M3UParser.parse(text)
+                return (playlist.guideURLs, ChannelList.make(from: playlist))
+            }.value
             guard url == playlistURL else { return }    // replaced or removed meanwhile
-            playlistChannels = ChannelList.make(from: playlist)
-            playlistGuideURLs = playlist.guideURLs
+            playlistChannels = parsedChannels
+            playlistGuideURLs = guideURLs
             updateGuideSources()
             updateChannels()    // and the lineup, when the channels changed
             lastPlaylistFetch = now()
@@ -740,10 +747,28 @@ final class IPTVLibrary {
         // the group. (Not `Task.isCancelled`: a cancelled 5-minute refresh, restarted by AppDelegate, must still
         // set it.)
         guard Set(preferences.teams) == picked, index.options == teamMatchOptions else { return }
-        let games = TeamMatcher.gameChannelIDs(channels: channels, picked: picked, index: index)
-        let networks = didRead
-            ? TeamMatcher.networkChannelIDs(channels: channels, nowPlaying: nowPlaying, picked: picked, index: index)
-            : teamNetworkChannelIDs
+        // M7n step 4b: the matching runs off the main actor, which draws Live TV's video. Not cancelled with the
+        // update: neither matcher checks cancellation, and a cancelled update with the same picks still sets the
+        // group (above), so its result is used, as before.
+        let current = channels
+        let matching = Task.detached(priority: .utility) { [nowPlaying, didRead] in
+            (games: TeamMatcher.gameChannelIDs(channels: current, picked: picked, index: index),
+             networks: didRead
+                ? TeamMatcher.networkChannelIDs(channels: current, nowPlaying: nowPlaying, picked: picked, index: index)
+                : nil)
+        }
+        var (games, matchedNetworks) = await matching.value
+        guard Set(preferences.teams) == picked, index.options == teamMatchOptions else { return }
+        if channels != current {
+            // The channels changed meanwhile (a playlist or lineup read): matched here, with the current ones, as
+            // before 4b, so a late update never sets the group from channels that are gone.
+            games = TeamMatcher.gameChannelIDs(channels: channels, picked: picked, index: index)
+            matchedNetworks = didRead
+                ? TeamMatcher.networkChannelIDs(channels: channels, nowPlaying: nowPlaying, picked: picked,
+                                                index: index)
+                : nil
+        }
+        let networks = matchedNetworks ?? teamNetworkChannelIDs
         if !didRead || !didFinishUpcoming { upcoming = upcomingTeamGames }
         let ids = games + networks
         guard ids != teamChannelIDs || upcoming != upcomingTeamGames else { return }
@@ -759,7 +784,26 @@ final class IPTVLibrary {
 
     /// Matches the playlist's channels over every guide in use, in priority order (M6b L3); M7j: the antenna's over
     /// the antenna guide (L10) or, with it off, the pasted guides (L11) (`antennaMatches`).
+    /// M7n step 4b: the matching runs off the main actor, so rematches run one at a time, in the order they were
+    /// asked for (`isRematching`): a rematch whose matching finishes late never overwrites a newer one's.
     func rematch() async {
+        if isRematching {
+            // The running rematch hands its turn straight to the first waiter (`isRematching` stays true).
+            await withCheckedContinuation { rematchWaiters.append($0) }
+        } else {
+            isRematching = true
+        }
+        await matchGuides()
+        if rematchWaiters.isEmpty {
+            isRematching = false
+        } else {
+            rematchWaiters.removeFirst().resume()
+        }
+        await updateTeams()
+    }
+
+    /// `rematch()`'s guide matches and the per-guide counts.
+    private func matchGuides() async {
         let bySource: [String: [EPGChannel]]
         do {
             bySource = try await store?.channelsBySource() ?? [:]
@@ -768,13 +812,21 @@ final class IPTVLibrary {
             bySource = [:]
         }
         let overrides = overridesFile.load()
-        let sources = guideSources.map { EPGSourceChannels(sourceID: $0.id, channels: bySource[$0.id] ?? []) }
-        var matches = EPGMatcher.match(playlistChannels, sources: sources, overrides: overrides)
-        let antennaChannels = channels.filter(\.isDirectStream)
-        if !antennaChannels.isEmpty {
-            let antennaGuide = keepsAntennaGuide ? (bySource[AntennaGuide.sourceID] ?? []) : nil
-            matches.merge(Self.antennaMatches(antennaChannels, antennaGuide: antennaGuide, pasted: sources,
-                                              overrides: overrides)) { first, _ in first }
+        let playlist = playlistChannels
+        let merged = channels
+        let sources = guideSources
+        let keepsAntenna = keepsAntennaGuide
+        let matching = Task.detached(priority: .userInitiated) {
+            Self.guideMatches(playlist: playlist, channels: merged, guideSources: sources, bySource: bySource,
+                              keepsAntennaGuide: keepsAntenna, overrides: overrides)
+        }
+        var matches = await matching.value
+        if playlistChannels != playlist || channels != merged || guideSources != sources
+            || keepsAntennaGuide != keepsAntenna {
+            // Changed meanwhile (a source removed, the antenna guide turned off…): matched here, with the current
+            // ones, as before 4b. Rare; any change that matters also asks for its own rematch.
+            matches = Self.guideMatches(playlist: playlistChannels, channels: channels, guideSources: guideSources,
+                                        bySource: bySource, keepsAntennaGuide: keepsAntennaGuide, overrides: overrides)
         }
         epgMatches = matches
         var matched: [String: Int] = [:]
@@ -789,7 +841,22 @@ final class IPTVLibrary {
                 matched[AntennaGuide.sourceID] ?? 0
         }
         guideRevision += 1
-        await updateTeams()
+    }
+
+    /// The playlist's channels over every guide in use, in priority order (M6b L3), then the antenna's (M7j,
+    /// `antennaMatches`). Pure: `rematch()` runs it off the main actor.
+    nonisolated private static func guideMatches(playlist: [Channel], channels: [Channel], guideSources: [GuideSource],
+                                                 bySource: [String: [EPGChannel]], keepsAntennaGuide: Bool,
+                                                 overrides: [String: String]) -> [Channel.ID: EPGRef] {
+        let sources = guideSources.map { EPGSourceChannels(sourceID: $0.id, channels: bySource[$0.id] ?? []) }
+        var matches = EPGMatcher.match(playlist, sources: sources, overrides: overrides)
+        let antennaChannels = channels.filter(\.isDirectStream)
+        if !antennaChannels.isEmpty {
+            let antennaGuide = keepsAntennaGuide ? (bySource[AntennaGuide.sourceID] ?? []) : nil
+            matches.merge(antennaMatches(antennaChannels, antennaGuide: antennaGuide, pasted: sources,
+                                         overrides: overrides)) { first, _ in first }
+        }
+        return matches
     }
 
     /// Deletes the rows of guides no longer in use, and their bookkeeping. M7j L10: the antenna guide (rows, due date

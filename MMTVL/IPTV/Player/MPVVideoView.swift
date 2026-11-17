@@ -180,6 +180,9 @@ private nonisolated struct LayerRef: @unchecked Sendable {
 /// Layer-hosting view for `MPVVideoLayer`.
 final class MPVVideoView: NSView {
     let videoLayer: MPVVideoLayer
+    /// M7n step 4a: the refresh rate of the screen the view is on (nil: none usable), reported when the view enters a
+    /// window, when its window changes screen, and when the screens change (a TV mode change). Repeats are possible.
+    var onDisplayRate: ((Double?) -> Void)?
 
     init(mpv: MPVHandle) {
         videoLayer = MPVVideoLayer(mpv: mpv)
@@ -188,6 +191,9 @@ final class MPVVideoView: NSView {
         layer = videoLayer
         wantsLayer = true
         videoLayer.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        // Selector observers are removed by the system when the view goes away.
+        NotificationCenter.default.addObserver(self, selector: #selector(screensDidChange(_:)),
+                                               name: NSApplication.didChangeScreenParametersNotification, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -195,5 +201,31 @@ final class MPVVideoView: NSView {
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         videoLayer.contentsScale = window?.backingScaleFactor ?? 2
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if let window, window !== newWindow {
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeScreenNotification, object: window)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        NotificationCenter.default.removeObserver(self, name: NSWindow.didChangeScreenNotification, object: window)
+        NotificationCenter.default.addObserver(self, selector: #selector(screensDidChange(_:)),
+                                               name: NSWindow.didChangeScreenNotification, object: window)
+        reportDisplayRate()
+    }
+
+    @objc private func screensDidChange(_ notification: Notification) {
+        reportDisplayRate()
+    }
+
+    /// Only while the view is on a screen; otherwise the last rate stays.
+    private func reportDisplayRate() {
+        guard let screen = window?.screen else { return }
+        onDisplayRate?(DisplayRefresh.rate(of: screen))
     }
 }

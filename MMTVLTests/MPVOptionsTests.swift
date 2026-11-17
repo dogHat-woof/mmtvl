@@ -258,85 +258,42 @@ struct MPVDirectStreamTests {
     }
 }
 
-/// M7n step 3a: the hidden experiment switches.
-struct MPVSwitchesTests {
-    private func parse(_ values: [String: Any]) -> MPVSwitches {
-        MPVSwitches.parse { values[$0] }
+/// M7n step 4a: the display rate given to mpv's `display-fps-override`.
+struct DisplayRefreshTests {
+    @Test func theModesRateWhenUsable() {
+        #expect(DisplayRefresh.usableRate(modeRate: 60, maximumFPS: 60) == 60)
+        // Exact, not rounded: a 59.94 Hz TV mode.
+        #expect(DisplayRefresh.usableRate(modeRate: 60_000.0 / 1001, maximumFPS: 60) == 60_000.0 / 1001)
+        #expect(DisplayRefresh.usableRate(modeRate: 50, maximumFPS: 60) == 50)
+        #expect(DisplayRefresh.usableRate(modeRate: 1, maximumFPS: 0) == 1)
+        #expect(DisplayRefresh.usableRate(modeRate: 240, maximumFPS: 0) == 240)
     }
 
-    private func pairs(_ options: [(name: String, value: String)]) -> [String] {
-        options.map { "\($0.name)=\($0.value)" }
+    /// Displays whose mode reports 0 (or nonsense) fall back to the screen's maximum frames per second.
+    @Test func fallsBackToMaximumFPS() {
+        #expect(DisplayRefresh.usableRate(modeRate: 0, maximumFPS: 120) == 120)
+        #expect(DisplayRefresh.usableRate(modeRate: 240.5, maximumFPS: 60) == 60)
+        #expect(DisplayRefresh.usableRate(modeRate: .nan, maximumFPS: 60) == 60)
+        #expect(DisplayRefresh.usableRate(modeRate: .infinity, maximumFPS: 60) == 60)
+        #expect(DisplayRefresh.usableRate(modeRate: -60, maximumFPS: 60) == 60)
     }
 
-    @Test func noSwitchesLeaveTheOptionsAsToday() {
-        let none = parse([:])
-        #expect(none.options.isEmpty)
-        #expect(none.notes.isEmpty)
-        #expect(pairs(MPVOptions.all(adding: none)) == pairs(MPVOptions.all))
-        #expect(MPVOptions.all(adding: none).last?.name == "video-timing-offset")
+    /// Nothing usable: no override (mpv keeps audio timing).
+    @Test func nothingUsable() {
+        #expect(DisplayRefresh.usableRate(modeRate: 0, maximumFPS: 0) == nil)
+        #expect(DisplayRefresh.usableRate(modeRate: 0, maximumFPS: 241) == nil)
+        #expect(DisplayRefresh.usableRate(modeRate: 0.5, maximumFPS: -1) == nil)
+        #expect(DisplayRefresh.usableRate(modeRate: 1000, maximumFPS: 1000) == nil)
     }
 
-    @Test func eachSwitchSetsItsOption() {
-        let switches = parse([
-            "mpvHwdecCodecs": "all", "mpvOpenGLPBO": true, "mpvVideoSync": "display-resample", "mpvDisplayFPS": 59.94,
-        ])
-        #expect(pairs(switches.options) == [
-            "hwdec-codecs=all", "opengl-pbo=yes", "video-sync=display-resample", "display-fps-override=59.94",
-        ])
-        #expect(switches.notes.count == 4)
-        // Appended after MMTVL's own options, which stay in order.
-        let all = MPVOptions.all(adding: switches)
-        #expect(pairs(Array(all.prefix(MPVOptions.all.count))) == pairs(MPVOptions.all))
-        #expect(pairs(Array(all.suffix(4))) == pairs(switches.options))
+    @Test func overrideValues() {
+        #expect(DisplayRefresh.overrideValue(for: 60) == "60.0")
+        #expect(Double(DisplayRefresh.overrideValue(for: 60_000.0 / 1001)) == 60_000.0 / 1001)
+        #expect(DisplayRefresh.overrideValue(for: nil) == "0")
     }
 
-    @Test func acceptsDefaultsWriteForms() {
-        // `-string yes`, `-int 1`, `-int 60`, `-string 60`, a codec list.
-        #expect(pairs(parse(["mpvOpenGLPBO": "yes"]).options) == ["opengl-pbo=yes"])
-        #expect(pairs(parse(["mpvOpenGLPBO": 1]).options) == ["opengl-pbo=yes"])
-        #expect(pairs(parse(["mpvDisplayFPS": 60]).options) == ["display-fps-override=60.0"])
-        #expect(pairs(parse(["mpvDisplayFPS": "60"]).options) == ["display-fps-override=60.0"])
-        #expect(pairs(parse(["mpvHwdecCodecs": "h264,hevc,mpeg2video"]).options) == ["hwdec-codecs=h264,hevc,mpeg2video"])
-        #expect(pairs(parse(["mpvVideoSync": "audio"]).options) == ["video-sync=audio"])
-    }
-
-    @Test func pboOffChangesNothingButIsLogged() {
-        let off = parse(["mpvOpenGLPBO": false])
-        #expect(off.options.isEmpty)
-        #expect(off.notes.count == 1)
-        #expect(parse(["mpvOpenGLPBO": "no"]).options.isEmpty)
-    }
-
-    @Test func invalidValuesAreIgnoredWithANote() {
-        let bad = parse([
-            "mpvHwdecCodecs": "all; rm -rf", "mpvOpenGLPBO": "maybe", "mpvVideoSync": "Display-Resample",
-            "mpvDisplayFPS": 0,
-        ])
-        #expect(bad.options.isEmpty)
-        #expect(bad.notes.count == 4)
-        #expect(bad.notes.allSatisfy { $0.contains("ignored") })
-        // The rejected value is never in the note.
-        #expect(!bad.notes.contains { $0.contains("rm -rf") || $0.contains("Display-Resample") })
-        #expect(parse(["mpvDisplayFPS": 240.5]).options.isEmpty)
-        #expect(parse(["mpvDisplayFPS": Double.nan]).options.isEmpty)
-        #expect(parse(["mpvDisplayFPS": true]).options.isEmpty)
-        #expect(parse(["mpvDisplayFPS": "sixty"]).options.isEmpty)
-        #expect(parse(["mpvOpenGLPBO": 2]).options.isEmpty)
-        #expect(parse(["mpvVideoSync": ""]).options.isEmpty)
-        #expect(parse(["mpvVideoSync": 5]).options.isEmpty)
-        #expect(parse(["mpvHwdecCodecs": String(repeating: "a", count: 65)]).options.isEmpty)
-        #expect(pairs(parse(["mpvHwdecCodecs": String(repeating: "a", count: 64)]).options).count == 1)
-        #expect(pairs(parse(["mpvDisplayFPS": 1]).options) == ["display-fps-override=1.0"])
-        #expect(pairs(parse(["mpvDisplayFPS": 240]).options) == ["display-fps-override=240.0"])
-    }
-
-    @Test func optionStringCharacters() {
-        #expect(MPVSwitches.isOptionString("videotoolbox-copy"))
-        #expect(MPVSwitches.isOptionString("a_b,c-1"))
-        #expect(!MPVSwitches.isOptionString("a b"))
-        #expect(!MPVSwitches.isOptionString("a=b"))
-        #expect(!MPVSwitches.isOptionString("ÄLL"))
-        #expect(!MPVSwitches.isOptionString("http://x"))
+    @Test func liveTVCoresResampleToTheDisplay() {
+        #expect(MPVOptions.all.first { $0.name == "video-sync" }?.value == "display-resample")
     }
 }
 
@@ -463,22 +420,21 @@ struct PlaybackStatsTests {
     }
 }
 
-/// M7n step 3a: a real mpv core (MPVKit's mpv) takes every switch's option by that name, after MMTVL's own options.
+/// M7n step 4a: a real mpv core (MPVKit's mpv) takes display-resample and a display rate set at runtime.
 /// No file is loaded: nothing is drawn or heard.
-struct MPVSwitchesCoreTests {
+struct MPVDisplayRateCoreTests {
     /// MPVHandle lives for the app's lifetime (its wakeup callback holds it unretained), so the test core is kept.
     nonisolated(unsafe) static var cores: [MPVHandle] = []
 
-    @Test func aCoreTakesTheSwitches() throws {
-        let switches = MPVSwitches.parse { [
-            "mpvHwdecCodecs": "all", "mpvOpenGLPBO": true, "mpvVideoSync": "display-resample", "mpvDisplayFPS": 59.94,
-        ][$0] }
-        let core = try MPVHandle(options: MPVOptions.all(adding: switches) + [("ao", "null")], onEvent: { _ in })
+    @Test func aCoreTakesTheDisplayRate() throws {
+        let core = try MPVHandle(options: MPVOptions.all + [("ao", "null")], onEvent: { _ in })
         Self.cores.append(core)
-        #expect(core.string("hwdec-codecs") == "all")
-        #expect(core.string("opengl-pbo") == "yes")
         #expect(core.string("video-sync") == "display-resample")
+        #expect(core.double("display-fps-override") == 0)
+        core.setString("display-fps-override", DisplayRefresh.overrideValue(for: 60_000.0 / 1001))
         #expect(core.double("display-fps-override").map { abs($0 - 59.94) < 0.001 } == true)
+        core.setString("display-fps-override", DisplayRefresh.overrideValue(for: nil))
+        #expect(core.double("display-fps-override") == 0)
         // MMTVL's own options are still there.
         #expect(core.string("hwdec") == "videotoolbox")
         #expect(core.string("video-timing-offset").flatMap(Double.init) == 0)
@@ -508,7 +464,7 @@ struct MPVLogForwardingTests {
     @Test func aCoreTakesTheLogLevels() throws {
         let core = try MPVHandle(options: MPVOptions.all + [("ao", "null")], logLevel: MPVOptions.logLevel,
                                  onEvent: { _ in })
-        MPVSwitchesCoreTests.cores.append(core)
+        MPVDisplayRateCoreTests.cores.append(core)
         #expect(core.string("msg-level") == "all=warn,vo/libmpv=v")
     }
 }
