@@ -2,14 +2,14 @@
 
 | | |
 |---|---|
-| Status | Planned (renumbered from M8 on 2026-11-15; MR stays the last milestone and takes the next number when it starts) |
+| Status | In progress (started 2026-11-16 on branch `mr-release`, in a separate worktree while M7n runs; renumbered from M8 on 2026-11-15; MR keeps its name until it merges, so the rename doesn't touch files M7n is editing) |
 | Depends on | M7b (code complete; its hardware checks, now M7d, can run in parallel) |
 | Master plan decisions used | D4, D9, D10, D13, D15, D19, D22, D24, D28; new **D33** (Developer ID + notarized releases on GitHub, no Homebrew, no App Store), **D34** (open source: MIT, notices, scrubbed public history) |
 | Planned | 2026-10-06 |
 
 ## Goal
 
-Anyone can download MMTVL from the repo's GitHub Releases page (a zip). It opens after only macOS's standard "downloaded from the Internet" confirmation, because it is signed with the user's **Developer ID** and **notarized**. The source is public at `github.com/dwolcot1/mmtvl` under the **MIT** license. The history is rewritten so it doesn't name the user's IPTV provider or show the user's personal email. The app carries the license notices for every bundled library, and Settings has a **Licenses** page you can read from the couch (a QR code per component). A release is one script run (`scripts/release.sh`) plus a GitHub release. On the Mac mini, upgrading from the development-signed 1.0 to the first notarized release (**1.0.1**) needs a one-time Accessibility re-grant, which the README and the release notes explain.
+Anyone can download MMTVL from the repo's GitHub Releases page (a zip). It opens after only macOS's standard "downloaded from the Internet" confirmation, because it is signed with the user's **Developer ID** and **notarized**. The source is public at `github.com/dwolcot1/mmtvl` under the **MIT** license. The history is rewritten so it doesn't name the user's IPTV provider or show the user's personal email. The app carries the license notices for every bundled library, and Settings has a **Licenses** page you can read from the couch (a QR code per component). A release is one script run (`scripts/release.sh`) plus a GitHub release. On the Mac mini, upgrading from the development-signed builds to the first notarized release (**1.3.0**) needs a one-time Accessibility re-grant, which the README and the release notes explain.
 
 ## Out of scope
 
@@ -75,7 +75,7 @@ Anyone can download MMTVL from the repo's GitHub Releases page (a zip). It opens
 
 | File | Responsibility |
 |---|---|
-| `MMTVL.xcodeproj/project.pbxproj` | Build settings only: hardened runtime + allow-jit (step 2); version 1.0.1 / build 2 (step 11); team ID only if step 1 says so. |
+| `MMTVL.xcodeproj/project.pbxproj` | Build settings only: hardened runtime + allow-jit (step 2); version 1.3.0 and the next build number (step 11); team ID only if step 1 says so. |
 | `MMTVL/Settings/ThirdPartyLicenses.swift` (new) | `ThirdPartyComponent` data: every shipped component, its version, license, copyright, URL and frameworks. |
 | `MMTVL/Licenses/THIRD_PARTY_NOTICES.md` (new, bundled) | MMTVL's own MIT license, then each component's notice and full license texts, LGPL source and relinking notes. Ships in `Contents/Resources` (synchronized group). |
 | `LICENSE` (new, repo root) | MIT, `Copyright (c) 2026 Derek Wolcott`. |
@@ -199,7 +199,7 @@ The script never tags, pushes or creates releases: those are outward steps done 
 - **L4 — Build settings, not an entitlements file** (Xcode generates the entitlements from them).
 - **L5 — Release from the dev Mac by script,** no CI (signing secrets stay in the user's Keychain).
 - **L6 — Zip, not DMG.** `ditto -c -k --keepParent` of the stapled app. GitHub Releases serves it as is; a stapled app inside a zip passes Gatekeeper offline.
-- **L7 — First public release is 1.0.1 (build 2).** Same features as the development-signed 1.0, but a new signature; the tag `v1.0` stays as the milestone tag. Every release bumps `CURRENT_PROJECT_VERSION` by 1.
+- **L7 — First public release is 1.3.0** (user choice 2026-11-16; was 1.0.1), with the next build number from the counter `scripts/test-build.sh` uses (never reset). The tag `v1.0` stays as the milestone tag. Every release and test build bumps `CURRENT_PROJECT_VERSION` by 1.
 - **L8 — License: MIT** for MMTVL's code (user choice 2026-10-06), `Copyright (c) 2026 Derek Wolcott`.
 - **L9 — Notices file** inside the app at `MMTVL/Licenses/THIRD_PARTY_NOTICES.md` (bundled automatically), linked from the README. It starts with MMTVL's MIT license, then one section per component (name, version, license, copyright, source URL), then the full texts of each distinct license once (GPL-3.0, LGPL-3.0, LGPL-2.1, Apache-2.0, MPL-1.1, BSD-2-Clause, ISC, zlib, FTL, MIT variants), then the LGPL section (L10).
 - **L10 — LGPL compliance text:** where the exact source is (MPVKit tag `1.0.0` and each build repo's release, plus the upstream project at that version), a written offer to send the source on request for three years (contact: the GitHub issues of `dwolcot1/mmtvl`), and how to replace a framework: copy the rebuilt `.framework` into `MMTVL.app/Contents/Frameworks`, then `codesign --force --deep -s - MMTVL.app` (ad hoc), then re-grant Accessibility.
@@ -219,6 +219,7 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
   - If it isn't `H846CY8RB4`: change `DEVELOPMENT_TEAM` in all four configurations of `project.pbxproj` (L1) and note it under *Deviations*.
   - The user creates the certificate: Xcode → Settings → Accounts → the team → Manage Certificates → **+** → **Developer ID Application**.
   - Install the tools: `brew install gitleaks git-filter-repo`.
+  - *2026-11-16:* Team ID confirmed `H846CY8RB4` (no switch). Tools installed (gitleaks 8.30.1, git-filter-repo a40bce548d2c). Creating the certificate in Xcode failed: "Communication with Apple failed. This operation can only be performed by the Account Holder." (see *Deviations*).
   - Done when: `security find-identity -v -p codesigning` lists `Developer ID Application: … (<team>)`, and `gitleaks version` and `git filter-repo --version` print versions.
 
 - [ ] **2. Hardened runtime**: `MMTVL.xcodeproj/project.pbxproj` (build settings only)
@@ -242,8 +243,9 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
   - Done when: tests pass, and in `-windowed` mode Settings → Licenses → FFmpeg shows a QR code that a phone camera opens to the FFmpeg URL.
 
 - [ ] **5. README and CLAUDE.md**: `README.md` (new), `CLAUDE.md`
+  - **Descriptive but short** (user, 2026-11-16): a sentence or two per section, bullets over paragraphs, no history or internals; details belong in CLAUDE.md. Don't name the source of the college teams list.
   - README sections, in this order:
-    1. One-paragraph description and a feature list (home screen, YouTube TV, Live TV with guide and Multiview, phone remote with trackpad, casting, Plex top shelf).
+    1. One-paragraph description and a short feature list (home screen, YouTube TV, Live TV with guide, Multiview, antenna (HDHomeRun) and My Teams, phone remote with trackpad, Siri Remote, receiver and TV control (serial, network, HDMI-CEC) with a power menu, casting, Plex top shelf, kiosk lock). One line noting the Siri Remote's touch surface uses a private macOS framework.
     2. Requirements: macOS 26 (Tahoe) or later; a Mac connected to a TV; Accessibility permission (global Home, controlling other apps); Local Network permission (Plex, casting).
     3. Install: download `MMTVL-<version>.zip` from the latest GitHub Release, unzip it, move `MMTVL.app` to Applications and open it. To update, quit MMTVL and replace the app the same way (settings stay).
     4. First run: kiosk mode, Exit to Desktop, ⌘Q, `-windowed`, where settings live (`~/Library/Application Support/MMTVL`), the Keychain items (service `dev.mmtvl.launcher`) and how to delete them.
@@ -258,13 +260,18 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
 - [ ] **6. Release tooling and a dry run (with the user)**: `scripts/release.sh`, `scripts/ExportOptions.plist` (new)
   - Write both per *Release flow*. `chmod +x scripts/release.sh`.
   - The user stores notarization credentials once: `xcrun notarytool store-credentials mmtvl-notary --apple-id <their Apple ID> --team-id <team>` and pastes an app-specific password when asked. Never echo or log it.
-  - Run `scripts/release.sh` on the branch's committed state (version still 1.0). The guard rejects a non-`master` branch: for this dry run only, allow it with `MMTVL_RELEASE_ALLOW_BRANCH=1` (implement that override; document it in the script's header comment).
-  - Done when: the script ends with an `Accepted` notarization, `stapler validate` passes, `spctl` reports `Notarized Developer ID`, and it prints a SHA-256. Keep `build/release/MMTVL-1.0.zip` for step 7; it isn't published.
+  - Run `scripts/release.sh` on the branch's committed state (version still 1.2.0). The guard rejects a non-`master` branch: for this dry run only, allow it with `MMTVL_RELEASE_ALLOW_BRANCH=1` (implement that override; document it in the script's header comment).
+  - Done when: the script ends with an `Accepted` notarization, `stapler validate` passes, `spctl` reports `Notarized Developer ID`, and it prints a SHA-256. Keep `build/release/MMTVL-1.2.0.zip` for step 7; it isn't published.
 
 - [ ] **7. Upgrade check on the Mac mini (with the user)**: no files (results in *Deviations* and L16 if they differ)
-  - The mini runs the development-signed 1.0 (2026-10-06). The user quits it, replaces `/Applications/MMTVL.app` with the step 6 app (copied from the zip, so it's quarantined like a download) and launches it.
+  - The mini runs a development-signed 1.2.0 build (installed by `scripts/deploy-mm.sh`). The user quits it, replaces `/Applications/MMTVL.app` with the step 6 app (copied from the zip, so it's quarantined like a download) and launches it.
   - Record: does Gatekeeper open it with only the standard "downloaded from the Internet" prompt? Does the global Home key still work, or does Accessibility need removing and re-adding? Does macOS ask about Local Network again? Do Keychain prompts appear for the playlist URL, guides, PIN, Plex tokens and phones (how many, and does "Always Allow" stop them)? Does Launch at Login still start it after a restart?
-  - Done when: the answers are recorded under *Deviations* (titled "Upgrade 1.0 → Developer ID"), L16's wording in the README matches what happened, and the mini runs the Developer ID build normally.
+  - Done when: the answers are recorded under *Deviations* (titled "Upgrade development-signed → Developer ID"), L16's wording in the README matches what happened, and the mini runs the Developer ID build normally.
+
+- [ ] **7a. No private hosts in the repo** (added 2026-11-16): `scripts/deploy-mm.sh`, `CLAUDE.md`
+  - `deploy-mm.sh`: `host=${MM_HOST:-mm}` and no default key (`MM_KEY` optional; without it, ssh uses the `mm` entry's `IdentityFile` from `~/.ssh/config`, so drop `-i` and `IdentitiesOnly` unless `MM_KEY` is set). Header comment: the mini is the `mm` alias in `~/.ssh/config` (HostName, User, IdentityFile live there). Keep the agent lookup and everything else.
+  - CLAUDE.md: replace the address, user name and key file name (lines 34, 108, the ssh-agent note) with the `mm` alias and "your key". Nothing else.
+  - Done when: `git grep -n -E '10\.86\.|user|id_ed25519' HEAD` finds nothing outside this plan's own deviations, and the user confirms `scripts/deploy-mm.sh` still deploys (next time a build goes to the mini).
 
 - [ ] **8. Secrets scan (with the user)**: `scripts/gitleaks.toml` (new)
   - `scripts/gitleaks.toml`: `[extend] useDefault = true` and rules:
@@ -302,6 +309,11 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
     - re-run step 8's gitleaks commands there: clean.
   - Done when: all checks pass. Nothing has been pushed.
 
+- [ ] **9a. Security review before going public** `[security]` (added 2026-11-16, user's choice): no files
+  - `security-reviewer` over the whole tree of the rewritten `master` (not a diff): `RemoteServer/` (pairing, tokens, WebSocket, `Web/`), `Cast/` (SSDP, DIAL) and the scripts injected into the YouTube page, `IPTV/Relay/` and `StreamResolver`, `App/Keychain.swift` and every log line that could carry a URL, token or code, `Input/SyntheticInput.swift`, `GlobalEventTap`, `KioskLock`, AX calls, `AVControl/` (serial, network, CEC tunnel writes), `IPTV/Antenna/`, and `scripts/`. Threshold: anything a public reader could exploit on a LAN, or that leaks private data through the repo or logs. Stop condition: the list above is covered.
+  - Critical and high findings are fixed (implementer) and re-reviewed before step 10; mediums are listed for the user.
+  - Done when: no open critical or high finding.
+
 - [ ] **10. Switch to the new repository (with the user)**: no files
   - Confirm each command with the user before running it:
     1. `gh repo rename mmtvl-private -R dwolcot1/mmtvl` (stays private; PRs stay there).
@@ -315,18 +327,18 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
     5. `git config user.email 57643254+dwolcot1@users.noreply.github.com` (this repo only).
   - Done when: `git log -1` in the working copy matches the new remote, `git log --all -p | grep -c -i the provider` is 0 in the working copy (after `git stash pop` no ref points into the old history; if a stash or old tag remains, drop it), a Debug build and all tests pass, and `gh repo view dwolcot1/mmtvl --json visibility` says `PRIVATE`.
 
-- [ ] **11. Version 1.0.1 and the release build (with the user)**: `MMTVL.xcodeproj/project.pbxproj` (build settings only)
-  - `MARKETING_VERSION = 1.0.1;` and `CURRENT_PROJECT_VERSION = 2;` in all four configurations (L7). Commit on `master` ("Version 1.0.1"), push after the user confirms.
-  - `scripts/release.sh` → `build/release/MMTVL-1.0.1.zip` and its SHA-256.
-  - Tag and draft release (confirm first): `git tag -a v1.0.1 -m "MMTVL 1.0.1"`, `git push origin v1.0.1`, `gh release create v1.0.1 build/release/MMTVL-1.0.1.zip --draft --title "MMTVL 1.0.1" --notes-file <notes>`. Notes: first signed and notarized release; install lines; L16's upgrade notes; checksum.
-  - Done when: the draft release has the zip, and a download of the asset (`gh release download v1.0.1 -D $TMPDIR/dl`) has the printed SHA-256.
+- [ ] **11. Version 1.3.0 and the release build (with the user)**: `MMTVL.xcodeproj/project.pbxproj` (build settings only)
+  - `MARKETING_VERSION = 1.3.0;` and the next `CURRENT_PROJECT_VERSION` in all four configurations (L7). Commit on `master` ("Version 1.3.0"), push after the user confirms.
+  - `scripts/release.sh` → `build/release/MMTVL-1.3.0.zip` and its SHA-256.
+  - Tag and draft release (confirm first): `git tag -a v1.3.0 -m "MMTVL 1.3.0"`, `git push origin v1.3.0`, `gh release create v1.3.0 build/release/MMTVL-1.3.0.zip --draft --title "MMTVL 1.3.0" --notes-file <notes>`. Notes: first signed and notarized release; install lines; L16's upgrade notes; checksum.
+  - Done when: the draft release has the zip, and a download of the asset (`gh release download v1.3.0 -D $TMPDIR/dl`) has the printed SHA-256.
 
 - [ ] **12. Go public (with the user)**: no files
   - Last checks before the switch: step 8's scans are clean on `origin/master` of the new repo; README and LICENSE are present; the draft release is ready.
-  - Confirm, then `gh repo edit dwolcot1/mmtvl --visibility public --accept-visibility-change-consequences`, then `gh release edit v1.0.1 --draft=false`.
+  - Confirm, then `gh repo edit dwolcot1/mmtvl --visibility public --accept-visibility-change-consequences`, then `gh release edit v1.3.0 --draft=false`.
   - Verify the public download without touching the dev Mac's Debug setup (L2): in a private browser window (signed out of GitHub), open `https://github.com/dwolcot1/mmtvl/releases/latest`, download the zip, and check `shasum -a 256` matches step 11's. Don't run it on the dev Mac.
   - On the Mac mini (with the user): download the zip from the release page in a browser (so it's quarantined like any user's download), quit MMTVL, replace `/Applications/MMTVL.app`, open it. It opens after only the standard "downloaded from the Internet" confirmation and keeps its grants (same Developer ID identity as step 7).
-  - Done when: the repo and release are public, the anonymous download's checksum matches, and the mini runs the downloaded 1.0.1.
+  - Done when: the repo and release are public, the anonymous download's checksum matches, and the mini runs the downloaded 1.3.0.
 
 - [ ] **13. Docs and status**: `CLAUDE.md`, `docs/plans/MASTER_PLAN.md`, this file
   - CLAUDE.md: the repo is public at `dwolcot1/mmtvl` (archive `mmtvl-private`); the release checklist in four lines (bump version and build → commit → `scripts/release.sh` → tag + `gh release create` with the zip and checksum); commit email is the noreply address.
@@ -346,10 +358,10 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
 - [ ] Settings → Licenses lists every component; each detail page's QR code opens the right page on a phone; Done and Back return.
 - [ ] `MMTVL.app/Contents/Resources/THIRD_PARTY_NOTICES.md` exists in the release build and reads correctly.
 - [ ] `scripts/release.sh` produces a notarized, stapled zip; `spctl` says `Notarized Developer ID`.
-- [ ] Mini upgrade 1.0 → Developer ID: Gatekeeper, Accessibility, Local Network, Keychain prompts and Launch at Login recorded (step 7), README matches.
+- [ ] Mini upgrade development-signed → Developer ID: Gatekeeper, Accessibility, Local Network, Keychain prompts and Launch at Login recorded (step 7), README matches.
 - [ ] Secrets scans clean; the public history has no provider name, CDN host, personal email or private terms.
 - [ ] `github.com/dwolcot1/mmtvl` is public with README and LICENSE; `mmtvl-private` is private and keeps the old PRs.
-- [ ] The 1.0.1 zip downloaded from the public release page opens on the mini after only the standard "downloaded from the Internet" confirmation.
+- [ ] The 1.3.0 zip downloaded from the public release page opens on the mini after only the standard "downloaded from the Internet" confirmation.
 
 ## Risks & fallbacks
 
@@ -381,3 +393,5 @@ Executors append here when the plan is wrong or ambiguous: the date, the step, w
   7. **README (step 5) is out of date:** the feature list and ports are from M7b. Since then: Siri Remote (M7h; uses Apple's private MultitouchSupport framework via `dlopen`, not bundled; say so), receiver/TV control and HDMI-CEC, power menu, kiosk lock, antenna (HDHomeRun, SiliconDust guide), My Teams, Multiview, still-screen dimming. Network: the HLS relay is loopback only; outgoing HDHomeRun discovery on UDP 65001. The step's wording otherwise stands.
   8. **No security review step.** The user's rules ask for one before a release. **Proposed:** a `[security]` pass over the whole tree (servers, injected scripts, Keychain, synthetic input, CEC) after step 9 and before step 12, threshold "nothing a public reader could exploit or that leaks private data".
   9. **Household detail in public docs:** `CLAUDE.md` and `docs/plans/` name the user's TV, receiver and tuner models and mention a spouse's photo library (MASTER_PLAN §6, M9). These aren't secrets and the plan keeps the docs; listed only so the user can say otherwise before step 9.
+- **2026-11-16, the user's answers to the re-check above:** first public version **1.3.0** (L7 and steps 6, 7, 11, 12 updated); **add the security review** (new step 9a); **add step 7a** (deploy script without private hosts); **keep the app icon** (item 6 closed); the README **doesn't name the source** of the college teams list (item 5 closed; step 5); the public docs are fine as they are (item 9 closed); the README is **descriptive but short** (step 5). Team ID confirmed `H846CY8RB4`.
+- **2026-11-16, step 1 (blocked):** Xcode → Settings → Accounts → Manage Certificates → + → Developer ID Application answered "Communication with Apple failed. This operation can only be performed by the Account Holder." This is the *Risks* row "The user isn't the Account Holder". **Needed from the user:** developer.apple.com → Account → Membership details: the **Role** (Account Holder or Admin), the **Entity type** (Individual or Organization), and whether the Account page shows an agreement waiting to be accepted. If the Role is Account Holder, try again after accepting any pending agreement and signing the Apple ID out and back in to Xcode, or create the certificate on the website (Certificates → + → Developer ID Application, with a CSR from Keychain Access → Certificate Assistant). If the Role is Admin, the Account Holder has to create it, or grant Admins access to cloud-managed Developer ID certificates (then `-allowProvisioningUpdates` signs at export). Steps 2–5 and 7a don't need the certificate and go ahead meanwhile; step 6 waits.
