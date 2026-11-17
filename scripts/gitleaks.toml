@@ -1,0 +1,41 @@
+# gitleaks configuration for MMTVL (MR step 8): gitleaks' default rules plus rules for IPTV playlist URLs, stream
+# tokens, credentials in query strings and Plex tokens. The user's real hosts and names are never written here: they
+# live in an uncommitted private-terms file that is searched separately (see docs/plans/MR-release.md, step 8).
+#
+#   gitleaks git -v --redact --config scripts/gitleaks.toml .     # every commit
+#   gitleaks dir -v --redact --config scripts/gitleaks.toml .     # the files as they are
+
+title = "MMTVL"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "iptv-playlist-url"
+description = "IPTV playlist or panel URL with an account part"
+regex = '''(?i)https?://[^\s"'<>]+/(get\.php|player_api\.php|xmltv\.php|app\d*/)[^\s"'<>]{8,}'''
+
+[[rules]]
+id = "m3u-stream-token"
+description = "Stream URL with a long token path segment"
+regex = '''(?i)https?://[^\s"'<>]+/[A-Za-z0-9_-]{32,}/[^\s"'<>]*\.(m3u8?|ts)'''
+
+[[rules]]
+id = "credential-query"
+description = "Credentials in a URL query"
+regex = '''(?i)[?&](username|password|token|api_key|apikey)=[^&\s"'<>]{6,}'''
+
+[[rules]]
+id = "plex-token"
+description = "Plex token"
+regex = '''(?i)(X-Plex-Token|plex-token|accessToken)["'=:\s]+[A-Za-z0-9_-]{16,}'''
+
+# Test fixtures and documentation stand-ins (whole-line match): reserved .example hosts, and the made-up
+# HDHomeRun DeviceAuth values in AntennaGuideTests.
+[[allowlists]]
+description = "MMTVL test fixtures and placeholders"
+regexTarget = "line"
+regexes = [
+  '''(?i)https?://[a-z0-9.-]*\.example([/:?"]|$)''',
+  '''(AAAAbbbb1111|CCCCdddd2222|ab_cd-ef12345|ab%5Fcd%2Def12345)''',
+]
