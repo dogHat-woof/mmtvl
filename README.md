@@ -2,6 +2,13 @@
 
 A full-screen TV launcher for the Mac, styled after tvOS. Put a Mac on your TV and drive it with a Siri Remote, a keyboard, a game controller or your phone: open your apps, watch YouTube and live TV, and control the receiver and TV from one place.
 
+![Home screen with Plex Continue Watching](docs/images/home-plex.jpg)
+
+| | |
+|---|---|
+| ![Live TV guide](docs/images/guide.jpg) | ![Multiview](docs/images/multiview.jpg) |
+| ![Settings → Live TV](docs/images/settings-live-tv.jpg) | ![PIN entry](docs/images/pin.jpg) |
+
 - **Home screen** of app tiles with a top shelf (Plex Continue Watching, Live TV previews)
 - **YouTube** in its TV interface, with casting from phones
 - **Live TV** from your own IPTV playlist and guides, or an HDHomeRun antenna: guide, search, timeshift, Multiview (up to 5 channels) and My Teams
