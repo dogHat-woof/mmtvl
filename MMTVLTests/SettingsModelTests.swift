@@ -17,7 +17,7 @@ struct SettingsModelTests {
         let expected: [(String, SettingsPage)] = [
             ("homeScreen", .homeScreen), ("liveTV", .liveTV), ("plex", .plex), ("youtube", .youtube),
             ("casting", .casting), ("audioTV", .audioTV), ("remoteInput", .remoteInput), ("restrictions", .restrictions),
-            ("system", .system), ("about", .about),
+            ("system", .system), ("about", .about), ("licenses", .licenses),   // MR step 4
         ]
         #expect(model.focusableRowIDs == expected.map(\.0))
         for (id, page) in expected {

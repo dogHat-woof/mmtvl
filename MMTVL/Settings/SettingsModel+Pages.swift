@@ -60,6 +60,8 @@ extension SettingsModel {
         case .antenna: antennaSections
         case .antennaChannels: antennaChannelsSections
         case .confirmAntennaScan: confirmAntennaScanSections
+        case .licenses: licensesSections
+        case .license(let id): licenseSections(id: id)
         }
     }
 
@@ -115,6 +117,8 @@ extension SettingsModel {
         case .antenna: "Antenna"
         case .antennaChannels: "Channels"
         case .confirmAntennaScan: "Scan for Channels?"
+        case .licenses: "Licenses"
+        case .license(let id): ThirdPartyLicenses.component(id: id)?.name ?? "License"
         }
     }
 
@@ -126,6 +130,8 @@ extension SettingsModel {
         case .tileArt(let id): .tileArt(itemID: id, tileArtPreviewChoice)
         case .tile(let id): .tileArt(itemID: id, .current)
         case .learnButton: .symbol("hand.point.up.left")
+        // MR step 4: the component's source and license, to scan with a phone.
+        case .license(let id): ThirdPartyLicenses.component(id: id).map { RowImage.qrCode($0.url) }
         default: nil
         }
     }
@@ -177,6 +183,8 @@ extension SettingsModel {
                             description: "Accessibility access, starting at login, relaunching MMTVL and leaving to the desktop."),
                 SettingsRow(id: "about", title: "About", value: environment.version.version, showsDisclosure: true,
                             action: .push(.about), description: "The version and build of MMTVL."),
+                SettingsRow(id: "licenses", title: "Licenses", showsDisclosure: true, action: .push(.licenses),
+                            description: "The licenses of MMTVL and the open-source software it includes."),
             ]),
         ]
     }
@@ -293,6 +301,36 @@ extension SettingsModel {
                             value: Self.onOff(settings.showVersionOnHome), action: .toggle(.showVersionOnHome),
                             description: "Shows the version and build under the clock, for testing builds."),
             ], footer: "Settings are saved in ~/Library/Application Support/MMTVL"),
+        ]
+    }
+
+    /// MR step 4: MMTVL first, then every shipped component by name.
+    private var licensesSections: [SettingsSection] {
+        let rows = ThirdPartyLicenses.all.map { component in
+            SettingsRow(id: "license.\(component.id)", title: component.name, value: component.license,
+                        detail: "Version \(component.version)", showsDisclosure: true,
+                        action: .push(.license(id: component.id)))
+        }
+        return [SettingsSection(id: "licenses", rows: rows,
+                                footer: "Full license texts and source links are in THIRD_PARTY_NOTICES.md inside MMTVL.app and at github.com/dwolcot1/mmtvl.")]
+    }
+
+    /// MR step 4: one component; its URL is the QR code beside the list. An unknown id shows only Done.
+    private func licenseSections(id: String) -> [SettingsSection] {
+        let done = SettingsRow(id: "license.done", title: "Done", action: .pop)
+        guard let component = ThirdPartyLicenses.component(id: id) else {
+            return [SettingsSection(id: "license", rows: [done])]
+        }
+        let source = component.url.hasPrefix("https://") ? String(component.url.dropFirst("https://".count))
+            : component.url
+        return [
+            SettingsSection(id: "license", rows: [
+                SettingsRow(id: "license.version", title: "Version", value: component.version),
+                SettingsRow(id: "license.license", title: "License", value: component.license),
+                SettingsRow(id: "license.copyright", title: component.copyright),
+                SettingsRow(id: "license.source", title: "Source", value: source),
+                done,
+            ], footer: "Scan the code with a phone's camera to read the license and source."),
         ]
     }
 

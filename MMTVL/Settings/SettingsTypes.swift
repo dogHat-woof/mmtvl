@@ -33,6 +33,8 @@ nonisolated enum SettingsPage: Hashable, Sendable {
     case antenna, antennaChannels
     /// M7j L18: Antenna → Scan for Channels' confirm page.
     case confirmAntennaScan
+    /// MR step 4: Settings → Licenses (every shipped component), and one component's page with its QR code.
+    case licenses, license(id: String)
 }
 
 /// M7h step 11: which address the keyboard page edits.
