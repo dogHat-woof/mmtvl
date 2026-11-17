@@ -11,16 +11,18 @@
 #   scripts/deploy-mm.sh <zip>           a given zip
 #   scripts/deploy-mm.sh --rollback      install the newest kept build older than the installed one
 #
-# Needs SSH key login to the mini (Remote Login on). Override with MM_HOST=user@host and MM_KEY=<private key>.
-# The key is used through macOS's SSH agent, found even when SSH_AUTH_SOCK isn't set (a Claude Code shell). Load it
-# in Terminal: once ever, ssh-add --apple-use-keychain ~/.ssh/id_ed25519_example (saves the passphrase in the Keychain);
+# Needs SSH key login to the mini (Remote Login on). The mini is the host alias "mm" in ~/.ssh/config, which holds its
+# HostName, User and IdentityFile. Override with MM_HOST=user@host and MM_KEY=<private key> (with MM_KEY set, only that
+# key is offered). The key is used through macOS's SSH agent, found even when SSH_AUTH_SOCK isn't set (a Claude Code
+# shell). Load it in Terminal: once ever, ssh-add --apple-use-keychain <your key> (saves the passphrase in the Keychain);
 # after each restart of this Mac, ssh-add --apple-load-keychain (no passphrase asked).
 set -euo pipefail
 
-host=${MM_HOST:-user@mm.example}
-key=${MM_KEY:-$HOME/.ssh/id_ed25519_example}
+host=${MM_HOST:-mm}
+key=${MM_KEY:-}
 keep=3
-opts=(-i "$key" -o IdentitiesOnly=yes -o ConnectTimeout=5 -o UseKeychain=yes)
+opts=(-o ConnectTimeout=5 -o UseKeychain=yes)
+if [[ -n $key ]]; then opts=(-i "$key" -o IdentitiesOnly=yes "${opts[@]}"); fi
 if [[ -z ${SSH_AUTH_SOCK:-} ]]; then
     sock=$(launchctl print "gui/$(id -u)/com.openssh.ssh-agent" 2>/dev/null | awk '/SSH_AUTH_SOCK =>/ {print $3; exit}')
     if [[ -S ${sock:-} ]]; then export SSH_AUTH_SOCK=$sock; fi
@@ -132,7 +134,7 @@ REMOTE
 
 if ! ssh "${opts[@]}" -o BatchMode=yes "$host" true 2>/dev/null; then
     echo "Can't log in to ${host} with an SSH key. Is the mini awake? Is the key in the SSH agent?"
-    echo "In Terminal: ssh-add --apple-load-keychain (or, the first time: ssh-add --apple-use-keychain ${key})"
+    echo "In Terminal: ssh-add --apple-load-keychain (or, the first time: ssh-add --apple-use-keychain ${key:-<your key>})"
     exit 1
 fi
 

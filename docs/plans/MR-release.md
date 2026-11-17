@@ -268,10 +268,11 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
   - Record: does Gatekeeper open it with only the standard "downloaded from the Internet" prompt? Does the global Home key still work, or does Accessibility need removing and re-adding? Does macOS ask about Local Network again? Do Keychain prompts appear for the playlist URL, guides, PIN, Plex tokens and phones (how many, and does "Always Allow" stop them)? Does Launch at Login still start it after a restart?
   - Done when: the answers are recorded under *Deviations* (titled "Upgrade development-signed → Developer ID"), L16's wording in the README matches what happened, and the mini runs the Developer ID build normally.
 
-- [ ] **7a. No private hosts in the repo** (added 2026-11-16): `scripts/deploy-mm.sh`, `CLAUDE.md`
+- [x] **7a. No private hosts in the repo** (added 2026-11-16): `scripts/deploy-mm.sh`, `CLAUDE.md`
   - `deploy-mm.sh`: `host=${MM_HOST:-mm}` and no default key (`MM_KEY` optional; without it, ssh uses the `mm` entry's `IdentityFile` from `~/.ssh/config`, so drop `-i` and `IdentitiesOnly` unless `MM_KEY` is set). Header comment: the mini is the `mm` alias in `~/.ssh/config` (HostName, User, IdentityFile live there). Keep the agent lookup and everything else.
   - CLAUDE.md: replace the address, user name and key file name (lines 34, 108, the ssh-agent note) with the `mm` alias and "your key". Nothing else.
   - Done when: `git grep -n -E '10\.86\.|user|id_ed25519' HEAD` finds nothing outside this plan's own deviations, and the user confirms `scripts/deploy-mm.sh` still deploys (next time a build goes to the mini).
+  - *2026-11-16, done:* the grep finds nothing outside `docs/plans/`; `zsh -n` passes; checked by the orchestrator (diff read; `ssh -o ConnectTimeout=5 -o UseKeychain=yes -o BatchMode=yes mm true` logs in, the `mm` entry sets `IdentitiesOnly`). Also changed: the login-failure hint prints `${key:-<your key>}`. A full deploy is still to be seen with the next build.
 
 - [ ] **8. Secrets scan (with the user)**: `scripts/gitleaks.toml` (new)
   - `scripts/gitleaks.toml`: `[extend] useDefault = true` and rules:
