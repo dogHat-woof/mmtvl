@@ -21,9 +21,11 @@ nonisolated final class MPVHandle: @unchecked Sendable {
     private let queue = DispatchQueue(label: "dev.mmtvl.launcher.mpv-events")
     private let onEvent: @Sendable (MPVEvent) -> Void
 
-    /// mpv_create, options, mpv_request_log_messages("warn"), mpv_initialize, wakeup callback.
-    /// `onEvent` runs on the private event queue; the owner hops to the main actor.
-    init(options: [(name: String, value: String)], onEvent: @escaping @Sendable (MPVEvent) -> Void) throws {
+    /// mpv_create, options, mpv_request_log_messages(`logLevel`), mpv_initialize, wakeup callback.
+    /// `onEvent` runs on the private event queue; the owner hops to the main actor. Log messages are passed on only
+    /// when `MPVLogText.forwards` says so (M7n step 3a: warnings, errors and the render-stuck line).
+    init(options: [(name: String, value: String)], logLevel: String = "warn",
+         onEvent: @escaping @Sendable (MPVEvent) -> Void) throws {
         guard let handle = mpv_create() else { throw MPVError.create }
         self.handle = handle
         self.onEvent = onEvent
@@ -33,7 +35,7 @@ nonisolated final class MPVHandle: @unchecked Sendable {
                 Self.logger.error("Option \(option.name, privacy: .public) failed: \(String(cString: mpv_error_string(status)), privacy: .public)")
             }
         }
-        mpv_request_log_messages(handle, "warn")
+        mpv_request_log_messages(handle, logLevel)
         let status = mpv_initialize(handle)
         guard status >= 0 else {
             mpv_terminate_destroy(handle)
@@ -77,6 +79,13 @@ nonisolated final class MPVHandle: @unchecked Sendable {
         return status >= 0 ? value : nil
     }
 
+    /// MPV_FORMAT_INT64 (M7n step 3a: the frame counters).
+    func int64(_ name: String) -> Int64? {
+        var value: Int64 = 0
+        let status = mpv_get_property(handle, name, MPV_FORMAT_INT64, &value)
+        return status >= 0 ? value : nil
+    }
+
     func setString(_ name: String, _ value: String) {
         let status = mpv_set_property_string(handle, name, value)
         if status < 0 {
@@ -109,9 +118,11 @@ nonisolated final class MPVHandle: @unchecked Sendable {
                 onEvent(.shutdown)
             case MPV_EVENT_LOG_MESSAGE:
                 guard let message = event.data?.assumingMemoryBound(to: mpv_event_log_message.self).pointee else { continue }
-                let prefix = String(cString: message.prefix)
+                let level = String(cString: message.level)
                 let text = String(cString: message.text).trimmingCharacters(in: .whitespacesAndNewlines)
-                onEvent(.log(level: String(cString: message.level), text: MPVLogText.redacted("[\(prefix)] \(text)")))
+                guard MPVLogText.forwards(level: level, text: text) else { continue }
+                let prefix = String(cString: message.prefix)
+                onEvent(.log(level: level, text: MPVLogText.redacted("[\(prefix)] \(text)")))
             default:
                 continue
             }

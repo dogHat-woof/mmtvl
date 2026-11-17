@@ -151,15 +151,26 @@ struct LibraryFixture {
     /// M7j: the fake tuner behind `library.antenna`, when one was asked for.
     var tuner: FakeTuner? = nil
 
-    func cleanUp() { try? FileManager.default.removeItem(at: directory) }
+    /// M7n L1: also ends a launch/wake retry loop left waiting.
+    func cleanUp() {
+        library.channelRetryTask?.cancel()
+        try? FileManager.default.removeItem(at: directory)
+    }
 }
 
+/// M7n L1: the retry loop's wait for tests that don't drive it: parked until cancelled (`LibraryFixture.cleanUp`), so
+/// a launch with no tuner or a failed playlist never tries again behind a test's back.
+let parkedRetrySleep: @MainActor (Duration) async -> Void = { _ in try? await Task.sleep(for: .seconds(86_400)) }
+
 /// A library with an in-memory guide store and sources, and its files in a temporary directory.
+/// M7n L1: `retryWait` drives the launch/wake retry loop's waits on the test clock (it should advance it by the
+/// wait); nil parks the loop (`parkedRetrySleep`).
 func makeLibrary(playlist: URL? = nil, guides: [URL] = [],
                  texts: [URL: String] = [IPTVFixtures.playlistURL: IPTVFixtures.playlist],
                  files: [URL: String]? = nil,
                  state: IPTVState? = nil, overrides: [String: String]? = nil, preferences: ChannelPreferences? = nil,
                  tuner: FakeTuner? = nil, antenna: AntennaSource? = nil,
+                 retryWait: (@MainActor (TestClock, Duration) async -> Void)? = nil,
                  now: Date = Date(timeIntervalSince1970: 1_791_200_000)) throws -> LibraryFixture {
     let directory = FileManager.default.temporaryDirectory
         .appending(path: "IPTVLibraryTests-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -186,9 +197,13 @@ func makeLibrary(playlist: URL? = nil, guides: [URL] = [],
         AntennaSource.fake($0, now: { clock.now }, sleep: { clock.advance(TimeInterval($0.components.seconds)) },
                            scanClock: { clock.instant })
     } ?? AntennaSource()
+    var retrySleep = parkedRetrySleep
+    if let retryWait { retrySleep = { @MainActor delay in await retryWait(clock, delay) } }
     let library = IPTVLibrary(sources: sources, store: store, network: network, stateFile: stateFile,
                               overridesFile: overridesFile, preferencesFile: preferencesFile, antenna: antenna,
-                              now: { clock.now })
+                              now: { clock.now },
+                              retrySleep: retrySleep,
+                              retryClock: { clock.instant })
     return LibraryFixture(library: library, network: networkState, sources: sources, store: store, clock: clock,
                           directory: directory, stateFile: stateFile, overridesFile: overridesFile,
                           preferencesFile: preferencesFile, tuner: tuner)

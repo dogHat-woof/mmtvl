@@ -893,7 +893,7 @@ struct LiveTVModelTests {
         openGuide(model)
         _ = model.handle(.left)     // the channel cell
         _ = model.handle(.left)     // groups
-        for _ in 0..<10 { _ = model.handle(.up) }
+        _ = model.handle(.channelUp)   // a page up stops at the Search row (Up loops, M7n)
         #expect(model.guide?.focus == .search)
         _ = model.handle(.select)
         #expect(model.search != nil)

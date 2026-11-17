@@ -19,23 +19,123 @@ extension IPTVLibrary {
     }
 
     /// Launch (D23): the playlist (always fetched) and the antenna's discovery and lineup (L4) at the same time,
-    /// then the guides when stale and (L10) the antenna guide when due.
+    /// then the guides when stale and (L10) the antenna guide when due. M7n L1: then, while the antenna or the
+    /// playlist is missing (the network wasn't up yet), the retry loop starts (`channelRetryTask`; not awaited).
     func refreshAtLaunch() async {
+        cancelChannelRetry()
         async let playlist: Void = refreshPlaylist()
         async let tuners = discoverAntenna()
         _ = await (playlist, tuners)
         await refreshGuideIfStale()
         await refreshAntennaGuideIfDue()
+        startChannelRetryIfMissing()
     }
 
     /// After wake (D40, L4): the playlist when stale and the antenna's discovery and lineup, then the guides when
-    /// stale and (L10) the antenna guide when due.
+    /// stale and (L10) the antenna guide when due. M7n L1: then the retry loop, as at launch.
     func refreshAfterWake() async {
+        cancelChannelRetry()
         async let playlist: Void = refreshPlaylistIfStale()
         async let tuners = discoverAntenna()
         _ = await (playlist, tuners)
         await refreshGuideIfStale()
         await refreshAntennaGuideIfDue()
+        startChannelRetryIfMissing()
+    }
+
+    // MARK: - The launch and wake retry (M7n L1)
+
+    /// The antenna is on and knows no tuner.
+    var isAntennaMissing: Bool { antenna.isEnabled && antenna.devices.isEmpty }
+    /// A playlist is set and has no channels.
+    var isPlaylistMissing: Bool { hasPlaylist && playlistChannels.isEmpty }
+
+    /// One loop at a time: a newer launch or wake refresh ends the old one.
+    private func cancelChannelRetry() {
+        channelRetryTask?.cancel()
+        channelRetryTask = nil
+    }
+
+    private func startChannelRetryIfMissing() {
+        guard isAntennaMissing || isPlaylistMissing else { return }
+        // QA minor 1: two overlapping refreshes (launch, then wake) each start a loop; only the newest runs.
+        channelRetryTask?.cancel()
+        channelRetryTask = Task { await retryChannelsUntilLoaded() }
+    }
+
+    /// While the antenna or the playlist is missing, waits (`channelRetryDelays`, then `channelRetryRepeat`) and tries
+    /// the missing ones again: the antenna with `discoverAntenna()`, the playlist with `refreshPlaylist()`, at the same
+    /// time. A try that brings channels is followed by the guides (`refreshGuideIfStale()`, then
+    /// `refreshAntennaGuideIfDue()`), since a guide import is skipped while there are no channels. Ends when nothing
+    /// is missing (both loaded, or the antenna turned off / the playlist removed), when the next try would be more
+    /// than `channelRetryLimit` after the first one (on `retryClock`), or when cancelled. Logs once at the start and
+    /// once at the end, counts only.
+    func retryChannelsUntilLoaded() async {
+        let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "IPTV")
+        let start = retryClock()
+        logger.notice("Network not ready: retrying the channels for up to 5 min (\(Self.missingText(antenna: self.isAntennaMissing, playlist: self.isPlaylistMissing), privacy: .public) missing)")
+        var delays = Self.channelRetryDelays[...]
+        var tries = 0
+        let antennaWasMissing = isAntennaMissing
+        let playlistWasMissing = isPlaylistMissing
+        var ending = "nothing missing"
+        while true {
+            guard !Task.isCancelled else {
+                ending = "a newer refresh took over"
+                break
+            }
+            guard isAntennaMissing || isPlaylistMissing else { break }
+            let delay = delays.popFirst() ?? Self.channelRetryRepeat
+            guard retryClock() - start + delay <= Self.channelRetryLimit else {
+                ending = "5 min passed"
+                break
+            }
+            await retrySleep(delay)
+            guard !Task.isCancelled else {
+                ending = "a newer refresh took over"
+                break
+            }
+            let antennaWanted = isAntennaMissing
+            let playlistWanted = isPlaylistMissing
+            guard antennaWanted || playlistWanted else { break }
+            tries += 1
+            // In its own task: a newer refresh cancelling this loop doesn't cancel a fetch in flight.
+            await Task { await self.retryMissingChannels(antenna: antennaWanted, playlist: playlistWanted) }.value
+        }
+        // QA minor 2: an antenna turned off or a playlist removed isn't "nothing missing" in the log.
+        if ending == "nothing missing", (antennaWasMissing && !antenna.isEnabled) || (playlistWasMissing && !hasPlaylist) {
+            ending = "a source was turned off or removed"
+        }
+        logger.notice("Channel retry ended (\(ending, privacy: .public)) after \(tries, privacy: .public) tries: \(self.antenna.devices.count, privacy: .public) tuners, \(self.antenna.channels.count, privacy: .public) antenna channels, \(self.playlistChannels.count, privacy: .public) playlist channels")
+    }
+
+    /// One try of the retry loop; the guides when it brought channels.
+    private func retryMissingChannels(antenna retryAntenna: Bool, playlist retryPlaylist: Bool) async {
+        async let playlist: Void = retryPlaylistIfMissing(retryPlaylist)
+        async let tuners: Void = retryAntennaIfMissing(retryAntenna)
+        _ = await (playlist, tuners)
+        let brought = (retryAntenna && !antenna.devices.isEmpty) || (retryPlaylist && !playlistChannels.isEmpty)
+        guard brought else { return }
+        await refreshGuideIfStale()
+        await refreshAntennaGuideIfDue()
+    }
+
+    private func retryPlaylistIfMissing(_ wanted: Bool) async {
+        guard wanted, isPlaylistMissing else { return }
+        await refreshPlaylist()
+    }
+
+    private func retryAntennaIfMissing(_ wanted: Bool) async {
+        guard wanted, isAntennaMissing else { return }
+        await discoverAntenna()
+    }
+
+    private nonisolated static func missingText(antenna: Bool, playlist: Bool) -> String {
+        switch (antenna, playlist) {
+        case (true, true): "antenna and playlist"
+        case (true, false): "antenna"
+        default: "playlist"
+        }
     }
 
     /// The antenna's lineup (a search first when no tuner is known).

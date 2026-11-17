@@ -16,6 +16,9 @@ nonisolated final class MPVVideoLayer: CAOpenGLLayer, @unchecked Sendable {
     var onReady: (@Sendable (_ replacedContext: Bool) -> Void)?
     /// M7h 13g: set when a render context is freed, cleared when the next one is created (Core Animation's GL callbacks).
     private var renderContextFreed = false
+    /// M7n step 3a: the render calls and mpv's update callbacks since the last `takeRenderTimings()`. Draws run on
+    /// the main thread (M6 L7), the callback on mpv's; the lock is held only for a few additions.
+    private let recorder = OSAllocatedUnfairLock(initialState: PlaybackStats.RenderRecorder())
 
     init(mpv: MPVHandle) {
         self.mpv = mpv
@@ -107,10 +110,24 @@ nonisolated final class MPVVideoLayer: CAOpenGLLayer, @unchecked Sendable {
                     mpv_render_param(type: MPV_RENDER_PARAM_FLIP_Y, data: UnsafeMutableRawPointer(flipPointer)),
                     mpv_render_param(type: MPV_RENDER_PARAM_INVALID, data: nil),
                 ]
+                let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
                 _ = mpv_render_context_render(renderContext, &params)
+                let elapsed = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) &- start
+                recorder.withLock { $0.draw(at: start, renderNanos: elapsed) }
             }
         }
         glFlush()
+    }
+
+    /// M7n step 3a: the period's render timings, and starts a new period (`restart`: a new stats period).
+    func takeRenderTimings(restart: Bool) -> PlaybackStats.RenderTimings {
+        recorder.withLock { $0.take(restart: restart) }
+    }
+
+    /// M7n step 3a: from mpv's render update callback, on mpv's thread. Calls no mpv function.
+    fileprivate func noteRenderUpdate() {
+        let now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        recorder.withLock { $0.update(at: now) }
     }
 
     /// With the layer's GL context current.
@@ -141,6 +158,7 @@ nonisolated final class MPVVideoLayer: CAOpenGLLayer, @unchecked Sendable {
         mpv_render_context_set_update_callback(context, { layerContext in
             guard let layerContext else { return }
             let ref = LayerRef(layer: Unmanaged<MPVVideoLayer>.fromOpaque(layerContext).takeUnretainedValue())
+            ref.layer.noteRenderUpdate()
             DispatchQueue.main.async { ref.layer.setNeedsDisplay() }
         }, Unmanaged.passUnretained(self).toOpaque())
         let replaced = renderContextFreed

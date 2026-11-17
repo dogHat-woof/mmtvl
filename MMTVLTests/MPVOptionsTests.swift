@@ -257,3 +257,258 @@ struct MPVDirectStreamTests {
         #expect(playlist.second >= 1)
     }
 }
+
+/// M7n step 3a: the hidden experiment switches.
+struct MPVSwitchesTests {
+    private func parse(_ values: [String: Any]) -> MPVSwitches {
+        MPVSwitches.parse { values[$0] }
+    }
+
+    private func pairs(_ options: [(name: String, value: String)]) -> [String] {
+        options.map { "\($0.name)=\($0.value)" }
+    }
+
+    @Test func noSwitchesLeaveTheOptionsAsToday() {
+        let none = parse([:])
+        #expect(none.options.isEmpty)
+        #expect(none.notes.isEmpty)
+        #expect(pairs(MPVOptions.all(adding: none)) == pairs(MPVOptions.all))
+        #expect(MPVOptions.all(adding: none).last?.name == "video-timing-offset")
+    }
+
+    @Test func eachSwitchSetsItsOption() {
+        let switches = parse([
+            "mpvHwdecCodecs": "all", "mpvOpenGLPBO": true, "mpvVideoSync": "display-resample", "mpvDisplayFPS": 59.94,
+        ])
+        #expect(pairs(switches.options) == [
+            "hwdec-codecs=all", "opengl-pbo=yes", "video-sync=display-resample", "display-fps-override=59.94",
+        ])
+        #expect(switches.notes.count == 4)
+        // Appended after MMTVL's own options, which stay in order.
+        let all = MPVOptions.all(adding: switches)
+        #expect(pairs(Array(all.prefix(MPVOptions.all.count))) == pairs(MPVOptions.all))
+        #expect(pairs(Array(all.suffix(4))) == pairs(switches.options))
+    }
+
+    @Test func acceptsDefaultsWriteForms() {
+        // `-string yes`, `-int 1`, `-int 60`, `-string 60`, a codec list.
+        #expect(pairs(parse(["mpvOpenGLPBO": "yes"]).options) == ["opengl-pbo=yes"])
+        #expect(pairs(parse(["mpvOpenGLPBO": 1]).options) == ["opengl-pbo=yes"])
+        #expect(pairs(parse(["mpvDisplayFPS": 60]).options) == ["display-fps-override=60.0"])
+        #expect(pairs(parse(["mpvDisplayFPS": "60"]).options) == ["display-fps-override=60.0"])
+        #expect(pairs(parse(["mpvHwdecCodecs": "h264,hevc,mpeg2video"]).options) == ["hwdec-codecs=h264,hevc,mpeg2video"])
+        #expect(pairs(parse(["mpvVideoSync": "audio"]).options) == ["video-sync=audio"])
+    }
+
+    @Test func pboOffChangesNothingButIsLogged() {
+        let off = parse(["mpvOpenGLPBO": false])
+        #expect(off.options.isEmpty)
+        #expect(off.notes.count == 1)
+        #expect(parse(["mpvOpenGLPBO": "no"]).options.isEmpty)
+    }
+
+    @Test func invalidValuesAreIgnoredWithANote() {
+        let bad = parse([
+            "mpvHwdecCodecs": "all; rm -rf", "mpvOpenGLPBO": "maybe", "mpvVideoSync": "Display-Resample",
+            "mpvDisplayFPS": 0,
+        ])
+        #expect(bad.options.isEmpty)
+        #expect(bad.notes.count == 4)
+        #expect(bad.notes.allSatisfy { $0.contains("ignored") })
+        // The rejected value is never in the note.
+        #expect(!bad.notes.contains { $0.contains("rm -rf") || $0.contains("Display-Resample") })
+        #expect(parse(["mpvDisplayFPS": 240.5]).options.isEmpty)
+        #expect(parse(["mpvDisplayFPS": Double.nan]).options.isEmpty)
+        #expect(parse(["mpvDisplayFPS": true]).options.isEmpty)
+        #expect(parse(["mpvDisplayFPS": "sixty"]).options.isEmpty)
+        #expect(parse(["mpvOpenGLPBO": 2]).options.isEmpty)
+        #expect(parse(["mpvVideoSync": ""]).options.isEmpty)
+        #expect(parse(["mpvVideoSync": 5]).options.isEmpty)
+        #expect(parse(["mpvHwdecCodecs": String(repeating: "a", count: 65)]).options.isEmpty)
+        #expect(pairs(parse(["mpvHwdecCodecs": String(repeating: "a", count: 64)]).options).count == 1)
+        #expect(pairs(parse(["mpvDisplayFPS": 1]).options) == ["display-fps-override=1.0"])
+        #expect(pairs(parse(["mpvDisplayFPS": 240]).options) == ["display-fps-override=240.0"])
+    }
+
+    @Test func optionStringCharacters() {
+        #expect(MPVSwitches.isOptionString("videotoolbox-copy"))
+        #expect(MPVSwitches.isOptionString("a_b,c-1"))
+        #expect(!MPVSwitches.isOptionString("a b"))
+        #expect(!MPVSwitches.isOptionString("a=b"))
+        #expect(!MPVSwitches.isOptionString("ÄLL"))
+        #expect(!MPVSwitches.isOptionString("http://x"))
+    }
+}
+
+/// M7n step 3a: the stats line.
+struct PlaybackStatsTests {
+    @Test func deltas() {
+        #expect(PlaybackStats.delta(12, since: 10) == 2)
+        #expect(PlaybackStats.delta(10, since: 10) == 0)
+        // Reset for a new file: counts from zero.
+        #expect(PlaybackStats.delta(3, since: 10) == 3)
+        #expect(PlaybackStats.delta(5, since: nil) == 5)
+        #expect(PlaybackStats.delta(nil, since: 5) == nil)
+    }
+
+    @Test func renderTimings() {
+        var timings = PlaybackStats.RenderTimings()
+        timings.record(nanos: 9_800_000)
+        timings.record(nanos: 12_000_000)
+        timings.record(nanos: 14_250_000)
+        timings.record(nanos: 3_000_000)
+        #expect(timings.draws == 4)
+        #expect(timings.longestNanos == 14_250_000)
+        // Over 12 ms, not at it.
+        #expect(timings.slowDraws == 1)
+    }
+
+    @Test func fullLine() {
+        let sample = PlaybackStats.Sample(
+            decoder: "no", containerFPS: 29.97003, filteredFPS: 59.94006,
+            counters: .init(frameDrops: 7, decoderFrameDrops: 1, delayedFrames: 13, mistimedFrames: 2),
+            avsync: -0.0123, displayFPS: 60)
+        var render = PlaybackStats.RenderTimings()
+        render.record(nanos: 9_840_000)
+        render.record(nanos: 13_000_000)
+        render.updates = 3
+        render.longestUpdateToDrawNanos = 4_150_000
+        render.longestDrawGapNanos = 50_049_000
+        let line = PlaybackStats.line(
+            player: 1, sample: sample,
+            previous: .init(frameDrops: 5, decoderFrameDrops: 1, delayedFrames: 10, mistimedFrames: 0), render: render,
+            stuck: 4)
+        #expect(line == "Stats (player 1): decoder no, 29.97 fps, filtered 59.94 fps, dropped 2, decoder dropped 0, "
+            + "delayed 3, mistimed 2, avsync -0.012 s, display 60.00 fps, 3 updates, 2 draws, 4 stuck, "
+            + "longest render 13.0 ms, 1 over 12 ms, longest update to draw 4.2 ms, longest gap 50.0 ms")
+    }
+
+    @Test func unknownValuesAndNoDisplayRate() {
+        let line = PlaybackStats.line(player: 2, sample: PlaybackStats.Sample(),
+                                      previous: .init(), render: .init(), stuck: 0)
+        #expect(line == "Stats (player 2): decoder ?, ? fps, filtered ? fps, dropped ?, decoder dropped ?, delayed ?, "
+            + "mistimed ?, avsync ?, 0 updates, 0 draws, 0 stuck, longest render 0.0 ms, 0 over 12 ms, "
+            + "longest update to draw 0.0 ms, longest gap 0.0 ms")
+    }
+
+    /// QA (step 3a): mpv's update callbacks against draws, the wait from a callback to its draw, the gap between draws.
+    @Test func recorderCountsUpdatesWaitsAndGaps() {
+        var recorder = PlaybackStats.RenderRecorder()
+        // Two callbacks before one draw (coalesced): the wait runs from the first.
+        recorder.update(at: 1_000_000)
+        recorder.update(at: 3_000_000)
+        recorder.draw(at: 6_000_000, renderNanos: 2_000_000)
+        // A callback then a draw 1 ms later, 40 ms after the last draw.
+        recorder.update(at: 45_000_000)
+        recorder.draw(at: 46_000_000, renderNanos: 13_000_000)
+        // A draw with no callback (a resize): a gap, no wait.
+        recorder.draw(at: 62_000_000, renderNanos: 1_000_000)
+        let first = recorder.take(restart: false)
+        #expect(first.updates == 3)
+        #expect(first.draws == 3)
+        #expect(first.longestUpdateToDrawNanos == 5_000_000)
+        #expect(first.longestDrawGapNanos == 40_000_000)
+        #expect(first.longestNanos == 13_000_000)
+        #expect(first.slowDraws == 1)
+
+        // The next period starts empty but still measures the gap from the last draw of the one before.
+        recorder.draw(at: 162_000_000, renderNanos: 1_000_000)
+        let second = recorder.take(restart: false)
+        #expect(second.updates == 0)
+        #expect(second.draws == 1)
+        #expect(second.longestDrawGapNanos == 100_000_000)
+        #expect(second.longestUpdateToDrawNanos == 0)
+
+        // A restart forgets the last draw: the first draw after it has no gap.
+        _ = recorder.take(restart: true)
+        recorder.update(at: 900_000_000)
+        recorder.draw(at: 902_000_000, renderNanos: 1_000_000)
+        let third = recorder.take(restart: false)
+        #expect(third.longestDrawGapNanos == 0)
+        #expect(third.longestUpdateToDrawNanos == 2_000_000)
+        #expect(third.updates == 1)
+    }
+
+    /// The render-stuck lines: all counted per stats period, the first of each load logged.
+    @Test func renderStuckLinesAreCountedAndLoggedOncePerLoad() {
+        var counter = PlaybackStats.RenderStuckCounter()
+        let first = counter.note(), second = counter.note(), third = counter.note()
+        #expect(first && !second && !third)
+        #expect(counter.take() == 3)
+        #expect(counter.take() == 0)
+        let sameLoad = counter.note()
+        #expect(!sameLoad)
+        counter.newLoad()
+        let nextLoad = counter.note(), after = counter.note()
+        #expect(nextLoad && !after)
+        #expect(counter.take() == 3)
+    }
+
+    /// A callback still waiting at the end of a period is measured by the draw in the next one.
+    @Test func pendingUpdateCarriesIntoTheNextPeriod() {
+        var recorder = PlaybackStats.RenderRecorder()
+        recorder.update(at: 10_000_000)
+        #expect(recorder.take(restart: false).updates == 1)
+        recorder.draw(at: 70_000_000, renderNanos: 1_000_000)
+        #expect(recorder.take(restart: false).longestUpdateToDrawNanos == 60_000_000)
+    }
+
+    /// Only the full-screen player while it plays: not a Multiview window, not the muted home preview, not paused.
+    @Test func onlyTheFullScreenPlayerLogs() {
+        #expect(MPVPlayerController.logsStats(phase: .playing, profile: .full, holdsSleepAssertion: true))
+        #expect(!MPVPlayerController.logsStats(phase: .playing, profile: .tile, holdsSleepAssertion: true))
+        #expect(!MPVPlayerController.logsStats(phase: .playing, profile: .full, holdsSleepAssertion: false))
+        #expect(!MPVPlayerController.logsStats(phase: .paused, profile: .full, holdsSleepAssertion: true))
+        #expect(!MPVPlayerController.logsStats(phase: .loading, profile: .full, holdsSleepAssertion: true))
+    }
+}
+
+/// M7n step 3a: a real mpv core (MPVKit's mpv) takes every switch's option by that name, after MMTVL's own options.
+/// No file is loaded: nothing is drawn or heard.
+struct MPVSwitchesCoreTests {
+    /// MPVHandle lives for the app's lifetime (its wakeup callback holds it unretained), so the test core is kept.
+    nonisolated(unsafe) static var cores: [MPVHandle] = []
+
+    @Test func aCoreTakesTheSwitches() throws {
+        let switches = MPVSwitches.parse { [
+            "mpvHwdecCodecs": "all", "mpvOpenGLPBO": true, "mpvVideoSync": "display-resample", "mpvDisplayFPS": 59.94,
+        ][$0] }
+        let core = try MPVHandle(options: MPVOptions.all(adding: switches) + [("ao", "null")], onEvent: { _ in })
+        Self.cores.append(core)
+        #expect(core.string("hwdec-codecs") == "all")
+        #expect(core.string("opengl-pbo") == "yes")
+        #expect(core.string("video-sync") == "display-resample")
+        #expect(core.double("display-fps-override").map { abs($0 - 59.94) < 0.001 } == true)
+        // MMTVL's own options are still there.
+        #expect(core.string("hwdec") == "videotoolbox")
+        #expect(core.string("video-timing-offset").flatMap(Double.init) == 0)
+    }
+}
+
+/// M7n step 3a (a step 3b aid): which of mpv's log messages `MPVHandle` passes on.
+struct MPVLogForwardingTests {
+    @Test func warningsErrorsAndTheRenderStuckLine() {
+        #expect(MPVLogText.forwards(level: "warn", text: "Audio device underrun detected."))
+        #expect(MPVLogText.forwards(level: "error", text: "x"))
+        #expect(MPVLogText.forwards(level: "fatal", text: "x"))
+        // vo_libmpv's MP_VERBOSE line, as mpv 0.41 prints it.
+        #expect(MPVLogText.forwards(level: "v", text: "mpv_render_context_render() not being called or stuck."))
+        // Its other verbose and info lines (msg-level lets vo/libmpv through at v) are dropped.
+        #expect(!MPVLogText.forwards(level: "v", text: "reconfig to 1280x720 yuv420p"))
+        #expect(!MPVLogText.forwards(level: "info", text: "VO: [libmpv] 1280x720 yuv420p"))
+        #expect(!MPVLogText.forwards(level: "debug", text: "x"))
+    }
+
+    @Test func liveTVCoresAskForTheModuleLevels() {
+        #expect(MPVOptions.logLevel == "terminal-default")
+        #expect(MPVOptions.all.first { $0.name == "msg-level" }?.value == "all=warn,vo/libmpv=v")
+    }
+
+    /// A real core takes the msg-level option and the "terminal-default" request.
+    @Test func aCoreTakesTheLogLevels() throws {
+        let core = try MPVHandle(options: MPVOptions.all + [("ao", "null")], logLevel: MPVOptions.logLevel,
+                                 onEvent: { _ in })
+        MPVSwitchesCoreTests.cores.append(core)
+        #expect(core.string("msg-level") == "all=warn,vo/libmpv=v")
+    }
+}

@@ -8,6 +8,19 @@ nonisolated enum MPVLogText {
         text.replacing(/[A-Za-z][A-Za-z0-9+.\-]*:\/\/\S+/, with: "<url>")
     }
 
+    /// M7n step 3a (a step 3b aid): vo_libmpv's "mpv_render_context_render() not being called or stuck." is
+    /// `MP_VERBOSE` (mpv 0.41 `video/out/vo_libmpv.c`, `flip_page`), below the "warn" MMTVL asks for.
+    static let renderStuckText = "not being called or stuck"
+
+    /// Whether `MPVHandle` passes a message on: warnings and errors as before (M7c L27), plus the render-stuck line,
+    /// which `MPVOptions.messageLevels` lets through at verbose level from `vo/libmpv` only.
+    static func forwards(level: String, text: String) -> Bool {
+        switch level {
+        case "fatal", "error", "warn": true
+        default: text.contains(renderStuckText)
+        }
+    }
+
     /// The status in ffmpeg's "HTTP error 503 Service Unavailable" line, else nil.
     static func httpStatus(in text: String) -> Int? {
         guard let match = text.firstMatch(of: /HTTP error ([0-9]{3})/) else { return nil }

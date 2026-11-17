@@ -50,6 +50,15 @@ open build/Build/Products/Debug/MMTVL.app --args -windowed YES
 /usr/bin/log stream --predicate 'subsystem == "dev.mmtvl.launcher" AND category == "MPV"' --level info
 # Live TV stream timing, kept in the log store (M7c L27: each load and "Playing after N ms"; errors too)
 /usr/bin/log show --last 30m --predicate 'subsystem == "dev.mmtvl.launcher" AND category == "MPV"' --level info
+# M7n step 3a: the full-screen player's stats, every 10 s while it plays (decoder, stream and filtered fps, dropped/delayed/mistimed
+# frames, avsync, mpv's update callbacks vs draws, render-stuck waits, longest render, longest update-to-draw wait, longest gap between draws);
+# "stuck": mpv's "mpv_render_context_render() not being called or stuck" (the first of each load is logged, the rest only counted)
+/usr/bin/log show --last 30m --predicate 'subsystem == "dev.mmtvl.launcher" AND category == "MPV"' --info | grep -E 'Stats|Switch|stuck'
+# M7n step 3a: hidden mpv experiment switches (off by default; relaunch MMTVL after; `defaults delete dev.mmtvl.launcher <key>` undoes one)
+defaults write dev.mmtvl.launcher mpvHwdecCodecs -string all            # mpv hwdec-codecs ([a-z0-9,_-], at most 64)
+defaults write dev.mmtvl.launcher mpvOpenGLPBO -bool YES                # opengl-pbo=yes
+defaults write dev.mmtvl.launcher mpvVideoSync -string display-resample # mpv video-sync
+defaults write dev.mmtvl.launcher mpvDisplayFPS -float 60               # display-fps-override (1…240)
 # Only the phone remote (server state, connections, pairing; never codes, tokens or typed text)
 /usr/bin/log stream --predicate 'subsystem == "dev.mmtvl.launcher" AND category == "PhoneRemote"' --level info
 # My Teams, after the fact (M7l L14: counts only, logged when the group changes)

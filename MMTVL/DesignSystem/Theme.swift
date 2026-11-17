@@ -515,4 +515,7 @@ enum Theme {
     // MARK: Animation
 
     static let focusAnimation = Animation.spring(response: 0.3, dampingFraction: 0.8)
+    /// M7n L4: the guide's rows slide a row (or a page) per press; no bounce, and a spring picks up from where a held
+    /// key's previous slide is, so fast repeats never lag behind the focus.
+    static let guideScrollAnimation = Animation.spring(response: 0.22, dampingFraction: 1)
 }

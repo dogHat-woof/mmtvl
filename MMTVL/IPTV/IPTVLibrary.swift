@@ -19,6 +19,12 @@ final class IPTVLibrary {
     /// M7f L5 (D40): while MMTVL runs, `refreshIfStale()` runs this often (and after wake).
     static let autoRefreshInterval: TimeInterval = 15 * 60
     static let maxGuideSources = 6
+    /// M7n L1: after the launch and wake refresh, a missing antenna or playlist is tried again after these waits
+    /// (5, 10, 20, 30 s), then every `channelRetryRepeat` (60 s), for at most `channelRetryLimit` (5 min) from the
+    /// first try (`retryChannelsUntilLoaded()`).
+    static let channelRetryDelays: [Duration] = [.seconds(5), .seconds(10), .seconds(20), .seconds(30)]
+    static let channelRetryRepeat: Duration = .seconds(60)
+    static let channelRetryLimit: Duration = .seconds(5 * 60)
 
     /// M7j: the playlist's channels.
     private(set) var playlistChannels: [Channel] = []
@@ -68,6 +74,8 @@ final class IPTVLibrary {
     /// M7j L18: stops MMTVL's own antenna streams before a channel scan; AppDelegate →
     /// `LiveTVModel.stopAntennaStreams()`.
     @ObservationIgnored var stopAntennaStreams: (() -> Void)?
+    /// M7n L1: the launch/wake retry loop (`retryChannelsUntilLoaded()`); one at a time, tests await it.
+    @ObservationIgnored var channelRetryTask: Task<Void, Never>?
 
     private var playlistURL: URL?
     private var customGuideURLs: [URL] = []
@@ -96,13 +104,21 @@ final class IPTVLibrary {
     @ObservationIgnored private let overridesFile: JSONConfigFile<[String: String]>
     @ObservationIgnored private let preferencesFile: JSONConfigFile<ChannelPreferences>
     @ObservationIgnored private let now: () -> Date
+    /// M7n L1: the retry loop's waits (injected, as `AntennaSource`'s, so tests don't wait in real time) and the
+    /// elapsed-time clock its 5-minute limit counts on.
+    @ObservationIgnored let retrySleep: @MainActor (Duration) async -> Void
+    @ObservationIgnored let retryClock: () -> ContinuousClock.Instant
     @ObservationIgnored private let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "IPTV")
 
     init(sources: IPTVSourceStore, store: EPGStore?, network: IPTVNetwork,
          stateFile: JSONConfigFile<IPTVState>, overridesFile: JSONConfigFile<[String: String]>,
          preferencesFile: JSONConfigFile<ChannelPreferences>, antenna: AntennaSource = AntennaSource(),
-         now: @escaping () -> Date = Date.init) {
+         now: @escaping () -> Date = Date.init,
+         retrySleep: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) },
+         retryClock: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now }) {
         self.sources = sources
+        self.retrySleep = retrySleep
+        self.retryClock = retryClock
         self.antenna = antenna
         self.store = store
         self.network = network

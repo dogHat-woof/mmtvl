@@ -91,20 +91,68 @@ struct GuideModelTests {
         #expect(middle.focusedChannel?.id == "id:c4")
     }
 
-    @Test func upDownClampAndScroll() {
+    /// M7n L3: Down on the last row goes to the top, Up on the first to the bottom, and the window follows.
+    @Test func upDownLoopAndScroll() {
         var model = model(group: "All Channels")
-        _ = model.handle(.up, now: now)
-        #expect(model.row == 0)
         for _ in 0..<7 { _ = model.handle(.down, now: now) }
         #expect(model.row == 7)
         #expect(model.firstVisibleRow == 2)
-        for _ in 0..<5 { _ = model.handle(.down, now: now) }
+        for _ in 0..<2 { _ = model.handle(.down, now: now) }
         #expect(model.row == 9)
+        #expect(model.firstVisibleRow == 4)
+        #expect(model.wrapCount == 0)
+        _ = model.handle(.down, now: now)
+        #expect(model.row == 0)
+        #expect(model.firstVisibleRow == 0)
+        #expect(model.wrapCount == 1)   // the view puts the rows in place, no slide
+        _ = model.handle(.up, now: now)
+        #expect(model.row == 9)
+        #expect(model.firstVisibleRow == model.rows.count - GuideModel.visibleRows)
+        #expect(model.wrapCount == 2)
         for _ in 0..<7 { _ = model.handle(.up, now: now) }
         #expect(model.row == 2)
         #expect(model.firstVisibleRow == 2)
         _ = model.handle(.up, now: now)
         #expect(model.firstVisibleRow == 1)
+    }
+
+    /// M7n L3: from the channel cell too, and in a list shorter than the window (no scrolling).
+    @Test func theChannelCellAndShortListsLoop() {
+        var model = model(group: "Live", focused: "id:c6")
+        _ = model.handle(.left, now: now)   // the now-cell → the channel cell
+        #expect(model.focus == .channel)
+        _ = model.handle(.down, now: now)
+        #expect(model.focusedChannel?.id == "id:c1")
+        #expect(model.focus == .channel)
+        _ = model.handle(.up, now: now)
+        #expect(model.focusedChannel?.id == "id:c6")
+        #expect(model.firstVisibleRow == 0)
+
+        var nba = GuideModel(allChannels: channels, group: "NBA", focusedChannelID: nil, now: now)
+        _ = nba.handle(.down, now: now)
+        _ = nba.handle(.down, now: now)
+        #expect(nba.focusedChannel?.id == "id:c7")
+        #expect(nba.firstVisibleRow == 0)
+    }
+
+    /// M7n L3: a list of one row doesn't move, whatever is pressed.
+    @Test func aOneRowListStays() {
+        let solo = channels + [channel(11, group: "Solo")]
+        var model = GuideModel(allChannels: solo, group: "Solo", focusedChannelID: nil, now: now)
+        #expect(model.rows.count == 1)
+        for command in [RemoteCommand.down, .up, .channelDown, .channelUp] {
+            _ = model.handle(command, now: now)
+            #expect(model.row == 0)
+            #expect(model.firstVisibleRow == 0)
+        }
+
+        var empty = GuideModel(lineup: ChannelLineup(channels: channels), group: "My Teams", focusedChannelID: nil,
+                               now: now)
+        #expect(empty.rows == [.chooseTeams])
+        for command in [RemoteCommand.down, .up, .channelDown, .channelUp] {
+            _ = empty.handle(command, now: now)
+            #expect(empty.focusedRow == .chooseTeams)
+        }
     }
 
     @Test func rightWalksProgrammesAndMovesTheWindow() {
@@ -155,11 +203,11 @@ struct GuideModelTests {
         #expect(model.focus == .grid)
         #expect(model.selectedGroup == "NBA")
 
-        // Right applies too; Up stops at the Search row (M7f L12), Down from it goes to the first group (M7l 8c: My
-        // Teams), then All Channels.
+        // Right applies too; Up from the first group is the Search row (M7f L12), Down from it the first group
+        // (M7l 8c: My Teams), then All Channels.
         _ = model.handle(.left, now: now)   // the now-cell → the channel cell
         _ = model.handle(.left, now: now)
-        for _ in 0..<6 { _ = model.handle(.up, now: now) }
+        for _ in 0..<4 { _ = model.handle(.up, now: now) }
         #expect(model.focus == .search)
         _ = model.handle(.down, now: now)
         #expect(model.focus == .groups(0))
@@ -297,6 +345,34 @@ struct GuideModelTests {
         #expect(model.firstVisibleRow == 0)
     }
 
+    /// M7n L3: a page stops at the end row (it never skips past it unseen) and wraps only from that row.
+    @Test func aPageClampsThenWrapsFromTheEndRow() {
+        var model = GuideModel(allChannels: channels, group: "All Channels", focusedChannelID: "id:c6", now: now)
+        _ = model.handle(.channelDown, now: now)
+        #expect(model.row == 9)
+        #expect(model.firstVisibleRow == 4)
+        _ = model.handle(.channelDown, now: now)
+        #expect(model.row == 0)
+        #expect(model.firstVisibleRow == 0)
+        _ = model.handle(.channelUp, now: now)
+        #expect(model.row == 9)
+        #expect(model.firstVisibleRow == 4)
+        _ = model.handle(.channelUp, now: now)
+        #expect(model.row == 3)
+        _ = model.handle(.channelUp, now: now)
+        #expect(model.row == 0)
+        #expect(model.firstVisibleRow == 0)
+        _ = model.handle(.channelUp, now: now)
+        #expect(model.row == 9)
+
+        // From the channel cell too.
+        _ = model.handle(.left, now: now)
+        #expect(model.focus == .channel)
+        _ = model.handle(.channelDown, now: now)
+        #expect(model.row == 0)
+        #expect(model.focus == .channel)
+    }
+
     @Test func channelUpDownPageTheGroups() {
         var model = model(group: "Live", focused: "id:c1")
         _ = model.handle(.left, now: now)
@@ -305,10 +381,80 @@ struct GuideModelTests {
             Issue.record("Not in the groups column")
             return
         }
+        // A page stops at the last group or the Search row, and wraps only from it (as the channel list does).
+        _ = model.handle(.channelDown, now: now)
+        #expect(model.focus == .groups(model.groups.count - 1))
+        _ = model.handle(.channelDown, now: now)
+        #expect(model.focus == .search)
         _ = model.handle(.channelDown, now: now)
         #expect(model.focus == .groups(model.groups.count - 1))
         _ = model.handle(.channelUp, now: now)
-        #expect(model.focus == .groups(0))
+        #expect(model.focus == .search)
+        _ = model.handle(.channelUp, now: now)
+        #expect(model.focus == .groups(model.groups.count - 1))
+    }
+
+    /// The group list loops: Down on the last group is the Search row, Up on the Search row the last group.
+    @Test func theGroupListLoops() {
+        var model = model(group: "Live", focused: "id:c1")
+        _ = model.handle(.left, now: now)
+        _ = model.handle(.left, now: now)
+        #expect(model.focus == .groups(2))
+        _ = model.handle(.down, now: now)
+        _ = model.handle(.down, now: now)
+        #expect(model.focus == .groups(4))   // NHL, the last
+        let wraps = model.groupWrapCount
+        _ = model.handle(.down, now: now)
+        #expect(model.focus == .search)
+        #expect(model.groupWrapCount == wraps + 1)
+        _ = model.handle(.up, now: now)
+        #expect(model.focus == .groups(4))
+        #expect(model.groupWrapCount == wraps + 2)
+        _ = model.handle(.up, now: now)   // an ordinary step isn't a loop
+        #expect(model.focus == .groups(3))
+        #expect(model.groupWrapCount == wraps + 2)
+        // Nothing is selected by moving.
+        #expect(model.selectedGroup == "Live")
+    }
+
+    /// With more groups than the panel shows, the window follows the focus and shows the end after a loop.
+    @Test func theGroupPanelKeepsTheFocusedRowInView() {
+        let channels = (1...12).map { channel($0, group: "Group \($0)") }
+        var model = GuideModel(allChannels: channels, group: "Group 1", focusedChannelID: "id:c1", now: now)
+        #expect(model.groups.count == 14)   // My Teams, All Channels, Group 1…12; with Search, 15 rows
+        #expect(model.firstVisibleGroupRow == 0)
+        _ = model.handle(.left, now: now)
+        _ = model.handle(.left, now: now)
+        #expect(model.focus == .groups(2))   // row 3
+        #expect(model.firstVisibleGroupRow == 0)
+        for _ in 0..<4 { _ = model.handle(.down, now: now) }   // row 7, past the window's 7 rows
+        #expect(model.groupPanelRow == 7)
+        #expect(model.firstVisibleGroupRow == 1)
+        _ = model.handle(.up, now: now)   // still in view: the window stays
+        #expect(model.firstVisibleGroupRow == 1)
+        // Up from Search loops to the last group, with the window at the end.
+        for _ in 0..<6 { _ = model.handle(.up, now: now) }
+        #expect(model.focus == .search)
+        #expect(model.firstVisibleGroupRow == 0)
+        _ = model.handle(.up, now: now)
+        #expect(model.focus == .groups(13))
+        #expect(model.firstVisibleGroupRow == 15 - GuideModel.visibleGroupRows)
+        _ = model.handle(.down, now: now)
+        #expect(model.focus == .search)
+        #expect(model.firstVisibleGroupRow == 0)
+        // Leaving and coming back keeps the selected group in view.
+        _ = model.handle(.back, now: now)
+        #expect(model.groupPanelRow == nil)
+        _ = model.handle(.left, now: now)
+        _ = model.handle(.left, now: now)
+        #expect(model.focus == .groups(2))
+        #expect(model.firstVisibleGroupRow == 0)
+    }
+
+    /// The group panel's window is exactly `visibleGroupRows` rows (and their gaps) high.
+    @Test func theGroupWindowFitsItsRows() {
+        let pitch = Theme.guideRowHeight - 16 + Theme.settingsRowSpacing
+        #expect(GuideView.groupWindowHeight == CGFloat(GuideModel.visibleGroupRows) * pitch - Theme.settingsRowSpacing)
     }
 
     // MARK: M7f L12
@@ -323,7 +469,10 @@ struct GuideModelTests {
         _ = model.handle(.up, now: now)   // My Teams (M7l 8c)
         _ = model.handle(.up, now: now)
         #expect(model.focus == .search)
+        // Up loops to the last group (M7n), Down comes back.
         #expect(model.handle(.up, now: now) == .none)
+        #expect(model.focus == .groups(model.groups.count - 1))
+        #expect(model.handle(.down, now: now) == .none)
         #expect(model.handle(.select, now: now) == .openSearch)
         // The guide keeps its group and row; focus stays on the Search row.
         #expect(model.focus == .search)
@@ -420,6 +569,55 @@ struct GuideModelTests {
         #expect(model.handle(.select, now: now) == .play("id:c3"))
         _ = model.handle(.left, now: now)
         #expect(model.focus == .groups(1))
+    }
+
+    /// M7n L3: My Teams' action rows loop too: Up on Choose Teams goes to the last upcoming game, Down back.
+    @Test func myTeamsActionRowsLoop() {
+        var model = GuideModel(lineup: teamsLineup, group: "My Teams", focusedChannelID: nil, now: now)
+        #expect(model.focusedRow == .chooseTeams)
+        _ = model.handle(.up, now: now)
+        #expect(model.row == 4)
+        #expect(model.focusedChannel?.id == "id:c2")
+        if case .upcoming = model.focusedRow {} else { Issue.record("Not on the last upcoming game") }
+        _ = model.handle(.down, now: now)
+        #expect(model.focusedRow == .chooseTeams)
+        // A page from Choose Teams stops at the last row, then wraps from it.
+        _ = model.handle(.channelUp, now: now)
+        #expect(model.row == 4)
+        _ = model.handle(.channelDown, now: now)
+        #expect(model.focusedRow == .chooseTeams)
+    }
+
+    /// M7n L4: the view draws a page above and two below the first row shown, keyed by the row ids.
+    /// M7n L4 (QA minors 1 and 2): which moves slide, and what is drawn before `onChange` catches up.
+    @Test func theGuideSlidesOnlyShortMovesInOneGroup() {
+        typealias Position = GuideView.ScrollPosition
+        let at = { (first: Int) in Position(group: "All Channels", first: first, wraps: 0) }
+        #expect(GuideView.slides(from: at(4), to: at(5), reduceMotion: false))          // a row
+        #expect(GuideView.slides(from: at(0), to: at(6), reduceMotion: false))          // a page
+        #expect(!GuideView.slides(from: at(0), to: at(7), reduceMotion: false))         // a longer jump
+        #expect(!GuideView.slides(from: at(4), to: Position(group: "All Channels", first: 0, wraps: 1),
+                                  reduceMotion: false))                                 // a loop
+        #expect(!GuideView.slides(from: at(4), to: Position(group: "Sports", first: 4, wraps: 0),
+                                  reduceMotion: false))                                 // a new group
+        #expect(!GuideView.slides(from: at(4), to: at(5), reduceMotion: true))          // Reduce Motion
+        // Drawn: the old position while a slide is about to start; the new one at once otherwise.
+        #expect(GuideView.drawnFirst(displayed: nil, current: at(3), reduceMotion: false) == 3)
+        #expect(GuideView.drawnFirst(displayed: at(4), current: at(5), reduceMotion: false) == 4)
+        #expect(GuideView.drawnFirst(displayed: at(90), current: at(44), reduceMotion: false) == 44)   // a shrink
+        #expect(GuideView.drawnFirst(displayed: at(4), current: Position(group: "All Channels", first: 0, wraps: 1),
+                                     reduceMotion: false) == 0)
+    }
+
+    @Test func theGuideDrawsABufferOfRowsAroundTheWindow() {
+        let many = (1...40).map { channel($0, group: "Many") }
+        let rows = GuideModel(allChannels: many, group: "Many", focusedChannelID: nil, now: now).rows
+        #expect(GuideView.bufferedRows(rows, first: 0).map(\.index) == Array(0..<12))
+        #expect(GuideView.bufferedRows(rows, first: 20).map(\.index) == Array(14..<32))
+        #expect(GuideView.bufferedRows(rows, first: 34).map(\.index) == Array(28..<40))
+        #expect(GuideView.bufferedRows(rows, first: 50).isEmpty)
+        #expect(GuideView.bufferedRows(rows, first: 3).map(\.key) == rows[0..<15].map(\.id))
+        #expect(GuideView.bufferedRows([], first: 0).isEmpty)
     }
 
     @Test func aRefreshKeepsTheFocusedUpcomingGame() {

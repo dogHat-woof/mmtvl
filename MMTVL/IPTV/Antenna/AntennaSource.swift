@@ -34,9 +34,11 @@ final class AntennaSource {
     /// Finds the tuners (`HDHomeRunDiscovery.find`); injected for tests.
     typealias Find = () async -> [HDHomeRunDevice]
 
-    /// L5: like the playlist, the lineup is fetched again when it's older than this (and a search with no tuner
-    /// found is repeated after it).
+    /// L5: like the playlist, the lineup is fetched again when it's older than this.
     static let staleness = IPTVLibrary.playlistStaleness
+    /// M7n L2: with no tuner known, a search is repeated (`refreshIfStale`, Live TV opening) when the last one is
+    /// older than this, so a search that ran before the network was up doesn't hold the next one for 10 minutes.
+    static let searchRetryStaleness: TimeInterval = 30
     /// The status while a lineup can't be read.
     nonisolated static let unreachableMessage = "The antenna tuner isn't answering"
     /// L18: a scan is watched for at most this long.
@@ -167,11 +169,12 @@ final class AntennaSource {
         if refreshTask == task { refreshTask = nil }
     }
 
-    /// `refresh()` when the lineup is older than `staleness` (or, with no tuner known, the last search is).
+    /// `refresh()` when the lineup is older than `staleness` (or, M7n L2, with no tuner known, when the last search
+    /// is older than `searchRetryStaleness`).
     func refreshIfStale() async {
         guard isEnabled else { return }
-        let stamp = devices.isEmpty ? lastSearch : lastFetch
-        guard stamp.map({ now().timeIntervalSince($0) > Self.staleness }) ?? true else { return }
+        let (stamp, limit) = devices.isEmpty ? (lastSearch, Self.searchRetryStaleness) : (lastFetch, Self.staleness)
+        guard stamp.map({ now().timeIntervalSince($0) > limit }) ?? true else { return }
         await refresh()
     }
 

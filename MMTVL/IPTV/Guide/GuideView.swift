@@ -13,6 +13,13 @@ struct GuideView: View {
     /// M7m L4: Back in the watch guide returns to a channel (`LiveTVModel.canReturnToChannel`); the hint says so.
     var hasChannel = false
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// M7n L4: the position the scrolling stack shows; follows the model's (animated for short moves,
+    /// `scroll(from:to:)`). Nil until the first scroll.
+    @State private var displayed: ScrollPosition?
+    /// The group panel's position, as `displayed` is the rows'.
+    @State private var displayedGroups: ScrollPosition?
+
     var body: some View {
         TimelineView(.everyMinute) { context in
             let now = context.date
@@ -44,7 +51,50 @@ struct GuideView: View {
             }
             .frame(width: Theme.canvasSize.width, height: Theme.canvasSize.height, alignment: .topLeading)
         }
+        .onChange(of: scrollPosition) { old, new in
+            scroll(from: old, to: new)
+        }
+        .onChange(of: groupScrollPosition) { old, new in
+            scrollGroups(from: old, to: new)
+        }
     }
+
+    /// M7n L4: what a scroll compares: a new group or a loop is never animated.
+    nonisolated struct ScrollPosition: Equatable {
+        var group: String?
+        var first: Int
+        /// `GuideModel.wrapCount`: a loop to the other end never slides, however short the list.
+        var wraps: Int
+    }
+
+    private var scrollPosition: ScrollPosition {
+        ScrollPosition(group: model.selectedGroup, first: model.firstVisibleRow, wraps: model.wrapCount)
+    }
+
+    /// M7n L4: a move of up to a page in the same group slides; a longer jump, a loop (any list), a search result in
+    /// another group or a new group is in place at once, never a fast scroll through rows; Reduce Motion never slides.
+    nonisolated static func slides(from old: ScrollPosition, to new: ScrollPosition, reduceMotion: Bool) -> Bool {
+        !reduceMotion && old.group == new.group && old.wraps == new.wraps
+            && abs(new.first - old.first) <= GuideModel.visibleRows
+    }
+
+    /// M7n L4 (QA minor 1): the first row to draw. Before `onChange` catches up, a move that will slide still draws
+    /// the old position (the slide starts from it); any other change draws the model's position at once, so a jump
+    /// never shows a stale or blank window for a frame.
+    nonisolated static func drawnFirst(displayed: ScrollPosition?, current: ScrollPosition, reduceMotion: Bool) -> Int {
+        guard let displayed, slides(from: displayed, to: current, reduceMotion: reduceMotion) else { return current.first }
+        return displayed.first
+    }
+
+    private func scroll(from old: ScrollPosition, to new: ScrollPosition) {
+        let slides = Self.slides(from: old, to: new, reduceMotion: reduceMotion)
+        var transaction = Transaction(animation: slides ? Theme.guideScrollAnimation : nil)
+        transaction.disablesAnimations = !slides
+        withTransaction(transaction) { displayed = new }
+    }
+
+    /// M7n L5: the focus fill and text colours fade to the newly focused cell; with Reduce Motion they change at once.
+    private var focusAnimation: Animation? { reduceMotion ? nil : Theme.focusAnimation }
 
     /// The bottom hint per focus and purpose (M6), and (M7l 8c) My Teams' Choose Teams and upcoming rows.
     /// M7m L4: in the watch guide Back goes back to the channel (`hasChannel`); with no channel it does nothing.
@@ -179,15 +229,56 @@ struct GuideView: View {
         .frame(width: Theme.guideGridWidth, height: Theme.guideTimeHeaderHeight, alignment: .topLeading)
     }
 
+    /// The channel column and the grid, as wide as a row.
+    private static let rowsWidth = Theme.guideGridLeading - Theme.sideMargin + Theme.guideGridWidth
+    private static let rowsWindowHeight = CGFloat(GuideModel.visibleRows) * Theme.guideRowHeight
+
+    /// M7n L4: a window `visibleRows` rows high. Inside it the rows of a buffer (a page above and two below the
+    /// first row shown) sit at their index's place, keyed by their id, and the stack moves by `drawnFirst`, so a
+    /// scroll slides the rows instead of swapping what six fixed slots show. Each channel row carries its piece of
+    /// the now line. The window clips only top and bottom.
     private func rows(now: Date) -> some View {
-        let first = model.firstVisibleRow
-        let last = min(first + GuideModel.visibleRows, model.rows.count)
-        return VStack(alignment: .leading, spacing: 0) {
-            ForEach(first..<max(first, last), id: \.self) { row in
-                rowView(row, now: now)
-                    .frame(height: Theme.guideRowHeight)
+        let first = Self.drawnFirst(displayed: displayed, current: scrollPosition, reduceMotion: reduceMotion)
+        let nowX = model.timeline.span(start: now, stop: now + 1, width: Theme.guideGridWidth)?.x
+        return ZStack(alignment: .topLeading) {
+            ForEach(Self.bufferedRows(model.rows, first: first), id: \.key) { item in
+                rowView(item.index, now: now)
+                    .frame(width: Self.rowsWidth, height: Theme.guideRowHeight, alignment: .topLeading)
+                    .overlay(alignment: .topLeading) {
+                        if let nowX, model.rows[item.index].kind == .channel {
+                            Rectangle()
+                                .fill(Theme.guideNowLine)
+                                .frame(width: 2, height: Theme.guideRowHeight)
+                                .offset(x: Theme.guideGridLeading - Theme.sideMargin + nowX)
+                        }
+                    }
+                    .offset(y: CGFloat(item.index) * Theme.guideRowHeight)
             }
         }
+        .offset(y: -CGFloat(first) * Theme.guideRowHeight)
+        .frame(width: Self.rowsWidth, height: Self.rowsWindowHeight, alignment: .topLeading)
+        .mask(alignment: .topLeading) {
+            Rectangle()
+                .frame(width: Self.rowsWidth + 2 * Theme.sideMargin, height: Self.rowsWindowHeight)
+                .offset(x: -Theme.sideMargin)
+        }
+    }
+
+    /// M7n L4: the rows drawn around `first` (`first - visibleRows ..< first + 2 × visibleRows`, within the rows),
+    /// keyed by `Row.id`; a repeated id (never expected) gets its index added so every key is unique.
+    nonisolated static func bufferedRows(_ rows: [GuideModel.Row], first: Int) -> [BufferedRow] {
+        let upper = max(0, min(rows.count, first + 2 * GuideModel.visibleRows))
+        let lower = min(max(0, first - GuideModel.visibleRows), upper)
+        var seen = Set<String>()
+        return (lower..<upper).map { index in
+            let id = rows[index].id
+            return BufferedRow(index: index, key: seen.insert(id).inserted ? id : "\(id)#\(index)")
+        }
+    }
+
+    nonisolated struct BufferedRow: Equatable, Sendable {
+        var index: Int
+        var key: String
     }
 
     @ViewBuilder
@@ -207,8 +298,7 @@ struct GuideView: View {
                 .padding(.horizontal, 8)
                 .frame(width: Theme.guideChannelColumnWidth, height: Theme.guideRowHeight - Theme.guideCellSpacing,
                        alignment: .leading)
-                .background(isChannelFocused ? Theme.focusedRowFill : Color.clear,
-                            in: RoundedRectangle(cornerRadius: Theme.guideCellCornerRadius))
+                .focusFill(isChannelFocused ? Theme.focusedRowFill : Color.clear, focusAnimation)
                 .frame(height: Theme.guideRowHeight, alignment: .top)
             ZStack(alignment: .topLeading) {
                 ForEach(Array(model.cells(row: row, now: now).enumerated()), id: \.offset) { _, cell in
@@ -252,20 +342,19 @@ struct GuideView: View {
             HStack(spacing: 16) {
                 Text("Add or remove pro and college teams")
                     .font(Theme.guideCellFont)
-                    .foregroundStyle(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText)
+                    .focusForeground(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText, focusAnimation)
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
                     .font(.system(size: Theme.guideRowSymbolSize, weight: .semibold))
-                    .foregroundStyle(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText)
+                    .focusForeground(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText, focusAnimation)
             }
             .padding(.horizontal, 16)
         }
-        .foregroundStyle(isFocused ? Theme.focusedRowText : Theme.primaryText)
+        .focusForeground(isFocused ? Theme.focusedRowText : Theme.primaryText, focusAnimation)
         .frame(width: Theme.guideGridLeading - Theme.sideMargin + Theme.guideGridWidth - Theme.guideCellSpacing,
                height: Theme.guideRowHeight - Theme.guideCellSpacing, alignment: .leading)
-        .background(isFocused ? Theme.focusedRowFill : Theme.tileFill,
-                    in: RoundedRectangle(cornerRadius: Theme.guideCellCornerRadius))
+        .focusFill(isFocused ? Theme.focusedRowFill : Theme.tileFill, focusAnimation)
         .frame(height: Theme.guideRowHeight, alignment: .top)
     }
 
@@ -279,16 +368,14 @@ struct GuideView: View {
                 .padding(.horizontal, 8)
                 .frame(width: Theme.guideChannelColumnWidth, height: Theme.guideRowHeight - Theme.guideCellSpacing,
                        alignment: .leading)
-                .background(isFocused ? Theme.focusedRowFill : Color.clear,
-                            in: RoundedRectangle(cornerRadius: Theme.guideCellCornerRadius))
+                .focusFill(isFocused ? Theme.focusedRowFill : Color.clear, focusAnimation)
                 .frame(height: Theme.guideRowHeight, alignment: .top)
             upcomingCell(game, isFocused: isFocused)
-                .foregroundStyle(isFocused ? Theme.focusedRowText : Theme.primaryText)
+                .focusForeground(isFocused ? Theme.focusedRowText : Theme.primaryText, focusAnimation)
                 .padding(.horizontal, 16)
                 .frame(width: Theme.guideGridWidth - Theme.guideCellSpacing,
                        height: Theme.guideRowHeight - Theme.guideCellSpacing, alignment: .leading)
-                .background(isFocused ? Theme.focusedRowFill : Theme.tileFill,
-                            in: RoundedRectangle(cornerRadius: Theme.guideCellCornerRadius))
+                .focusFill(isFocused ? Theme.focusedRowFill : Theme.tileFill, focusAnimation)
                 .frame(width: Theme.guideGridWidth, height: Theme.guideRowHeight, alignment: .topLeading)
         }
     }
@@ -301,7 +388,7 @@ struct GuideView: View {
             HStack(spacing: 10) {
                 Image(systemName: "calendar")
                     .font(.system(size: Theme.guideRowSymbolSize))
-                    .foregroundStyle(secondary)
+                    .focusForeground(secondary, focusAnimation)
                 Text(game.dayTime)
                     .font(Theme.guideCellFont)
                     .monospacedDigit()
@@ -309,7 +396,7 @@ struct GuideView: View {
             }
             .frame(width: Theme.guideUpcomingTimeWidth, alignment: .leading)
             Rectangle()
-                .fill(secondary)
+                .focusForeground(secondary, focusAnimation)
                 .frame(width: 2, height: Theme.guideLogoSize)
             VStack(alignment: .leading, spacing: 4) {
                 Text(game.label)
@@ -318,7 +405,7 @@ struct GuideView: View {
                 if game.label != title {
                     Text(title)
                         .font(Theme.guideCellTimeFont)
-                        .foregroundStyle(secondary)
+                        .focusForeground(secondary, focusAnimation)
                         .lineLimit(1)
                 }
             }
@@ -334,7 +421,7 @@ struct GuideView: View {
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(Theme.guideChannelNumberMinimumScale)
-                .foregroundStyle(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText)
+                .focusForeground(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText, focusAnimation)
                 .frame(width: Theme.guideChannelNumberWidth, alignment: .trailing)
             if let logo = channel.logoURL {
                 ChannelLogoView(url: logo)
@@ -342,17 +429,17 @@ struct GuideView: View {
             }
             Text(channel.name)
                 .font(Theme.guideChannelFont)
-                .foregroundStyle(isFocused ? Theme.focusedRowText : Theme.primaryText)
+                .focusForeground(isFocused ? Theme.focusedRowText : Theme.primaryText, focusAnimation)
                 .lineLimit(1)
             if favoriteIDs.contains(channel.id) {
                 Image(systemName: "star.fill")
                     .font(.system(size: Theme.guideFavoriteSymbolSize))
-                    .foregroundStyle(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText)
+                    .focusForeground(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText, focusAnimation)
             }
             if channel.id == currentChannel?.id {
                 Image(systemName: "speaker.wave.2.fill")
                     .font(Theme.guideCellTimeFont)
-                    .foregroundStyle(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText)
+                    .focusForeground(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText, focusAnimation)
             }
         }
     }
@@ -365,62 +452,94 @@ struct GuideView: View {
             if let programme = cell.programme {
                 Text(programme.start.formatted(date: .omitted, time: .shortened))
                     .font(Theme.guideCellTimeFont)
-                    .foregroundStyle(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText)
+                    .focusForeground(isFocused ? Theme.focusedRowSecondaryText : Theme.secondaryText, focusAnimation)
             }
         }
-        .foregroundStyle(isFocused ? Theme.focusedRowText : Theme.primaryText)
+        .focusForeground(isFocused ? Theme.focusedRowText : Theme.primaryText, focusAnimation)
         .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-        .background(isFocused ? Theme.focusedRowFill : Theme.tileFill,
-                    in: RoundedRectangle(cornerRadius: Theme.guideCellCornerRadius))
+        .focusFill(isFocused ? Theme.focusedRowFill : Theme.tileFill, focusAnimation)
     }
 
-    /// Through the time header and the channel rows on screen; My Teams' Choose Teams and upcoming rows (M7l 8c)
-    /// aren't on the timeline, so it stops at them.
+    /// The now line's piece through the time header. M7n L4: the channel rows carry their own pieces (`rows(now:)`),
+    /// so they slide with the rows; My Teams' Choose Teams and upcoming rows (M7l 8c) aren't on the timeline and
+    /// have none.
     @ViewBuilder
     private func nowLine(now: Date) -> some View {
         if let span = model.timeline.span(start: now, stop: now + 1, width: Theme.guideGridWidth) {
-            let first = model.firstVisibleRow
-            let last = min(first + GuideModel.visibleRows, model.rows.count)
-            VStack(spacing: 0) {
-                Rectangle()
-                    .fill(Theme.guideNowLine)
-                    .frame(width: 2, height: Theme.guideTimeHeaderHeight)
-                ForEach(first..<max(first, last), id: \.self) { row in
-                    Rectangle()
-                        .fill(model.rows[row].kind == .channel ? Theme.guideNowLine : Color.clear)
-                        .frame(width: 2, height: Theme.guideRowHeight)
-                }
-            }
-            .offset(x: Theme.guideGridLeading + span.x, y: Theme.guideGridTop)
+            Rectangle()
+                .fill(Theme.guideNowLine)
+                .frame(width: 2, height: Theme.guideTimeHeaderHeight)
+                .offset(x: Theme.guideGridLeading + span.x, y: Theme.guideGridTop)
         }
     }
 
     // MARK: Groups
 
+    private static let groupPanelHeight = Theme.guideTimeHeaderHeight + CGFloat(GuideModel.visibleRows) * Theme.guideRowHeight
+    private static let groupPanelPadding: CGFloat = 16
+    private static let groupRowHeight = Theme.guideRowHeight - 16
+    /// A group row and the gap below it.
+    private static let groupRowPitch = groupRowHeight + Theme.settingsRowSpacing
+    /// The clipped window inside the panel's padding: exactly `GuideModel.visibleGroupRows` rows.
+    static let groupWindowHeight = groupPanelHeight - 2 * groupPanelPadding
+
+    /// What the group panel's slide compares. `group` is "" while the panel is open and nil while it's closed, so
+    /// opening it puts the rows in place; a loop or a jump of more than a page doesn't slide either (`slides`).
+    private var groupScrollPosition: ScrollPosition {
+        ScrollPosition(group: model.groupPanelRow == nil ? nil : "", first: model.firstVisibleGroupRow,
+                       wraps: model.groupWrapCount)
+    }
+
+    private func scrollGroups(from old: ScrollPosition, to new: ScrollPosition) {
+        let slides = Self.slides(from: old, to: new, reduceMotion: reduceMotion)
+        var transaction = Transaction(animation: slides ? Theme.guideScrollAnimation : nil)
+        transaction.disablesAnimations = !slides
+        withTransaction(transaction) { displayedGroups = new }
+    }
+
     /// The Search row (M7f L12) above the groups. (M7l 8c: Choose Teams is My Teams' first row.)
+    /// Like the channel rows (M7n L4, L5): each row sits at its place in a clipped window and the stack slides by
+    /// `firstVisibleGroupRow`, so moving the focus past the window's edge slides the list; the highlight fades.
     private func groupPanel(focus: GuideModel.Focus) -> some View {
-        VStack(alignment: .leading, spacing: Theme.settingsRowSpacing) {
+        let first = Self.drawnFirst(displayed: displayedGroups, current: groupScrollPosition, reduceMotion: reduceMotion)
+        return ZStack(alignment: .topLeading) {
             groupRow(Label("Search", systemImage: "magnifyingglass"), isFocused: focus == .search)
             ForEach(Array(model.groups.enumerated()), id: \.offset) { index, group in
                 groupRow(Text(group), isFocused: focus == .groups(index))
+                    .offset(y: CGFloat(index + 1) * Self.groupRowPitch)
             }
-            Spacer(minLength: 0)
         }
-        .padding(20)
-        .frame(width: Theme.guideGroupPanelWidth,
-               height: Theme.guideTimeHeaderHeight + CGFloat(GuideModel.visibleRows) * Theme.guideRowHeight,
-               alignment: .topLeading)
+        .offset(y: -CGFloat(first) * Self.groupRowPitch)
+        .frame(width: Theme.guideGroupPanelWidth - 40, height: Self.groupWindowHeight, alignment: .topLeading)
+        .clipped()
+        .padding(.horizontal, 20)
+        .padding(.vertical, Self.groupPanelPadding)
+        .frame(width: Theme.guideGroupPanelWidth, height: Self.groupPanelHeight, alignment: .topLeading)
         .glassPanel()
     }
 
     private func groupRow(_ label: some View, isFocused: Bool) -> some View {
         label
             .font(Theme.guideChannelFont)
-            .foregroundStyle(isFocused ? Theme.focusedRowText : Theme.primaryText)
+            .focusForeground(isFocused ? Theme.focusedRowText : Theme.primaryText, focusAnimation)
             .padding(.horizontal, 20)
-            .frame(width: Theme.guideGroupPanelWidth - 40, height: Theme.guideRowHeight - 16, alignment: .leading)
-            .background(isFocused ? Theme.focusedRowFill : Color.clear,
-                        in: RoundedRectangle(cornerRadius: Theme.guideCellCornerRadius))
+            .frame(width: Theme.guideGroupPanelWidth - 40, height: Self.groupRowHeight, alignment: .leading)
+            .focusFill(isFocused ? Theme.focusedRowFill : Color.clear, focusAnimation)
+    }
+}
+
+private extension View {
+    /// M7n L5: a focus change fades this foreground colour with `animation` (nil: at once); nothing else in the view
+    /// animates with it, so a cell's frame and offset still change in place.
+    func focusForeground(_ style: Color, _ animation: Animation?) -> some View {
+        self.animation(animation) { $0.foregroundStyle(style) }
+    }
+
+    /// M7n L5: a guide cell's fill, fading with `animation` when the focus moves (nil: at once).
+    func focusFill(_ fill: Color, _ animation: Animation?) -> some View {
+        self.animation(animation) {
+            $0.background(fill, in: RoundedRectangle(cornerRadius: Theme.guideCellCornerRadius))
+        }
     }
 }

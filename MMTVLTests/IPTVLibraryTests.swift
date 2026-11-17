@@ -868,6 +868,195 @@ struct IPTVLibraryTests {
         #expect(source.channels.count == 3)
     }
 
+    // MARK: M7n step 1: the antenna and playlist retry after launch and wake (L1, L2)
+
+    /// The retry loop's waits, on the test clock (never in real time); `onWait` runs after the clock moved, with the
+    /// wait's number (from 1), before the try that follows it.
+    private final class RetryWaits {
+        var all: [Duration] = []
+        var onWait: ((Int) async -> Void)?
+        func wait(_ clock: TestClock, _ delay: Duration) async {
+            all.append(delay)
+            clock.advance(TimeInterval(delay.components.seconds))
+            await onWait?(all.count)
+        }
+    }
+
+    /// (a) The network isn't up at launch: the first search finds nothing, the retry 5 s later neither, the one 10 s
+    /// after that finds the tuner. Its channels merge, the antenna guide follows, and the loop ends.
+    @Test func launchRetriesTheAntennaSearchUntilATunerAnswers() async throws {
+        let now = Date(timeIntervalSince1970: 1_791_200_000)
+        let waits = RetryWaits()
+        let tuner = FakeTuner(devices: [])
+        tuner.setDiscover(AntennaFixtures.discoverJSON())
+        let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL,
+                                      files: [AntennaFixtures.guideURL: AntennaFixtures.guideXML(now: now)],
+                                      tuner: tuner, retryWait: { await waits.wait($0, $1) }, now: now)
+        defer { fixture.cleanUp() }
+        let library = fixture.library
+        library.antennaGuideEnabled = true
+        waits.onWait = { number in
+            guard number == 2 else { return }
+            tuner.setDevices([AntennaFixtures.device()])
+            tuner.setLineup(AntennaFixtures.lineupJSON(AntennaFixtures.channels), for: AntennaFixtures.device())
+        }
+        await library.refreshAtLaunch()
+        #expect(library.channels.count == 5)
+        #expect(tuner.searchCount == 1)
+        let retry = try #require(library.channelRetryTask)
+
+        await retry.value
+        #expect(waits.all == [.seconds(5), .seconds(10)])
+        #expect(tuner.searchCount == 3)
+        #expect(library.channels.count == 8)
+        #expect(Array(library.channels.suffix(3).map(\.id)) == Self.antennaIDs)
+        #expect(library.lineup.groups.contains("Antenna"))
+        #expect(fixture.network.downloadCount == 1)
+        #expect(library.guideSourceInfo[AntennaGuide.sourceID]?.status == .loaded(fixture.clock.now))
+        // The playlist was there all along: fetched once.
+        #expect(fixture.network.fetchCount == 1)
+    }
+
+    /// (b) The playlist failed at launch (offline): it's fetched again, and its guide follows.
+    @Test func launchRetriesAFailedPlaylist() async throws {
+        let waits = RetryWaits()
+        let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL,
+                                      texts: [IPTVFixtures.playlistURL: IPTVFixtures.playlistWithGuide],
+                                      retryWait: { await waits.wait($0, $1) })
+        defer { fixture.cleanUp() }
+        let library = fixture.library
+        fixture.network.setError(URLError(.notConnectedToInternet), for: IPTVFixtures.playlistURL)
+        waits.onWait = { number in
+            if number == 2 { fixture.network.setError(nil, for: IPTVFixtures.playlistURL) }
+        }
+        await library.refreshAtLaunch()
+        #expect(library.playlistChannels.isEmpty)
+        guard case .failed = library.playlistStatus else {
+            Issue.record("the launch fetch should have failed")
+            return
+        }
+
+        await library.channelRetryTask?.value
+        #expect(waits.all == [.seconds(5), .seconds(10)])
+        #expect(fixture.network.fetchCount == 3)
+        #expect(library.playlistChannels.count == 5)
+        #expect(library.playlistStatus == .loaded(fixture.clock.now))
+        #expect(fixture.network.downloadCount == 1)
+        #expect(library.guideSourceInfo[IPTVLibrary.hash(IPTVFixtures.playlistGuideURL)]?.status
+                == .loaded(fixture.clock.now))
+    }
+
+    /// (c) No tuner at all: tries at 5, 15, 35, 65, 125, 185 and 245 s; the next (305 s) would be past 5 minutes.
+    @Test func retryStopsAfterFiveMinutes() async throws {
+        let waits = RetryWaits()
+        let tuner = FakeTuner(devices: [])
+        let fixture = try makeLibrary(tuner: tuner, retryWait: { await waits.wait($0, $1) })
+        defer { fixture.cleanUp() }
+        let start = fixture.clock.instant
+        await fixture.library.refreshAtLaunch()
+        await fixture.library.channelRetryTask?.value
+        #expect(waits.all == [.seconds(5), .seconds(10), .seconds(20), .seconds(30), .seconds(60), .seconds(60),
+                              .seconds(60)])
+        #expect(tuner.searchCount == 8)
+        #expect(fixture.clock.instant - start <= IPTVLibrary.channelRetryLimit)
+        #expect(fixture.library.isAntennaMissing)
+    }
+
+    /// (c) Both sources there at launch: no loop. After wake too.
+    @Test func noRetryWhenBothSourcesLoaded() async throws {
+        let waits = RetryWaits()
+        let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL, tuner: FakeTuner(),
+                                      retryWait: { await waits.wait($0, $1) })
+        defer { fixture.cleanUp() }
+        await fixture.library.refreshAtLaunch()
+        #expect(fixture.library.channelRetryTask == nil)
+        await fixture.library.refreshAfterWake()
+        #expect(fixture.library.channelRetryTask == nil)
+        #expect(waits.all.isEmpty)
+        #expect(fixture.library.channels.count == 8)
+    }
+
+    /// (c) The antenna turned off during a wait ends the loop without another search; the playlist was there.
+    @Test func turningTheAntennaOffEndsTheRetry() async throws {
+        let waits = RetryWaits()
+        let tuner = FakeTuner(devices: [])
+        let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL, tuner: tuner,
+                                      retryWait: { await waits.wait($0, $1) })
+        defer { fixture.cleanUp() }
+        let library = fixture.library
+        waits.onWait = { _ in await library.applyAntennaEnabled(false) }
+        await library.refreshAtLaunch()
+        await library.channelRetryTask?.value
+        #expect(waits.all == [.seconds(5)])
+        #expect(tuner.searchCount == 1)
+        #expect(library.channels.count == 5)
+    }
+
+    /// (c) Removing the playlist during a wait ends its part: it isn't fetched again.
+    @Test func removingThePlaylistEndsItsRetry() async throws {
+        let waits = RetryWaits()
+        let fixture = try makeLibrary(playlist: IPTVFixtures.playlistURL, retryWait: { await waits.wait($0, $1) })
+        defer { fixture.cleanUp() }
+        let library = fixture.library
+        fixture.network.setError(URLError(.notConnectedToInternet), for: IPTVFixtures.playlistURL)
+        waits.onWait = { _ in await library.removeSource() }
+        await library.refreshAtLaunch()
+        await library.channelRetryTask?.value
+        #expect(waits.all == [.seconds(5)])
+        #expect(fixture.network.fetchCount == 1)
+    }
+
+    /// One loop at a time: a wake refresh ends the launch's loop and starts its own.
+    @Test func aNewerRefreshReplacesTheRetry() async throws {
+        let tuner = FakeTuner(devices: [])
+        let fixture = try makeLibrary(tuner: tuner)    // the loop's waits are parked
+        defer { fixture.cleanUp() }
+        let library = fixture.library
+        await library.refreshAtLaunch()
+        let first = try #require(library.channelRetryTask)
+        await library.refreshAfterWake()
+        await first.value    // cancelled: its parked wait ended
+        let second = try #require(library.channelRetryTask)
+        #expect(second != first)
+        #expect(!second.isCancelled)
+        #expect(tuner.searchCount == 2)
+    }
+
+    /// (d) L2: with no tuner known, `refreshIfStale` searches again once the last search is more than 30 s old (not
+    /// 10 minutes); with a tuner known, the lineup is read again only after the 10-minute staleness.
+    @Test func refreshIfStaleSearchesAgainAfterThirtySecondsWithNoTuner() async throws {
+        let clock = TestClock(Date(timeIntervalSince1970: 1_791_200_000))
+        let tuner = FakeTuner(devices: [])
+        let source = AntennaSource.fake(tuner, now: { clock.now })
+        #expect(AntennaSource.searchRetryStaleness == 30)
+        #expect(await source.discover() == 0)
+        #expect(tuner.searchCount == 1)
+        clock.advance(30)
+        await source.refreshIfStale()
+        #expect(tuner.searchCount == 1)
+        clock.advance(1)
+        await source.refreshIfStale()
+        #expect(tuner.searchCount == 2)
+
+        // A tuner known: the lineup's 10 minutes, no search.
+        tuner.setDevices([AntennaFixtures.device()])
+        tuner.setLineup(AntennaFixtures.lineupJSON(AntennaFixtures.channels), for: AntennaFixtures.device())
+        clock.advance(31)
+        await source.refreshIfStale()
+        #expect(tuner.searchCount == 3)
+        #expect(tuner.lineupFetchCount == 1)
+        #expect(source.channels.count == 3)
+        clock.advance(31)
+        await source.refreshIfStale()
+        clock.advance(AntennaSource.staleness - 31)
+        await source.refreshIfStale()
+        #expect(tuner.lineupFetchCount == 1)
+        clock.advance(1)
+        await source.refreshIfStale()
+        #expect(tuner.lineupFetchCount == 2)
+        #expect(tuner.searchCount == 3)
+    }
+
     // MARK: M7j step 8: the antenna guide (L10, L11, L12)
 
     private static let antennaGuideID = AntennaGuide.sourceID
@@ -1471,7 +1660,8 @@ struct IPTVLibraryTests {
                                   stateFile: fixture.stateFile, overridesFile: fixture.overridesFile,
                                   preferencesFile: fixture.preferencesFile,
                                   antenna: AntennaSource.fake(tuner, now: { fixture.clock.now }),
-                                  now: { fixture.clock.now })
+                                  now: { fixture.clock.now }, retrySleep: parkedRetrySleep)
+        defer { library.channelRetryTask?.cancel() }
         library.antennaGuideEnabled = true
         await library.refreshAtLaunch()
         let hasAntennaChannels = library.channels.contains(where: \.isDirectStream)

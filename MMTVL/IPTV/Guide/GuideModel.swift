@@ -3,6 +3,8 @@ import Foundation
 /// Guide focus and navigation (M4 L9, L12; M6 L8 channel cell). Pure: `LiveTVModel` feeds it commands and programmes.
 nonisolated struct GuideModel: Equatable, Sendable {
     static let visibleRows = 6
+    /// The group panel's rows (Search, then the groups) that fit in it (`GuideView.groupWindowHeight`).
+    static let visibleGroupRows = 7
 
     /// `.channel`: the channel cell of the focused row (M6 L8), between the grid and the groups.
     /// `.search` (M7f L12): the Search row above the groups. On a row that isn't a channel's (M7l 8c), `.grid` and
@@ -63,11 +65,19 @@ nonisolated struct GuideModel: Equatable, Sendable {
     private(set) var rows: [Row]
     /// Set by LiveTVModel after loading.
     var programmes: [Channel.ID: [Programme]] = [:]
-    private(set) var focus: Focus = .grid
+    private(set) var focus: Focus = .grid {
+        didSet { keepGroupVisible() }
+    }
     private(set) var row = 0
     /// The time the focus aims at (≥ now).
     private(set) var focusTime: Date
     private(set) var firstVisibleRow = 0
+    /// M7n L4: bumped each time `moveRow` loops past an end, so the view puts the rows in place instead of sliding.
+    private(set) var wrapCount = 0
+    /// The group panel's first row shown (0: Search, 1…: the groups), kept so the focused one is in view.
+    private(set) var firstVisibleGroupRow = 0
+    /// Bumped each time the group panel loops past an end, so the view puts its rows in place instead of sliding.
+    private(set) var groupWrapCount = 0
     private(set) var timeline: GuideTimeline
     private var lineup: ChannelLineup
 
@@ -193,6 +203,16 @@ nonisolated struct GuideModel: Equatable, Sendable {
         if case .groups(let index) = focus {
             focus = .groups(focusedGroup.flatMap { groups.firstIndex(of: $0) } ?? min(index, max(0, groups.count - 1)))
         }
+        keepGroupVisible()
+    }
+
+    /// The focused row of the group panel: 0 is Search, 1… the groups; nil when the panel isn't focused.
+    var groupPanelRow: Int? {
+        switch focus {
+        case .search: 0
+        case .groups(let index): index + 1
+        case .grid, .channel: nil
+        }
     }
 
     // MARK: - Private
@@ -283,13 +303,9 @@ nonisolated struct GuideModel: Equatable, Sendable {
 
     private mutating func handleGroups(_ command: RemoteCommand, index: Int, now: Date) -> Action {
         switch command {
-        case .up where index == 0:
-            // M7f L12: the Search row sits above the first group.
-            focus = .search
-            return .none
         case .up, .down:
-            guard !groups.isEmpty else { return .none }
-            focus = .groups(min(max(index + (command == .up ? -1 : 1), 0), groups.count - 1))
+            // M7f L12: the Search row sits above the first group; the list loops.
+            moveInGroupPanel(by: command == .up ? -1 : 1)
             return .none
         case .select, .right:
             guard groups.indices.contains(index) else { return .none }
@@ -305,9 +321,7 @@ nonisolated struct GuideModel: Equatable, Sendable {
             focus = .grid
             return .none
         case .channelUp, .channelDown:
-            guard !groups.isEmpty else { return .none }
-            let step = command == .channelUp ? -Self.visibleRows : Self.visibleRows
-            focus = .groups(min(max(index + step, 0), groups.count - 1))
+            moveInGroupPanel(by: command == .channelUp ? -Self.visibleGroupRows : Self.visibleGroupRows)
             return .none
         case .playPause, .home, .fastForward, .rewind, .menu, .volumeUp, .volumeDown, .mute, .power, .powerMenu:
             return .none
@@ -320,14 +334,17 @@ nonisolated struct GuideModel: Equatable, Sendable {
         case .select, .right:
             // Focus stays here, so closing search comes back to the Search row.
             return .openSearch
-        case .down:
-            if !groups.isEmpty { focus = .groups(0) }
+        case .up, .down:
+            // Up loops to the last group.
+            moveInGroupPanel(by: command == .up ? -1 : 1)
+            return .none
+        case .channelUp, .channelDown:
+            moveInGroupPanel(by: command == .channelUp ? -Self.visibleGroupRows : Self.visibleGroupRows)
             return .none
         case .back, .left:
             focus = .grid
             return .none
-        case .up, .playPause, .home, .fastForward, .rewind, .menu, .channelUp, .channelDown,
-             .volumeUp, .volumeDown, .mute, .power, .powerMenu:
+        case .playPause, .home, .fastForward, .rewind, .menu, .volumeUp, .volumeDown, .mute, .power, .powerMenu:
             return .none
         }
     }
@@ -363,16 +380,59 @@ nonisolated struct GuideModel: Equatable, Sendable {
         moveRow(by: command == .up ? -1 : 1)
     }
 
-    /// Clamped; M7 L5 pages with Channel Up/Down.
+    /// M7n L3: a step (±1) past either end wraps to the other end. A page (M7 L5, Channel Up/Down) stops at the
+    /// first or last row and wraps only from it, so paging never skips past an end unseen. A one-row list stays.
     private mutating func moveRow(by step: Int) {
-        guard !rows.isEmpty else { return }
-        row = min(max(row + step, 0), rows.count - 1)
+        guard rows.count > 1 else { return }
+        let last = rows.count - 1
+        let target = row + step
+        let before = row
+        if abs(step) == 1 {
+            row = (target + rows.count) % rows.count
+        } else if target < 0 {
+            row = row == 0 ? last : 0
+        } else if target > last {
+            row = row == last ? 0 : last
+        } else {
+            row = target
+        }
+        if (step > 0 && row < before) || (step < 0 && row > before) { wrapCount &+= 1 }
         keepRowVisible()
     }
 
     private mutating func moveFocus(to cell: Cell, now: Date) {
         focusTime = max(cell.start, now)
         timeline.reveal(focusTime, now: now)
+    }
+
+    /// The group panel loops like the channel list (M7n L3): a step (±1) past either end wraps to the other end; a
+    /// page stops at Search or the last group and wraps only from it. Without groups the Search row stays.
+    private mutating func moveInGroupPanel(by step: Int) {
+        guard let position = groupPanelRow, !groups.isEmpty else { return }
+        let last = groups.count
+        let target = position + step
+        let new = if abs(step) == 1 {
+            (target + last + 1) % (last + 1)
+        } else if target < 0 {
+            position == 0 ? last : 0
+        } else if target > last {
+            position == last ? 0 : last
+        } else {
+            target
+        }
+        if (step > 0 && new < position) || (step < 0 && new > position) { groupWrapCount &+= 1 }
+        focus = new == 0 ? .search : .groups(new - 1)
+    }
+
+    private mutating func keepGroupVisible() {
+        if let position = groupPanelRow {
+            if position < firstVisibleGroupRow {
+                firstVisibleGroupRow = position
+            } else if position >= firstVisibleGroupRow + Self.visibleGroupRows {
+                firstVisibleGroupRow = position - Self.visibleGroupRows + 1
+            }
+        }
+        firstVisibleGroupRow = min(firstVisibleGroupRow, max(0, groups.count + 1 - Self.visibleGroupRows))
     }
 
     private mutating func keepRowVisible() {

@@ -94,6 +94,13 @@ final class MPVPlayerController: LivePlayer {
     @ObservationIgnored private var loadStartedAt: ContinuousClock.Instant?
     /// M7j Q2: the current load's decoder warnings before its first frame, logged at debug and counted.
     @ObservationIgnored private var preFrameNoise = MPVLogText.PreFrameNoise()
+    /// M7n step 3a: the stats line's timer, the counters at the last line, and a generation that drops reads
+    /// begun before a restart or stop.
+    @ObservationIgnored private var statsTimer: Timer?
+    @ObservationIgnored private var statsBaseline: PlaybackStats.Counters?
+    @ObservationIgnored private var statsGeneration = 0
+    /// M7n step 3a: vo_libmpv's render-stuck lines since the last stats line; the first of each load is logged.
+    @ObservationIgnored private var renderStuck = PlaybackStats.RenderStuckCounter()
     @ObservationIgnored private let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "MPV")
 
     init() {
@@ -105,7 +112,9 @@ final class MPVPlayerController: LivePlayer {
     func prepare() {
         guard mpv == nil else { return }
         do {
-            let mpv = try MPVHandle(options: MPVOptions.all) { [weak self] event in
+            // M7n step 3a: plus the hidden experiment switches (none set: exactly `MPVOptions.all`).
+            let mpv = try MPVHandle(options: MPVOptions.all(adding: .fromDefaults),
+                                    logLevel: MPVOptions.logLevel) { [weak self] event in
                 Task { @MainActor in self?.handle(event) }
             }
             self.mpv = mpv
@@ -189,11 +198,13 @@ final class MPVPlayerController: LivePlayer {
     func setBufferProfile(_ profile: BufferProfile) {
         bufferProfile = profile
         applyBufferProfile()
+        updateStats()
     }
 
     func setHoldsSleepAssertion(_ holds: Bool) {
         holdsSleep = holds
         applySleepAssertion()
+        updateStats()
     }
 
     private func applySleepAssertion() {
@@ -250,6 +261,7 @@ final class MPVPlayerController: LivePlayer {
 
     private func loadFile(_ url: URL, original: URL) {
         loggedDecoder = false
+        renderStuck.newLoad()
         liveEdge.reset()
         state.httpStatus = nil
         // M7j Q2: a load replaced before its first frame still reports its count.
@@ -307,6 +319,9 @@ final class MPVPlayerController: LivePlayer {
                 let ms = elapsed.components.seconds * 1000 + elapsed.components.attoseconds / 1_000_000_000_000_000
                 logger.notice("Playing after \(ms) ms (player \(self.index))")
             }
+            // M7n step 3a: every playback restart (a load, a retry, a seek or a timeshift jump) starts a new stats
+            // period, since mpv may start its counters over.
+            updateStats(restart: true)
             if !loggedDecoder, let mpv {
                 loggedDecoder = true
                 // M7c L27: notice, so a fallback to software decoding ("no") shows in `log show`.
@@ -335,9 +350,18 @@ final class MPVPlayerController: LivePlayer {
                 onFailure?()
             }
         case .log(let level, let text):
+            // M7n step 3a: vo_libmpv says this up to ~5 times a second while draws stall: the first of a load at
+            // notice, the rest only counted in the stats line.
+            if text.contains(MPVLogText.renderStuckText) {
+                if renderStuck.note() {
+                    logger.notice("mpv \(level, privacy: .public): \(MPVLogText.redacted(text), privacy: .public) (player \(self.index); more are counted in the stats line)")
+                }
+                return
+            }
             // M7j L9: ffmpeg's "HTTP error 503 …" for the current load.
             if let status = MPVLogText.httpStatus(in: text) { state.httpStatus = status }
-            // Warnings and errors only (`mpv_request_log_messages("warn")`); notice keeps them for `log show` (L27).
+            // Warnings and errors only (`MPVLogText.forwards`; M7n step 3a: and vo_libmpv's verbose render-stuck
+            // line); notice keeps them for `log show` (L27).
             // M7j L15: never a URL (tokens, the tuner's address). M7j Q2: a decoder's complaints before the first
             // frame (a stream joined mid-GOP) go to debug and are counted; after it they stay at notice.
             if preFrameNoise.absorbs(text) {
@@ -365,6 +389,7 @@ final class MPVPlayerController: LivePlayer {
 
     private func phaseDidChange() {
         applySleepAssertion()
+        updateStats()
         let polls = state.phase == .playing || state.phase == .paused
         if polls, pollTimer == nil {
             pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -386,6 +411,63 @@ final class MPVPlayerController: LivePlayer {
                                                now: ProcessInfo.processInfo.systemUptime,
                                                steady: state.phase == .playing)
         if timeshift != state.timeshift { state.timeshift = timeshift }
+    }
+
+    // MARK: - M7n step 3a: playback stats
+
+    /// Stats are logged only for the full-screen player while it plays: not a Multiview window (`.tile`) and not the
+    /// home screen's muted preview (which doesn't hold the sleep assertion).
+    nonisolated static func logsStats(phase: PlayerState.Phase, profile: BufferProfile, holdsSleepAssertion: Bool) -> Bool {
+        phase == .playing && profile == .full && holdsSleepAssertion
+    }
+
+    /// Starts or stops the stats period as the player's role changes; `restart` begins a new period while it runs.
+    private func updateStats(restart: Bool = false) {
+        guard Self.logsStats(phase: state.phase, profile: bufferProfile, holdsSleepAssertion: holdsSleep) else {
+            stopStats()
+            return
+        }
+        guard restart || statsTimer == nil else { return }
+        statsTimer?.invalidate()
+        statsGeneration += 1
+        statsBaseline = nil
+        // Also starts the render timings' period.
+        sampleStats(logging: false)
+        statsTimer = Timer.scheduledTimer(withTimeInterval: PlaybackStats.period, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.sampleStats(logging: true) }
+        }
+    }
+
+    private func stopStats() {
+        guard statsTimer != nil else { return }
+        statsTimer?.invalidate()
+        statsTimer = nil
+        statsGeneration += 1
+        statsBaseline = nil
+    }
+
+    /// The render timings are taken here; mpv's properties are read off the main thread (a read waits for the core).
+    private func sampleStats(logging: Bool) {
+        guard let mpv else { return }
+        // The baseline read (not logged) starts a new period, without the gap across the restart.
+        let render = videoView?.videoLayer.takeRenderTimings(restart: !logging) ?? PlaybackStats.RenderTimings()
+        let stuck = renderStuck.take()
+        let generation = statsGeneration
+        Task.detached(priority: .utility) { [weak self] in
+            let sample = PlaybackStats.read(mpv)
+            await self?.statsSampled(sample, render: render, stuck: stuck, generation: generation, logging: logging)
+        }
+    }
+
+    private func statsSampled(_ sample: PlaybackStats.Sample, render: PlaybackStats.RenderTimings, stuck: Int,
+                              generation: Int, logging: Bool) {
+        guard generation == statsGeneration else { return }
+        let previous = statsBaseline
+        statsBaseline = sample.counters
+        guard logging, let previous else { return }
+        // Notice, so `log show` keeps it. Numbers and mpv's decoder name only.
+        let line = PlaybackStats.line(player: index, sample: sample, previous: previous, render: render, stuck: stuck)
+        logger.notice("\(line, privacy: .public)")
     }
 
     /// M7f L3: mpv's values as they are (no field/frame conversion); a variant change shows within one poll.
