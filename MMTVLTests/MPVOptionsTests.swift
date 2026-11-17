@@ -230,8 +230,10 @@ struct MPVDirectStreamTests {
         let url = try #require(URL(string: "http://127.0.0.1:\(port)/auto/v5.1"))
 
         let events = Events()
-        let core = try MPVHandle(options: [("vo", "null"), ("ao", "null"), ("audio", "no"), ("idle", "yes"),
-                                           ("ytdl", "no"), ("input-default-bindings", "no"), ("network-timeout", "3")],
+        // MR step 2: no Lua scripts (the hardened runtime has no JIT exception).
+        let core = try MPVHandle(options: MPVOptions.scriptsOff + [("vo", "null"), ("ao", "null"), ("audio", "no"),
+                                                                    ("idle", "yes"), ("input-default-bindings", "no"),
+                                                                    ("network-timeout", "3")],
                                  onEvent: { events.record($0) })
         Self.cores.append(core)
         core.command(MPVLoadCommand.make(url: url, direct: direct))
@@ -466,5 +468,28 @@ struct MPVLogForwardingTests {
                                  onEvent: { _ in })
         MPVDisplayRateCoreTests.cores.append(core)
         #expect(core.string("msg-level") == "all=warn,vo/libmpv=v")
+    }
+}
+
+/// MR step 2 (security review): mpv's built-in Lua scripts, user scripts and config files are off, so LuaJIT never runs
+/// and the hardened runtime needs neither JIT exception. A real core (MPVKit's mpv 0.41) reads every option back as
+/// "no": `MPVHandle` only logs an option mpv rejects, so a renamed one would leave its script on.
+struct MPVScriptsOffTests {
+    static let names = ["osc", "load-stats-overlay", "load-console", "load-auto-profiles", "load-select",
+                        "load-positioning", "load-commands", "load-context-menu", "load-scripts", "ytdl", "config"]
+
+    @Test func liveTVCoresTurnEveryScriptOff() {
+        for name in Self.names {
+            #expect(MPVOptions.all.first { $0.name == name }?.value == "no", "\(name)")
+        }
+        #expect(Set(MPVOptions.scriptsOff.map(\.name)) == Set(Self.names))
+    }
+
+    @Test func aCoreReadsEveryScriptOptionBackAsNo() throws {
+        let core = try MPVHandle(options: MPVOptions.all + [("ao", "null")], onEvent: { _ in })
+        MPVDisplayRateCoreTests.cores.append(core)
+        for name in Self.names {
+            #expect(core.string(name) == "no", "\(name)")
+        }
     }
 }

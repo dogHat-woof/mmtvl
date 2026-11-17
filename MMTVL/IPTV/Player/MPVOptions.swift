@@ -17,9 +17,20 @@ nonisolated enum MPVOptions {
     static let tileBackBuffer = "160MiB"
     static let tileForwardBuffer = "64MiB"
 
+    /// MR step 2 (security review): none of mpv's built-in Lua scripts, no user scripts, no config files. Without a
+    /// Lua state LuaJIT never generates code, so the hardened runtime needs no JIT exception. Names as mpv 0.41
+    /// (MPVKit 1.0.0) takes them; `MPVScriptsOffTests` reads each back from a real core, since a renamed option is
+    /// only logged by `MPVHandle` and would start Lua again (the process is then killed at core creation).
+    static let scriptsOff: [(name: String, value: String)] = [
+        ("config", "no"), ("ytdl", "no"), ("osc", "no"),
+        ("load-stats-overlay", "no"), ("load-console", "no"), ("load-auto-profiles", "no"), ("load-select", "no"),
+        ("load-positioning", "no"), ("load-commands", "no"), ("load-context-menu", "no"), ("load-scripts", "no"),
+    ]
+
     /// Applied in order with mpv_set_option_string before mpv_initialize. A failing option is logged and skipped.
     static let all: [(name: String, value: String)] = [
-        ("vo", "libmpv"), ("hwdec", "videotoolbox"), ("ytdl", "no"),
+        ("vo", "libmpv"), ("hwdec", "videotoolbox"),
+    ] + scriptsOff + [
         ("input-default-bindings", "no"), ("input-media-keys", "no"), ("media-controls", "no"),
         ("idle", "yes"), ("keep-open", "no"),
         ("cache", "yes"), ("demuxer-max-bytes", forwardBuffer), ("demuxer-max-back-bytes", backBuffer),
