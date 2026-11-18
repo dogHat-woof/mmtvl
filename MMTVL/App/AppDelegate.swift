@@ -926,6 +926,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 status.pairingURL = "\(address)/#pair=\(secret)"
             }
             status.pairingEnded = phoneRemote.pairingEnded
+            status.pairingCodeLocked = phoneRemote.pairing?.isCodeLocked ?? false
             status.lastPairedName = phoneRemote.lastPairedName
             status.pairedCount = phoneRemote.pairedCount
             status.connectedCount = phoneRemote.connectedCount

@@ -138,6 +138,61 @@ struct RemoteServerTests {
         task.cancel(with: .goingAway, reason: nil)
     }
 
+    /// Re-review L3: 16 sockets waiting to sign in from 6 addresses (3 + 3 + 3 + 3 + 2 + 2) fill the pool; a new one
+    /// from a seventh address gets in by closing the oldest waiting one, never a signed-in session; an address that
+    /// already has 3 waiting is still refused.
+    @Test func aFullPendingPoolEvictsItsOldest() {
+        let hosts = ["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5", "10.0.0.6"]
+        var entries = (1...8).map { PendingPool.Entry(id: $0, host: "10.0.0.\(100 + $0)", isAuthenticated: true) }
+        var id = 9
+        for (index, host) in hosts.enumerated() {
+            for _ in 0..<(index < 4 ? 3 : 2) {
+                entries.append(PendingPool.Entry(id: id, host: host, isAuthenticated: false))
+                id += 1
+            }
+        }
+        #expect(entries.count(where: { !$0.isAuthenticated }) == RemoteServer.maxPending)
+        func admit(_ host: String?, _ entries: [PendingPool.Entry]) -> PendingPool.Decision {
+            PendingPool.admit(host: host, sessions: entries, maxPending: RemoteServer.maxPending,
+                              maxPendingPerHost: RemoteServer.maxPendingPerHost)
+        }
+        #expect(admit("10.0.0.50", entries) == .acceptEvicting(9))
+        #expect(admit("10.0.0.6", entries) == .acceptEvicting(9))
+        #expect(admit("10.0.0.1", entries) == .refuse)
+        // Signed-in sessions don't count and are never chosen, wherever they are in the list.
+        entries.shuffle()
+        #expect(admit("10.0.0.50", entries) == .acceptEvicting(9))
+        #expect(admit("10.0.0.50", entries.filter { $0.isAuthenticated }) == .accept)
+        #expect(admit("10.0.0.50", entries.filter { $0.id != 24 }) == .accept)
+    }
+
+    /// Re-review L3 on real sockets (pool of 3 here): a signed-in session, then 3 silent ones; the next socket closes
+    /// the oldest silent one, signs in and is served, and the first signed-in session still is.
+    @Test func aNewSocketGetsInWhenThePoolIsFull() async throws {
+        let server = RemoteServer(maxPending: 3, maxPendingPerHost: 5)
+        var closed: [RemoteSessionID] = []
+        server.onMessage = { [weak server] id, _ in
+            server?.sessionAuthenticated(id)
+            server?.send(.toast("echo"), to: id)
+        }
+        server.onSessionClosed = { closed.append($0) }
+        server.start(httpPort: .any, socketPort: .any)
+        defer { server.stop() }
+        try await waitUntil { server.state == .running }
+        let port = try #require(server.socketPort)
+
+        let first = socket(port)
+        #expect(await echoes(first))
+        let silent = (0..<3).map { _ in socket(port) }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(closed.isEmpty)
+        let newcomer = socket(port)
+        #expect(await echoes(newcomer))
+        #expect(closed == [2])
+        #expect(await echoes(first))
+        for task in silent + [first, newcomer] { task.cancel(with: .goingAway, reason: nil) }
+    }
+
     @Test func originRules() {
         func allowed(_ origin: String?, host: String = "192.168.1.20:8766") -> Bool {
             var headers: [(name: String, value: String)] = [(name: "Host", value: host)]
@@ -157,6 +212,24 @@ struct RemoteServerTests {
         // DNS rebinding: the attacker's name points at this Mac; Host and Origin agree, but it isn't a local name.
         #expect(!allowed("http://evil.example:8765", host: "evil.example:8766"))
         #expect(!allowed("http://999.1.1.1:8765", host: "999.1.1.1:8766"))
+        // Re-review L4: the router's names for the Mac (dotless, .lan, .home.arpa) are allowed; Origin must still match.
+        #expect(allowed("http://mm.home.arpa:8765", host: "mm.home.arpa:8766"))
+        #expect(allowed("http://mm.lan:8765", host: "mm.lan:8766"))
+        #expect(allowed("http://mm:8765", host: "mm:8766"))
+        #expect(allowed("http://mac-mini.office.lan:8765", host: "MAC-MINI.office.lan:8766"))
+        #expect(!allowed("http://mm.lan:8765", host: "mm.home.arpa:8766"))
+        #expect(!allowed("http://mm.lan:8766", host: "mm.lan:8766"))
+        #expect(!allowed("https://mm.lan:8765", host: "mm.lan:8766"))
+        #expect(!allowed("http://mm.lan.evil.example:8765", host: "mm.lan.evil.example:8766"))
+        #expect(!allowed("http://mm.home.arpa.evil.example:8765", host: "mm.home.arpa.evil.example:8766"))
+        #expect(!allowed("http://evil.example:8765", host: "evil.example:8766"))
+        for name in ["mm", "mac-mini", "mm.lan", "mm.home.arpa", "a.b.home.arpa"] {
+            #expect(WebSocketOrigin.isLocalName(name), "\(name)")
+        }
+        for name in ["evil.example", "mm.lan.evil.example", "lan.example", ".lan", "-mm", "mm_x", "a..lan",
+                     "x.home.arpa.", "home.arpa", ".home.arpa"] {
+            #expect(!WebSocketOrigin.isLocalName(name), "\(name)")
+        }
         let twoOrigins: [(name: String, value: String)] = [
             (name: "Host", value: "192.168.1.20:8766"),
             (name: "Origin", value: "http://192.168.1.20:8765"), (name: "Origin", value: "https://evil.example"),

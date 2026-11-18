@@ -27,16 +27,27 @@ struct PairingTests {
         #expect(code == rotated)
     }
 
-    /// Security (pre-release review, high): the tenth wrong code in one pairing ends it, across rotations.
-    @Test func tenthWrongCodeEndsPairing() {
+    /// Security (pre-release review, high; re-review L1): the tenth wrong code in one pairing, across rotations, turns
+    /// the typed code off for good; the secret still pairs until the pairing expires, and wrong secrets keep counting.
+    @Test func tenthWrongCodeLocksOnlyTheCode() {
         var code = PairingCode(code: "1234", expires: start + PairingCode.lifetime)
         var results: [PairingCode.Check] = []
         for _ in 1...PairingCode.maxTotalFailures {
             results.append(code.check("0000", now: start, makeCode: { "5678" }))
         }
-        #expect(results.last == .ended)
-        #expect(results.dropLast().allSatisfy { $0 != .ended && $0 != .accepted })
+        #expect(results.last == .codeLocked)
+        #expect(results.dropLast().allSatisfy { $0 != .codeLocked && $0 != .accepted })
         #expect(code.totalFailures == PairingCode.maxTotalFailures)
+        #expect(code.isCodeLocked)
+
+        // The current code is refused (and counts); no more rotations.
+        let current = code.code
+        #expect(code.check(current, now: start, makeCode: { "9999" }) == .codeLocked)
+        #expect(code.code == current)
+        #expect(code.check(String(repeating: "0", count: 32), now: start, makeCode: { "9999" }) == .codeLocked)
+        #expect(code.totalFailures == PairingCode.maxTotalFailures + 2)
+        #expect(code.check(code.secret, now: start, makeCode: { "9999" }) == .accepted)
+        #expect(code.check(code.secret, now: start + PairingCode.lifetime, makeCode: { "9999" }) == .expired)
     }
 
     /// Security (pre-release review, high): the QR code's 128-bit secret pairs like the code; an unchecked attempt fails.

@@ -8,14 +8,16 @@ nonisolated struct PairingCode: Equatable, Sendable {
     static let lifetime: TimeInterval = 600
     /// Wrong codes before the code changes (the TV shows the new one).
     static let maxFailures = 5
-    /// Security (pre-release review, high): wrong codes in one pairing, whichever code they were for; at this many,
-    /// pairing ends and Pair a Phone must be opened again. A guesser gets at most this many tries at 1 in 10,000.
+    /// Security (pre-release review, high): wrong codes in one pairing, whichever code they were for; at this many the
+    /// typed code stops working for the rest of the pairing (re-review L1: only the code; the QR code's secret, which
+    /// can't be guessed, still pairs until the pairing expires, so a LAN peer can't end the user's pairing). A guesser
+    /// gets at most this many tries at 1 in 10,000.
     static let maxTotalFailures = 10
 
     /// 4 digits, "0000"…"9999".
     var code: String
     /// Security (pre-release review, high): 128 random bits, hex, in the QR code's link (`#pair=<secret>`); the page
-    /// sends it like a typed code. The typed code is the fallback, under `maxTotalFailures`.
+    /// sends it like a typed code. The typed code is the fallback, until `maxTotalFailures` (`isCodeLocked`).
     var secret: String
     var expires: Date
     /// Wrong codes since the code last changed.
@@ -31,23 +33,27 @@ nonisolated struct PairingCode: Equatable, Sendable {
         self.totalFailures = totalFailures
     }
 
-    enum Check: Equatable { case accepted, rejected, rotated(PairingCode), expired, ended }
+    /// `codeLocked`: a failure at or past `maxTotalFailures`; the typed code no longer pairs, the secret still does.
+    enum Check: Equatable { case accepted, rejected, rotated(PairingCode), expired, codeLocked }
 
-    /// The code or the secret: accepted. Else a failure (`fail`).
+    /// Re-review L1: `maxTotalFailures` wrong attempts; the typed code is refused from then on.
+    var isCodeLocked: Bool { totalFailures >= Self.maxTotalFailures }
+
+    /// The secret, or the code while it isn't locked: accepted. Else a failure (`fail`).
     mutating func check(_ attempt: String, now: Date, makeCode: () -> String) -> Check {
         guard now < expires else { return .expired }
-        if attempt == code || Self.constantTimeEqual(attempt, secret) { return .accepted }
+        if Self.constantTimeEqual(attempt, secret) || (!isCodeLocked && attempt == code) { return .accepted }
         return fail(now: now, makeCode: makeCode)
     }
 
-    /// A wrong code, or an attempt not checked (too soon after the last one): failures += 1. At `maxTotalFailures`
-    /// returns .ended (the caller ends pairing); at `maxFailures` returns (and becomes) a fresh code from makeCode,
-    /// same secret, expiry and total.
+    /// A wrong code or secret, or an attempt not checked (too soon after the last one): failures += 1. From
+    /// `maxTotalFailures` on returns .codeLocked (the code stops working, the secret and the expiry stay); before
+    /// that, at `maxFailures` returns (and becomes) a fresh code from makeCode, same secret, expiry and total.
     mutating func fail(now: Date, makeCode: () -> String) -> Check {
         guard now < expires else { return .expired }
         failures += 1
         totalFailures += 1
-        if totalFailures >= Self.maxTotalFailures { return .ended }
+        if isCodeLocked { return .codeLocked }
         guard failures >= Self.maxFailures else { return .rejected }
         self = PairingCode(code: makeCode(), secret: secret, expires: expires, totalFailures: totalFailures)
         return .rotated(self)

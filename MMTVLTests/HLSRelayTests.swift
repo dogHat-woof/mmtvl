@@ -162,6 +162,11 @@ struct HLSRelayTests {
         #expect(await relay.fetch(URL(string: "file:///etc/hosts")!, stream: URL(string: "file:///etc/hosts")!) == nil)
         #expect(await relay.fetch(URL(string: "http://127.0.0.1:1/x")!, stream: self.master) == nil)
         #expect(Set(upstream.fetchedOrigins) == ["https://cdn.example"])
+        // Re-review L2: the refusals are recorded for the stream (and its media playlist), so the player skips its
+        // direct retry; another stream has none.
+        #expect(relay.refusedSomething(forStreamOf: self.master))
+        #expect(relay.refusedSomething(forStreamOf: URL(string: "https://cdn.example/live/ch1/video/index.m3u8")!))
+        #expect(!relay.refusedSomething(forStreamOf: URL(string: "https://cdn.example/live/ch2/master.m3u8")!))
     }
 
     /// A stream on a LAN server keeps working: its own host is allowed, other LAN hosts aren't.
@@ -231,6 +236,7 @@ struct HLSRelayTests {
             #expect(upstream.status == 302, "\(target)")
             #expect(upstream.data.isEmpty, "\(target)")
             #expect(upstream.finalURL.absoluteString == from, "\(target)")
+            #expect(upstream.refusedRedirect, "\(target)")
             #expect(!StubTunerProtocol.wasRequested(target), "\(target)")
         }
 
@@ -244,6 +250,7 @@ struct HLSRelayTests {
         #expect(moved.status == 200)
         #expect(moved.data == Data("#EXTM3U".utf8))
         #expect(moved.finalURL.absoluteString == publicTarget)
+        #expect(!moved.refusedRedirect)
 
         let lanStream = URL(string: "http://192.168.7.5:8080/live/master.m3u8")!
         let lanFrom = "http://192.168.7.5:8080/live/old.m3u8"
@@ -258,6 +265,48 @@ struct HLSRelayTests {
         #expect(!guardForCDN.follows(URL(string: "http://192.168.1.5/seg.ts")))
         #expect(!guardForCDN.follows(URL(string: "http://localhost/seg.ts")))
         #expect(!guardForCDN.follows(nil))
+    }
+
+    /// Re-review L2: an M3U entry on a public host that redirects to the Mac isn't resolved to it: the resolver keeps
+    /// the entry, the relay registers only the entry, refuses the same redirect when mpv asks (recording it, so the
+    /// player won't go direct), and the Mac's address is never registered or requested. A redirect to another public
+    /// host still resolves.
+    @Test func streamResolverRefusesARedirectToTheMac() async throws {
+        let entry = URL(string: "https://provider-l2.example/live/7.m3u8")!
+        let target = "http://127.0.0.1:1/x"
+        StubTunerProtocol.serve(entry.absoluteString, status: 302, headers: ["Location": target], body: Data())
+        StubTunerProtocol.serve(target, body: Data("#EXTM3U".utf8))
+        let resolver = StreamResolver(resolve: { try await StreamResolver.liveResolve($0, session: StubTunerProtocol.session()) })
+        let resolved = await resolver.resolve(entry)
+        #expect(resolved == entry)
+        #expect(resolver.cached(entry) == nil)
+        #expect(!StubTunerProtocol.wasRequested(target))
+
+        // A resolver that hands back the Mac's address anyway is refused too.
+        let lying = StreamResolver(resolve: { _ in URL(string: target)! })
+        #expect(await lying.resolve(entry) == entry)
+        #expect(lying.cached(entry) == nil)
+
+        let relay = HLSRelay(fetch: { url, stream in
+            try await HLSRelay.liveFetch(url, stream: stream, session: StubTunerProtocol.session())
+        })
+        relay.start()
+        defer { relay.stop() }
+        for _ in 0..<200 where relay.port == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let local = try #require(relay.localURL(for: resolved))
+        let (_, status, _) = try await get(local)
+        #expect(status == 302)
+        #expect(relay.isRegistered(entry))
+        #expect(!relay.isRegistered(URL(string: target)!))
+        #expect(relay.refusedSomething(forStreamOf: entry))
+        #expect(!StubTunerProtocol.wasRequested(target))
+
+        let moving = URL(string: "https://provider-l2.example/live/8.m3u8")!
+        let cdn = "https://cdn-l2.example/live/8.m3u8"
+        StubTunerProtocol.serve(moving.absoluteString, status: 302, headers: ["Location": cdn], body: Data())
+        StubTunerProtocol.serve(cdn, body: Data("#EXTM3U".utf8))
+        #expect(await resolver.resolve(moving).absoluteString == cdn)
+        #expect(!relay.refusedSomething(forStreamOf: URL(string: cdn)!))
     }
 
     @Test func noURLWhileStopped() {

@@ -215,8 +215,10 @@ nonisolated struct PhoneRemoteSettingsStatus: Equatable, Sendable {
     var pairingCode: String?
     /// address + "/#pair=" + the pairing's secret (`PairingCode.secret`).
     var pairingURL: String?
-    /// Pairing ended after too many wrong codes; Pair a Phone must be opened again.
+    /// Pairing expired; Pair a Phone must be opened again.
     var pairingEnded = false
+    /// Re-review L1: too many wrong codes; the typed code is off, the QR code still pairs.
+    var pairingCodeLocked = false
     var lastPairedName: String?
     var pairedCount = 0
     var connectedCount = 0

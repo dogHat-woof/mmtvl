@@ -50,7 +50,9 @@ nonisolated enum ServerMessage: Equatable, Sendable {
     case welcome
     case authFailed
     case paired(token: String)
-    case pairFailed(String)
+    /// Re-review L1: `codeLocked`, the typed code is off for this pairing (too many wrong codes); the page says to scan
+    /// the QR code and hides the code form.
+    case pairFailed(String, codeLocked: Bool = false)
     case status(frontApp: String, launcherActive: Bool)
     case toast(String)
     /// level 0…1; nil level = unknown (volume keys were sent).
@@ -67,9 +69,10 @@ nonisolated enum ServerMessage: Equatable, Sendable {
         case .paired(let token):
             wire = RemoteWireMessage(type: "paired")
             wire.token = token
-        case .pairFailed(let message):
+        case .pairFailed(let message, let codeLocked):
             wire = RemoteWireMessage(type: "pairFailed")
             wire.message = message
+            if codeLocked { wire.codeLocked = true }
         case .status(let frontApp, let launcherActive):
             wire = RemoteWireMessage(type: "status")
             wire.frontApp = frontApp
@@ -106,6 +109,8 @@ nonisolated private struct RemoteWireMessage: Codable {
     var dx: Double?
     var dy: Double?
     var button: String?
+    /// Re-review L1: in pairFailed, only when true.
+    var codeLocked: Bool?
 
     /// Both deltas present, finite and at most `PointerMath.maxDelta` in magnitude.
     var delta: (dx: Double, dy: Double)? {

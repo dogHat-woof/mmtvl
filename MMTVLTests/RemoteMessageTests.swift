@@ -60,6 +60,8 @@ struct RemoteMessageTests {
         #expect(try object(.authFailed) == object(#"{"type":"authFailed"}"#))
         #expect(try object(.paired(token: "tok")) == object(#"{"token":"tok","type":"paired"}"#))
         #expect(try object(.pairFailed("Wrong code")) == object(#"{"message":"Wrong code","type":"pairFailed"}"#))
+        #expect(try object(.pairFailed("Scan", codeLocked: true))
+            == object(#"{"codeLocked":true,"message":"Scan","type":"pairFailed"}"#))
         #expect(try object(.toast("Hi")) == object(#"{"message":"Hi","type":"toast"}"#))
         #expect(try object(.status(frontApp: "Plex HTPC", launcherActive: false))
             == object(#"{"frontApp":"Plex HTPC","launcherActive":false,"type":"status"}"#))

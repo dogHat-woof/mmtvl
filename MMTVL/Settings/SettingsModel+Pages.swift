@@ -937,17 +937,27 @@ extension SettingsModel {
         if phoneRemote.pairingEnded {
             return [
                 SettingsSection(id: "pair", rows: [
-                    SettingsRow(id: "pair.ended", title: "Pairing Ended", detail: "Too many wrong codes were entered",
+                    SettingsRow(id: "pair.ended", title: "Pairing Ended", detail: "Pairing timed out",
                                 image: .symbol("exclamationmark.triangle")),
                     SettingsRow(id: "pair.close", title: "Done", action: .pop),
                 ], footer: "To pair a phone, go back and open Pair a Phone again."),
             ]
         }
-        var rows = [
-            SettingsRow(id: "pair.code", title: "Pairing Code", value: phoneRemote.pairingCode ?? "—"),
-            SettingsRow(id: "pair.address", title: phoneRemote.address ?? "No network connection",
-                        detail: "Or open this address on the phone and enter the code"),
-        ]
+        var rows: [SettingsRow]
+        if phoneRemote.pairingCodeLocked {
+            // Re-review L1: too many wrong codes turn the typed code off; the QR code (the secret) still pairs.
+            rows = [
+                SettingsRow(id: "pair.locked", title: "Pairing Code Off",
+                            detail: "Too many wrong codes were entered. Scan the QR code with the phone's camera",
+                            image: .symbol("exclamationmark.triangle")),
+            ]
+        } else {
+            rows = [
+                SettingsRow(id: "pair.code", title: "Pairing Code", value: phoneRemote.pairingCode ?? "—"),
+                SettingsRow(id: "pair.address", title: phoneRemote.address ?? "No network connection",
+                            detail: "Or open this address on the phone and enter the code"),
+            ]
+        }
         if let name = phoneRemote.lastPairedName {
             rows.append(SettingsRow(id: "pair.done", title: "Paired \"\(name)\"", image: .symbol("checkmark.circle")))
         }

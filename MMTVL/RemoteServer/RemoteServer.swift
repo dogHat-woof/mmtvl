@@ -20,7 +20,8 @@ final class RemoteServer: RemoteTransport {
     private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "PhoneRemote")
     /// Authenticated sessions (security, pre-release review, low: sockets that haven't signed in don't count).
     static let maxSessions = 8
-    /// Sessions that haven't sent a good hello or pair yet: at most this many per address, and in all.
+    /// Sessions that haven't sent a good hello or pair yet: at most this many per address, and in all (re-review L3: a
+    /// full pool closes its oldest pending session for a new one; `PendingPool`).
     static let maxPendingPerHost = 3
     static let maxPending = 16
     /// Security (pre-release review, low): a session without a good hello or pair this long after connecting is closed.
@@ -56,6 +57,8 @@ final class RemoteServer: RemoteTransport {
     private var httpConnections: [ObjectIdentifier: NWConnection] = [:]
     private var nextSessionID = 1
     private let signInTimeout: TimeInterval
+    private let maxPending: Int
+    private let maxPendingPerHost: Int
 
     private struct Session {
         var connection: NWConnection
@@ -64,9 +67,12 @@ final class RemoteServer: RemoteTransport {
         var isAuthenticated = false
     }
 
-    /// `signInTimeout`: tests pass a short one.
-    init(signInTimeout: TimeInterval = RemoteServer.defaultSignInTimeout) {
+    /// `signInTimeout` and the pending limits: tests pass small ones.
+    init(signInTimeout: TimeInterval = RemoteServer.defaultSignInTimeout, maxPending: Int = RemoteServer.maxPending,
+         maxPendingPerHost: Int = RemoteServer.maxPendingPerHost) {
         self.signInTimeout = signInTimeout
+        self.maxPending = maxPending
+        self.maxPendingPerHost = maxPendingPerHost
     }
 
     func start(httpPort: NWEndpoint.Port, socketPort: NWEndpoint.Port) {
@@ -328,11 +334,18 @@ final class RemoteServer: RemoteTransport {
             return
         }
         let host = Self.host(of: connection.endpoint)
-        let pending = sessions.values.filter { !$0.isAuthenticated }
-        guard pending.count < Self.maxPending, pending.count(where: { $0.host == host }) < Self.maxPendingPerHost else {
-            Self.logger.info("Refused a phone connection: too many waiting to sign in")
+        let entries = sessions.map { PendingPool.Entry(id: $0.key, host: $0.value.host, isAuthenticated: $0.value.isAuthenticated) }
+        switch PendingPool.admit(host: host, sessions: entries, maxPending: maxPending, maxPendingPerHost: maxPendingPerHost) {
+        case .refuse:
+            Self.logger.info("Refused a phone connection: too many from its address waiting to sign in")
             connection.cancel()
             return
+        case .acceptEvicting(let oldest):
+            // Re-review L3: a peer with many addresses can't hold every pending slot and keep a phone out.
+            Self.logger.info("Closed the oldest phone connection waiting to sign in: \(self.maxPending) waiting")
+            endSession(oldest)
+        case .accept:
+            break
         }
         let id = nextSessionID
         nextSessionID += 1
@@ -408,10 +421,36 @@ final class RemoteServer: RemoteTransport {
     }
 }
 
+/// Which sockets that haven't signed in yet are kept (security, pre-release review, low; re-review L3). Pure.
+nonisolated enum PendingPool {
+    struct Entry: Equatable, Sendable {
+        var id: RemoteSessionID
+        var host: String?
+        var isAuthenticated: Bool
+    }
+
+    enum Decision: Equatable, Sendable {
+        case accept
+        /// The pool is full: close this pending session (the oldest, the lowest id) and take the new one.
+        case acceptEvicting(RemoteSessionID)
+        /// The new socket's address already has `maxPendingPerHost` waiting.
+        case refuse
+    }
+
+    /// Authenticated sessions are never evicted (they don't count here; `RemoteServer.maxSessions` limits them).
+    static func admit(host: String?, sessions: [Entry], maxPending: Int, maxPendingPerHost: Int) -> Decision {
+        let pending = sessions.filter { !$0.isAuthenticated }
+        guard pending.count(where: { $0.host == host }) < maxPendingPerHost else { return .refuse }
+        guard pending.count >= maxPending, let oldest = pending.map(\.id).min() else { return .accept }
+        return .acceptEvicting(oldest)
+    }
+}
+
 /// Security (pre-release review, high): which WebSocket upgrades may open a session. No Origin (a native client):
 /// allowed. Else it must be exactly `http://<Host>:<HTTP port>`, the phone page's own origin, with the Host header's
-/// host an IP address, `localhost` or a `.local` name, so a page on another site (including a DNS-rebinding name
-/// that points at this Mac) is refused.
+/// host an IP address, `localhost`, a `.local` name, or (re-review L4) a router's name for the Mac: a dotless name,
+/// `.lan` or `.home.arpa`. None of those can be registered in public DNS, so a page on another site (including a
+/// DNS-rebinding name that points at this Mac) is refused.
 nonisolated enum WebSocketOrigin {
     static func isAllowed(headers: [(name: String, value: String)], httpPort: UInt16?) -> Bool {
         let origins = headers.filter { $0.name.caseInsensitiveCompare("Origin") == .orderedSame }
@@ -436,9 +475,16 @@ nonisolated enum WebSocketOrigin {
         return host.isEmpty ? nil : String(host)
     }
 
-    /// An IPv4 address, a bracketed IPv6 address, `localhost` or a Bonjour `.local` name.
+    /// An IPv4 address, a bracketed IPv6 address, `localhost`, a Bonjour `.local` name, or (re-review L4) a name the
+    /// router's DNS gives: dotless ("mm") or under `.lan` or `.home.arpa` (RFC 8375), each label letters, digits and
+    /// hyphens. Never another dotted name: anyone can register one and point it at this Mac.
     static func isLocalName(_ host: String) -> Bool {
         if host == "localhost" || (host.hasSuffix(".local") && host.count > 6) { return true }
+        for suffix in [".lan", ".home.arpa"] where host.hasSuffix(suffix) {
+            let labels = host.dropLast(suffix.count).split(separator: ".", omittingEmptySubsequences: false)
+            return labels.allSatisfy(isHostLabel)
+        }
+        if !host.contains("."), !host.contains(":"), !host.hasPrefix("[") { return isHostLabel(Substring(host)) }
         if host.hasPrefix("[") && host.hasSuffix("]") {
             return host.dropFirst().dropLast().allSatisfy { $0.isHexDigit || $0 == ":" || $0 == "." }
         }
@@ -447,5 +493,11 @@ nonisolated enum WebSocketOrigin {
             !part.isEmpty && part.count <= 3 && part.allSatisfy(\.isASCII) && part.allSatisfy(\.isNumber)
                 && (Int(part) ?? 256) <= 255
         }
+    }
+
+    /// 1…63 ASCII letters, digits and hyphens, not starting or ending with a hyphen.
+    private static func isHostLabel(_ label: Substring) -> Bool {
+        (1...63).contains(label.count) && label.first != "-" && label.last != "-"
+            && label.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
     }
 }

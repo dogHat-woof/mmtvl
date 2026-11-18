@@ -33,6 +33,14 @@ function toast(text) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 2000);
 }
 
+// Too many wrong codes turn the typed code off for this pairing; only the TV's QR code pairs then.
+const PAIR_HINT = 'On the TV, open Settings → Phone Remote → Pair a Phone, then enter the code.';
+const LOCKED_HINT = "Too many wrong codes. Scan the QR code on the TV with the phone's camera.";
+function setCodeLocked(locked) {
+  $('pair-form').hidden = locked;
+  $('pair-hint').textContent = locked ? LOCKED_HINT : PAIR_HINT;
+}
+
 function connect() {
   clearTimeout(retryTimer);
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
@@ -67,7 +75,7 @@ function handle(m) {
       storeToken(null);
       if (hashCode()) send({ type: 'pair', code: hashCode(), name: phoneName() }); else show('pairing');
       break;
-    case 'pairFailed': clearHash(); $('pair-error').textContent = m.message; show('pairing'); break;
+    case 'pairFailed': clearHash(); setCodeLocked(m.codeLocked === true); $('pair-error').textContent = m.message; show('pairing'); break;
     case 'status': $('front-app').textContent = m.launcherActive ? 'MMTVL' : m.frontApp; break;
     case 'toast': toast(m.message); break;
     case 'volume':

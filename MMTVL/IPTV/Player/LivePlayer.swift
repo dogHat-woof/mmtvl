@@ -76,6 +76,10 @@ final class MPVPlayerController: LivePlayer {
     @ObservationIgnored private var isDirect = false
     @ObservationIgnored private var pendingURL: URL?
     @ObservationIgnored private var retries = 0
+    /// Re-review L2: the URL the current load gave the relay (nil: loaded directly).
+    @ObservationIgnored private var relayedURL: URL?
+    /// Re-review L2: the relay refused a URI or a redirect for one of this `play`'s loads; no direct load follows.
+    @ObservationIgnored private var relayRefused = false
     @ObservationIgnored private var retryTask: Task<Void, Never>?
     @ObservationIgnored private var pollTimer: Timer?
     @ObservationIgnored private var liveEdge = LiveEdgeSmoother()
@@ -141,6 +145,7 @@ final class MPVPlayerController: LivePlayer {
         }
         retryTask?.cancel()
         retries = 0
+        relayRefused = false
         currentURL = url
         isDirect = direct
         loggedFormat = false
@@ -285,6 +290,14 @@ final class MPVPlayerController: LivePlayer {
         // M7c L30: the last retry goes straight to the CDN, in case the relay is the problem. M7j L6: an antenna
         // stream never goes through the relay (it buffers whole bodies; a TS stream never ends).
         let relayed = !isDirect && retries < Self.maxRetries ? relay?.localURL(for: url) : nil
+        relayedURL = relayed == nil ? nil : url
+        // Re-review L2: never straight to a stream the relay refused part of (the relay stopped meanwhile, say).
+        if !isDirect, relayed == nil, relayRefused {
+            logger.notice("Not loading straight from \(original.host() ?? "?", privacy: .public): the relay refused part of this stream (player \(self.index))")
+            state = .failed(from: state)
+            onFailure?()
+            return
+        }
         mpv?.setString("pause", "no")
         mpv?.command(MPVLoadCommand.make(url: relayed ?? url, direct: isDirect))
         // M7c L27: notice, so `log show` keeps it. M7j L15: never the tuner's address.
@@ -351,7 +364,10 @@ final class MPVPlayerController: LivePlayer {
             logger.error("Stream ended (\(String(describing: reason), privacy: .public), error \(error)); retries used \(self.retries) (player \(self.index))")
             // M7c L29: the resolved address may have expired; the retry resolves again.
             if !isDirect { resolver?.invalidate(url) }
-            if Self.shouldRetry(direct: isDirect, wasPlaying: state.phase == .playing, used: retries) {
+            // Re-review L2: a refusal skips the last retry, which would go straight to the CDN.
+            if let relayedURL, relay?.refusedSomething(forStreamOf: relayedURL) == true { relayRefused = true }
+            if Self.shouldRetry(direct: isDirect, wasPlaying: state.phase == .playing, used: retries,
+                                relayRefused: relayRefused) {
                 retries += 1
                 state.phase = .loading
                 retryTask?.cancel()
@@ -395,11 +411,13 @@ final class MPVPlayerController: LivePlayer {
         logger.notice("\(count) decoder warnings before the first frame (player \(self.index))")
     }
 
-    /// Whether an ended stream is loaded again. A playlist stream: `maxRetries` times per `play`. M7j L6: an antenna
-    /// stream only when it was playing, once per `play`; one that never played fails at once, so the diagnosis
-    /// follows a single tuner answer (L9).
-    nonisolated static func shouldRetry(direct: Bool, wasPlaying: Bool, used: Int) -> Bool {
-        direct ? wasPlaying && used < directReconnects : used < maxRetries
+    /// Whether an ended stream is loaded again. A playlist stream: `maxRetries` times per `play`, the last one
+    /// straight from the CDN, except (re-review L2) after the relay refused a URI or a redirect for the stream
+    /// (`relayRefused`): then only the relayed ones. M7j L6: an antenna stream only when it was playing, once per
+    /// `play`; one that never played fails at once, so the diagnosis follows a single tuner answer (L9).
+    nonisolated static func shouldRetry(direct: Bool, wasPlaying: Bool, used: Int, relayRefused: Bool = false) -> Bool {
+        if direct { return wasPlaying && used < directReconnects }
+        return used < (relayRefused ? maxRetries - 1 : maxRetries)
     }
 
     private func phaseDidChange() {

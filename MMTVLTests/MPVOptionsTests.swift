@@ -53,6 +53,17 @@ struct MPVOptionsTests {
         #expect(MPVPlayerController.shouldRetry(direct: false, wasPlaying: true, used: 1))
         #expect(!MPVPlayerController.shouldRetry(direct: false, wasPlaying: false, used: 2))
     }
+
+    /// Re-review L2: the last retry (straight to the CDN) still happens normally, but not after the relay refused a
+    /// URI or a redirect for the stream; the relayed retry before it still does. Antenna streams are unaffected.
+    @Test func noDirectRetryAfterARelayRefusal() {
+        #expect(MPVPlayerController.maxRetries == 2)
+        #expect(MPVPlayerController.shouldRetry(direct: false, wasPlaying: true, used: 1, relayRefused: false))
+        #expect(!MPVPlayerController.shouldRetry(direct: false, wasPlaying: true, used: 1, relayRefused: true))
+        #expect(!MPVPlayerController.shouldRetry(direct: false, wasPlaying: false, used: 1, relayRefused: true))
+        #expect(MPVPlayerController.shouldRetry(direct: false, wasPlaying: false, used: 0, relayRefused: true))
+        #expect(MPVPlayerController.shouldRetry(direct: true, wasPlaying: true, used: 0, relayRefused: true))
+    }
 }
 
 /// M7j L15, L9.

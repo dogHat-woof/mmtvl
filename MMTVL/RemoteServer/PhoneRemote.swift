@@ -56,7 +56,8 @@ final class PhoneRemote {
     static let accessibilityMessage = "Allow Accessibility for MMTVL on the Mac to control other apps"
     static let nothingToTypeMessage = "Nothing to type into here"
     static let blockedAppMessage = "The phone can't control this app. Press Home"
-    static let pairingEndedMessage = "Too many wrong codes. Open Pair a Phone on the TV again"
+    /// Re-review L1: the typed code is off after `PairingCode.maxTotalFailures` wrong codes; the QR code still pairs.
+    static let codeLockedMessage = "Too many wrong codes. Scan the QR code on the TV with the phone's camera"
     static let tooFastMessage = "Too fast. Wait a second and try again"
     /// Security (pre-release review, high): one checked pairing attempt per address per second; quicker ones count
     /// as wrong codes without being checked.
@@ -66,7 +67,8 @@ final class PhoneRemote {
     @ObservationIgnored var onStatusChange: (() -> Void)?
 
     private(set) var pairing: PairingCode?
-    /// Pairing ended after `PairingCode.maxTotalFailures` wrong codes; cleared when Pair a Phone opens or closes.
+    /// Pairing expired (`PairingCode.lifetime`; found by the next attempt); cleared when Pair a Phone opens or closes.
+    /// Re-review L1: wrong codes never end pairing, they only turn the typed code off (`PairingCode.isCodeLocked`).
     private(set) var pairingEnded = false
     /// Name of the last phone paired during the current pairing; cleared when pairing starts or ends.
     private(set) var lastPairedName: String?
@@ -263,7 +265,12 @@ final class PhoneRemote {
         }
         switch result {
         case .expired:
+            // Pair a Phone must be opened again; the page says so.
+            self.pairing = nil
+            pairingEnded = true
+            Self.logger.info("Pairing expired")
             transport.send(.pairFailed(Self.openPairingMessage), to: session)
+            onStatusChange?()
         case .rejected:
             self.pairing = pairing
             transport.send(.pairFailed(isTooSoon ? Self.tooFastMessage : "Wrong code"), to: session)
@@ -272,13 +279,16 @@ final class PhoneRemote {
             Self.logger.info("Pairing code rotated after \(PairingCode.maxFailures) wrong codes")
             transport.send(.pairFailed("Wrong code. A new code is on the TV"), to: session)
             onStatusChange?()
-        case .ended:
-            // Pair a Phone must be opened again; the page says so.
-            self.pairing = nil
-            pairingEnded = true
-            Self.logger.notice("Pairing ended after \(PairingCode.maxTotalFailures) wrong codes")
-            transport.send(.pairFailed(Self.pairingEndedMessage), to: session)
-            onStatusChange?()
+        case .codeLocked:
+            // Re-review L1: only the typed code stops working; the QR code's secret pairs until the pairing expires,
+            // so wrong codes from another device can't end the user's pairing. Pair a Phone says to scan the QR code.
+            let wasLocked = self.pairing?.isCodeLocked ?? false
+            self.pairing = pairing
+            transport.send(.pairFailed(Self.codeLockedMessage, codeLocked: true), to: session)
+            if !wasLocked {
+                Self.logger.notice("Pairing code turned off after \(PairingCode.maxTotalFailures) wrong codes; the QR code still pairs")
+                onStatusChange?()
+            }
         case .accepted:
             let token = environment.makeToken()
             let phone = PairedPhone(id: UUID().uuidString, name: Self.cleanName(name),

@@ -428,8 +428,9 @@ struct PhoneRemoteTests {
 
     // MARK: Pairing brute force (security, pre-release review, high)
 
-    /// 20,000 guesses cycling 0000…9999 (twice) over one socket, with random codes: never paired, and pairing ends at
-    /// the cap. Spaced a second apart, so every guess is checked until the cap.
+    /// 20,000 guesses cycling 0000…9999 (twice) over one socket, with random codes: never paired. The code is off
+    /// from the cap on (re-review L1), and the pairing still expires after its lifetime. Spaced a second apart, so
+    /// every guess is checked.
     @Test func twentyThousandGuessesNeverPair() {
         recorder.randomCodes = true
         remote.setPairing(true)
@@ -438,17 +439,19 @@ struct PhoneRemoteTests {
             pair(String(format: "%04d", attempt % 10_000))
         }
         let sent = transport.messages(to: 1)
+        let locked = ServerMessage.pairFailed(PhoneRemote.codeLockedMessage, codeLocked: true)
         #expect(!sent.contains { if case .paired = $0 { true } else { false } })
         #expect(store.load().isEmpty)
+        #expect(sent.firstIndex(of: locked) == PairingCode.maxTotalFailures - 1)
+        // Expired, not ended by the wrong codes.
         #expect(remote.pairing == nil)
         #expect(remote.pairingEnded)
-        #expect(sent.count(where: { $0 == .pairFailed(PhoneRemote.pairingEndedMessage) }) == 1)
-        #expect(sent.firstIndex(of: .pairFailed(PhoneRemote.pairingEndedMessage)) == PairingCode.maxTotalFailures - 1)
         #expect(sent.last == .pairFailed(PhoneRemote.openPairingMessage))
     }
 
-    /// The same, all at once: after the first, guesses aren't checked (too fast) but count, so pairing ends at the cap.
-    @Test func rapidGuessesCountWithoutBeingChecked() {
+    /// The same, all at once: after the first, guesses aren't checked (too fast) but count, so the code turns off at
+    /// the cap; the pairing and its QR secret stay (re-review L1).
+    @Test func rapidGuessesCountWithoutBeingChecked() throws {
         recorder.randomCodes = true
         remote.setPairing(true)
         for attempt in 0..<20_000 {
@@ -456,9 +459,49 @@ struct PhoneRemoteTests {
         }
         let sent = transport.messages(to: 1)
         #expect(!sent.contains { if case .paired = $0 { true } else { false } })
-        #expect(remote.pairingEnded)
+        #expect(store.load().isEmpty)
         #expect(sent[1] == .pairFailed(PhoneRemote.tooFastMessage))
-        #expect(sent[PairingCode.maxTotalFailures - 1] == .pairFailed(PhoneRemote.pairingEndedMessage))
+        #expect(sent[PairingCode.maxTotalFailures - 1] == .pairFailed(PhoneRemote.codeLockedMessage, codeLocked: true))
+        #expect(!remote.pairingEnded)
+        let secret = try #require(remote.pairing?.secret)
+        recorder.now += 1
+        pair(secret, from: 1)
+        #expect(transport.messages(to: 1).last == status())
+        #expect(store.load().count == 1)
+    }
+
+    /// Re-review L1: a LAN peer's 10 quick wrong codes (1 checked, 9 throttled) turn the typed code off but don't end
+    /// pairing: a correct 4-digit code is refused, wrong secrets count but change nothing, and the QR code's secret
+    /// still pairs.
+    @Test func wrongCodesFromAPeerDontEndThePairing() throws {
+        transport.hosts = [1: "10.0.0.66", 2: "10.0.0.7"]
+        remote.setPairing(true)
+        let changesBefore = recorder.statusChanges
+        for _ in 0..<PairingCode.maxTotalFailures {
+            pair("0000", from: 1)
+        }
+        let locked = ServerMessage.pairFailed(PhoneRemote.codeLockedMessage, codeLocked: true)
+        #expect(transport.messages(to: 1).last == locked)
+        #expect(remote.pairing?.isCodeLocked == true)
+        #expect(!remote.pairingEnded)
+        // One for the rotation at 5, one for the lock at 10.
+        #expect(recorder.statusChanges == changesBefore + 2)
+
+        let code = try #require(remote.pairing?.code)
+        let secret = try #require(remote.pairing?.secret)
+        pair(code, from: 2)
+        #expect(transport.messages(to: 2) == [locked])
+        recorder.now += 1
+        pair(String(repeating: "f", count: 32), from: 1)
+        #expect(transport.messages(to: 1).last == locked)
+        #expect(remote.pairing?.secret == secret)
+        #expect(recorder.statusChanges == changesBefore + 2)
+
+        recorder.now += 1
+        pair(secret, from: 2)
+        #expect(transport.messages(to: 2).suffix(2) == [.paired(token: "tok1"), status()])
+        #expect(store.load().count == 1)
+        #expect(transport.authenticated == [2])
     }
 
     /// The throttle is per address: a right code too soon after a wrong one fails unchecked; a second later it pairs.
@@ -475,7 +518,7 @@ struct PhoneRemoteTests {
         #expect(transport.messages(to: 2).last == status())
     }
 
-    /// The QR code's secret pairs; after the cap ends pairing, Pair a Phone opened again starts fresh.
+    /// The QR code's secret pairs; once the pairing expires it doesn't, and Pair a Phone opened again starts fresh.
     @Test func secretPairsAndReopeningRestarts() throws {
         remote.setPairing(true)
         let secret = try #require(remote.pairing?.secret)
@@ -484,18 +527,17 @@ struct PhoneRemoteTests {
 
         remote.setPairing(false)
         remote.setPairing(true)
-        for _ in 0..<PairingCode.maxTotalFailures {
-            recorder.now += 1
-            pair("0000", from: 2)
-        }
-        #expect(remote.pairingEnded)
-        recorder.now += 1
-        pair(secret, from: 2)
+        let second = try #require(remote.pairing?.secret)
+        recorder.now += PairingCode.lifetime
+        pair(second, from: 2)
         #expect(transport.messages(to: 2).last == .pairFailed(PhoneRemote.openPairingMessage))
+        #expect(remote.pairingEnded)
+        #expect(remote.pairing == nil)
         remote.setPairing(false)
         #expect(!remote.pairingEnded)
         remote.setPairing(true)
         #expect(remote.pairing != nil)
+        recorder.now += 1
         pair(remote.pairing!.code, from: 2)
         #expect(transport.messages(to: 2).contains(.paired(token: "tok2")))
     }

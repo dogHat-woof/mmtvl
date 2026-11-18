@@ -4,6 +4,8 @@ import os
 /// M7c L29: the provider's stream URL answers with a redirect (~0.5 s of server time) to its CDN, and mpv's stream
 /// layer and ffmpeg's HLS demuxer would each follow it. MMTVL follows it once with URLSession and remembers the CDN
 /// address for `lifetime`, so a zap to a channel resolved ahead of time skips it entirely. Never logs URLs.
+/// Re-review L2: each redirect hop is judged by `RelayURLPolicy` with the M3U entry's own URL as the stream, so a
+/// redirect to the Mac or a LAN host other than the entry's never becomes the stream's (and the relay's) own host.
 final class StreamResolver {
     typealias Resolve = @Sendable (URL) async throws -> URL
 
@@ -52,8 +54,14 @@ final class StreamResolver {
         let started = ContinuousClock.now
         let task = Task { try? await resolveRedirect(url) }
         inFlight[url] = task
-        let resolved = await task.value
+        var resolved = await task.value
         inFlight[url] = nil
+        // Re-review L2: the address must be one the relay would fetch for the entry (`liveResolve` already stops at
+        // such a hop; this also holds for any other resolver).
+        if let target = resolved, target != url, !RelayURLPolicy.allows(target, stream: url) {
+            logger.notice("Refused a stream redirect from \(url.host() ?? "?", privacy: .public) to \(target.host() ?? "no host", privacy: .public)")
+            resolved = nil
+        }
         if let resolved {
             cache[url] = (resolved, now())
             let elapsed = ContinuousClock.now - started
@@ -67,9 +75,17 @@ final class StreamResolver {
 
     /// Follows redirects and stops at the final response's headers (the body isn't read). Non-2xx is a failure.
     static let liveResolve: Resolve = { url in
+        try await liveResolve(url, session: session)
+    }
+
+    /// `liveResolve` on `session` (tests give a stubbed one). Re-review L2: a redirect is followed only where
+    /// `RelayURLPolicy` allows it for the entry `url` (`HLSRelay.RedirectGuard`); a refused one ends with the 3xx,
+    /// a failure, so the entry stays unresolved.
+    nonisolated static func liveResolve(_ url: URL, session: URLSession) async throws -> URL {
+        guard RelayURLPolicy.isWebURL(url) else { throw URLError(.unsupportedURL) }
         var request = URLRequest(url: url)
         request.timeoutInterval = 10
-        let (bytes, response) = try await session.bytes(for: request)
+        let (bytes, response) = try await session.bytes(for: request, delegate: HLSRelay.RedirectGuard(stream: url))
         bytes.task.cancel()
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), let final = http.url else {
             throw URLError(.badServerResponse)

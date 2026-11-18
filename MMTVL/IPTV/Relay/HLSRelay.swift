@@ -18,6 +18,8 @@ final class HLSRelay {
         var status: Int
         /// After redirects: relative URIs in a playlist resolve against it.
         var finalURL: URL
+        /// Re-review L2: a redirect `RelayURLPolicy` refused ended this fetch (`status` is the 3xx).
+        var refusedRedirect = false
     }
 
     /// GET `url`, a URL of the stream whose original URL is `stream` (redirects are judged against it).
@@ -49,6 +51,9 @@ final class HLSRelay {
     private var cacheOrder: [URL] = []
     private var cachedBytes = 0
     private var inFlight: [URL: Task<Upstream?, Never>] = [:]
+    /// Re-review L2: streams (original URLs) the relay refused a URI or a redirect for, and when; the player then
+    /// skips its direct retry (`refusedSomething(forStreamOf:)`). Kept `tokenIdleLifetime`.
+    private var refusedStreams: [URL: Date] = [:]
     private let fetchUpstream: Fetch
     private let now: () -> Date
 
@@ -144,6 +149,27 @@ final class HLSRelay {
         return "/r/\(token)/\(name.isEmpty ? "x" : String(name))"
     }
 
+    /// Re-review L2: the relay refused a URI or a redirect for the stream `upstream` belongs to (as `localURL` judges
+    /// it) in the last `tokenIdleLifetime`, so mpv mustn't fetch the stream directly either.
+    func refusedSomething(forStreamOf upstream: URL) -> Bool {
+        let stream = tokenByUpstream[upstream].flatMap { streamByToken[$0] } ?? upstream
+        guard let refusedAt = refusedStreams[stream] else { return false }
+        return now().timeIntervalSince(refusedAt) < Self.tokenIdleLifetime
+    }
+
+    /// Tests: whether `upstream` has a token (was registered).
+    func isRegistered(_ upstream: URL) -> Bool {
+        tokenByUpstream[upstream] != nil
+    }
+
+    private func noteRefusal(stream: URL) {
+        let date = now()
+        refusedStreams[stream] = date
+        if refusedStreams.count > Self.maxTokensBeforePrune {
+            refusedStreams = refusedStreams.filter { date.timeIntervalSince($0.value) < Self.tokenIdleLifetime }
+        }
+    }
+
     private func pruneTokens() {
         let cutoff = now().addingTimeInterval(-Self.tokenIdleLifetime)
         for (token, used) in tokenLastUsed where used < cutoff {
@@ -168,6 +194,7 @@ final class HLSRelay {
     func fetch(_ url: URL, stream: URL, startsStream: Bool = false) async -> Upstream? {
         guard RelayURLPolicy.allows(url, stream: stream) else {
             Self.logger.notice("Refused to fetch from \(url.host() ?? "no host", privacy: .public)")
+            noteRefusal(stream: stream)
             return nil
         }
         if let entry = cache[url] {
@@ -184,6 +211,7 @@ final class HLSRelay {
             Self.logger.info("Fetching from \(url.host() ?? "?", privacy: .public) failed")
             return nil
         }
+        if upstream.refusedRedirect { noteRefusal(stream: stream) }
         guard (200..<300).contains(upstream.status) else {
             Self.logger.info("\(url.host() ?? "?", privacy: .public) answered \(upstream.status)")
             return upstream
@@ -198,7 +226,13 @@ final class HLSRelay {
     /// starts at.
     private func prefetchFollowing(_ playlist: Upstream, stream: URL, startsStream: Bool) {
         let text = String(decoding: playlist.data, as: UTF8.self)
-        let allowed = { (url: URL) in self.inFlight[url] == nil && RelayURLPolicy.allows(url, stream: stream) }
+        let allowed = { (url: URL) in
+            guard RelayURLPolicy.allows(url, stream: stream) else {
+                self.noteRefusal(stream: stream)
+                return false
+            }
+            return self.inFlight[url] == nil
+        }
         switch HLSPlaylist.kind(of: text) {
         case .master:
             for url in HLSPlaylist.mediaPlaylists(in: text, base: playlist.finalURL) where allowed(url) {
@@ -311,7 +345,10 @@ final class HLSRelay {
             if HLSPlaylist.isPlaylist(upstream.data, contentType: upstream.contentType) {
                 // A URI the policy refuses is left out of the playlist; one the relay can't serve (stopped) goes direct.
                 let text = HLSPlaylist.rewrite(String(decoding: upstream.data, as: UTF8.self), base: upstream.finalURL) {
-                    guard RelayURLPolicy.allows($0, stream: stream) else { return nil }
+                    guard RelayURLPolicy.allows($0, stream: stream) else {
+                        self.noteRefusal(stream: stream)
+                        return nil
+                    }
                     return (self.localURL(for: $0, stream: stream) ?? $0).absoluteString
                 }
                 send(HTTPResponse.make(status: 200, reason: "OK", contentType: "application/vnd.apple.mpegurl",
@@ -356,10 +393,12 @@ final class HLSRelay {
         guard RelayURLPolicy.isWebURL(url) else { throw URLError(.unsupportedURL) }
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
-        let (data, response) = try await session.data(for: request, delegate: RedirectGuard(stream: stream))
+        let redirectGuard = RedirectGuard(stream: stream)
+        let (data, response) = try await session.data(for: request, delegate: redirectGuard)
         let http = response as? HTTPURLResponse
         return Upstream(data: data, contentType: http?.value(forHTTPHeaderField: "Content-Type"),
-                        status: http?.statusCode ?? 200, finalURL: response.url ?? url)
+                        status: http?.statusCode ?? 200, finalURL: response.url ?? url,
+                        refusedRedirect: redirectGuard.refused)
     }
 
     /// Security review item 5: a 3xx from an allowed CDN must not take the relay to the Mac or the LAN (or off
@@ -367,13 +406,18 @@ final class HLSRelay {
     nonisolated final class RedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
         private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "Relay")
         let stream: URL
+        private let refusal = OSAllocatedUnfairLock(initialState: false)
 
         init(stream: URL) { self.stream = stream }
+
+        /// Re-review L2: `follows` refused a redirect.
+        var refused: Bool { refusal.withLock { $0 } }
 
         /// Whether the relay follows a redirect to `target`.
         func follows(_ target: URL?) -> Bool {
             guard let target, RelayURLPolicy.allows(target, stream: stream) else {
                 Self.logger.notice("Refused redirect to \(target?.host() ?? "no host", privacy: .public)")
+                refusal.withLock { $0 = true }
                 return false
             }
             return true
