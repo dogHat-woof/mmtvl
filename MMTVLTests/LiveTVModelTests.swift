@@ -27,9 +27,7 @@ struct LiveTVModelTests {
         #expect(model.mode == .setupNeeded)
         #expect(model.handle(.down) == .handled)
         #expect(model.handle(.select) == .openSettings)
-        // M7m L1: Back doesn't leave; only Home does.
-        #expect(model.handle(.back) == .handled)
-        #expect(model.mode == .setupNeeded)
+        #expect(model.handle(.back) == .leave)
         #expect(player.played.isEmpty)
     }
 
@@ -46,17 +44,14 @@ struct LiveTVModelTests {
         #expect(player.played.isEmpty)
     }
 
-    /// M7m L1: Back while the channels load stays in Live TV.
-    @Test func backWhileLoadingDoesNothing() async throws {
-        let (model, player, fixture) = try makeModel(state: Self.watching)
+    @Test func backWhileLoadingLeaves() async throws {
+        let (model, _, fixture) = try makeModel(state: Self.watching)
         defer { fixture.cleanUp() }
         model.open()
         #expect(model.mode == .loading)
-        #expect(model.handle(.back) == .handled)
-        #expect(model.mode == .loading)
-        await model.pendingTask?.value
-        #expect(model.mode == .player)
-        #expect(player.played == [IPTVFixtures.streamURL(1)])
+        #expect(model.handle(.down) == .handled)
+        #expect(model.handle(.back) == .leave)
+        model.leave()
     }
 
     @Test func lastChannelResumes() async throws {
@@ -74,9 +69,7 @@ struct LiveTVModelTests {
         let model = LiveTVModel(player: FakePlayer(), makePlayer: { FakePlayer() }, library: fixture.library)
         await open(model)
         #expect(model.mode == .unavailable("The playlist has no channels"))
-        // M7m L1: Back doesn't leave; only Home does.
-        #expect(model.handle(.back) == .handled)
-        #expect(model.mode == .unavailable("The playlist has no channels"))
+        #expect(model.handle(.back) == .leave)
     }
 
     @Test func failedPlaylistIsUnavailableAndSelectRetries() async throws {
