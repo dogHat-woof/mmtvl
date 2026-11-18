@@ -44,14 +44,17 @@ struct LiveTVModelTests {
         #expect(player.played.isEmpty)
     }
 
-    @Test func backWhileLoadingLeaves() async throws {
-        let (model, _, fixture) = try makeModel(state: Self.watching)
+    /// M7m L1: Back while the channels load stays in Live TV.
+    @Test func backWhileLoadingDoesNothing() async throws {
+        let (model, player, fixture) = try makeModel(state: Self.watching)
         defer { fixture.cleanUp() }
         model.open()
         #expect(model.mode == .loading)
-        #expect(model.handle(.down) == .handled)
-        #expect(model.handle(.back) == .leave)
-        model.leave()
+        #expect(model.handle(.back) == .handled)
+        #expect(model.mode == .loading)
+        await model.pendingTask?.value
+        #expect(model.mode == .player)
+        #expect(player.played == [IPTVFixtures.streamURL(1)])
     }
 
     @Test func lastChannelResumes() async throws {

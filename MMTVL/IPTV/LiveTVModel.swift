@@ -458,7 +458,7 @@ final class LiveTVModel: LiveTVHosting {
             default: return .handled
             }
         case .loading:
-            return command == .back ? .leave : .handled
+            return .handled   // M7m L1 (D49): Back stays while loading (a stray press mustn't drop you out); only Home leaves.
         case .player:
             return handlePlayer(command)
         case .guide:
