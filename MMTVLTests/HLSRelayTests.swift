@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import MMTVL
 
@@ -18,7 +19,7 @@ struct HLSRelayTests {
         var fetchedOrigins: [String] { lock.withLock { hosts } }
 
         var fetch: HLSRelay.Fetch {
-            { [self] url, _ in
+            { [self] url, _, _ in
                 lock.withLock {
                     counts[url.path(), default: 0] += 1
                     hosts.append("\(url.scheme ?? "")://\(url.host() ?? "")")
@@ -237,7 +238,10 @@ struct HLSRelayTests {
                             "http://0.0.0.0/x", "http://0.1.2.3/x", "http://169.254.169.254/x",
                             "http://[fe80::1%25en0]/x", "http://100.64.0.1/x", "http://192.168.1.5/x",
                             "http://[fd00::5]/x", "http://[::ffff:127.0.0.1]/x", "http://other.local/x",
-                            "http://router/x", "http://255.255.255.255/x"] {
+                            "http://router/x", "http://255.255.255.255/x",
+                            // Security lows L-2: the Mac's own address in its IPv4-mapped form.
+                            "http://[::ffff:192.168.1.5]/x", "http://[::ffff:c0a8:105]/x",
+                            "http://[0:0:0:0:0:ffff:192.168.1.5]/x"] {
                 #expect(!allows(refused, entry), "\(entry) → \(refused)")
             }
         }
@@ -247,12 +251,174 @@ struct HLSRelayTests {
             #expect(!allows("http://192.168.1.20/x", entry), "\(entry)")
             #expect(!allows("http://[fd00::20]/x", entry), "\(entry)")
         }
-        // With the Mac's real addresses: none of its private ones is reachable from a LAN entry.
+        // With the Mac's real addresses: none of its private ones is reachable from a LAN entry, nor (security lows
+        // L-2) an IPv4 one in its IPv4-mapped form.
         for address in LANAddress.ownAddresses() where RelayURLPolicy.isPrivateLANAddress(address) {
             let host = address.contains(":") ? "[\(address)]" : address
             #expect(!RelayURLPolicy.allows(URL(string: "http://\(host)/x")!,
                                            stream: URL(string: "http://192.168.250.250/x")!))
+            if !address.contains(":") {
+                #expect(!RelayURLPolicy.allows(URL(string: "http://[::ffff:\(address)]/x")!,
+                                               stream: URL(string: "http://192.168.250.250/x")!))
+            }
         }
+    }
+
+    /// Security lows L-3: router and private-use names (".lan", ".home.arpa", ".internal") are internal, so a public
+    /// stream can't reach them; a LAN stream on such a name still uses its own host.
+    @Test func routerNamesAreInternal() {
+        let cdn = URL(string: "https://cdn.example/x")!
+        for name in ["router.lan", "ROUTER.LAN.", "nas.home.arpa", "gateway.internal", "a.b.internal"] {
+            #expect(RelayURLPolicy.isInternal(name), "\(name)")
+            #expect(!RelayURLPolicy.allows(URL(string: "http://\(name)/x")!, stream: cdn), "\(name)")
+        }
+        #expect(!RelayURLPolicy.isInternal("lan.example"))
+        #expect(!RelayURLPolicy.isInternal("internal.example.com"))
+        #expect(RelayURLPolicy.allows(URL(string: "http://nas.lan/seg.ts")!, stream: URL(string: "http://nas.lan/x")!))
+    }
+
+    /// Security lows L-1: LAN to LAN only along a chain that never left the LAN. A LAN entry redirecting to a public
+    /// CDN that redirects to a LAN device stays unresolved, the LAN device is never asked, and the guard given the CDN
+    /// as the referrer refuses; LAN → LAN → LAN still resolves. The entry's own host stays reachable.
+    @Test func aChainThatLeftTheLANReachesNoOtherLANDevice() async throws {
+        let entry = URL(string: "http://192.168.77.2:34400/stream/l1")!
+        let cdn = "https://cdn-l1.example/x"
+        let lanTarget = "http://192.168.77.30/x"
+        StubTunerProtocol.serve(entry.absoluteString, status: 302, headers: ["Location": cdn], body: Data())
+        StubTunerProtocol.serve(cdn, status: 302, headers: ["Location": lanTarget], body: Data())
+        StubTunerProtocol.serve(lanTarget, headers: ["Content-Type": "video/mp2t"], body: Data("ROUTER".utf8))
+        let resolver = StreamResolver(resolve: { try await StreamResolver.liveResolve($0, session: StubTunerProtocol.session()) })
+        #expect(await resolver.resolve(entry) == entry)
+        #expect(StubTunerProtocol.wasRequested(cdn))
+        #expect(!StubTunerProtocol.wasRequested(lanTarget))
+        let fetched = try await HLSRelay.liveFetch(entry, stream: entry, session: StubTunerProtocol.session())
+        #expect(fetched.status == 302)
+        #expect(fetched.refusedRedirect)
+        #expect(!fetched.stayedOnLAN)
+        #expect(!StubTunerProtocol.wasRequested(lanTarget))
+        let target = URL(string: lanTarget)
+        #expect(!HLSRelay.RedirectGuard(stream: entry).follows(target, from: URL(string: cdn)))
+        #expect(HLSRelay.RedirectGuard(stream: entry).follows(target, from: entry))
+        // One guard per fetch: once a hop was public, a later LAN referrer doesn't restore LAN to LAN.
+        let guardForChain = HLSRelay.RedirectGuard(stream: entry)
+        #expect(guardForChain.follows(URL(string: cdn), from: entry))
+        #expect(!guardForChain.follows(URL(string: "http://192.168.77.31/y"), from: URL(string: cdn)))
+        #expect(!guardForChain.follows(URL(string: "http://192.168.77.32/z"), from: URL(string: "http://192.168.77.31/y")))
+        #expect(!guardForChain.stayedOnLAN)
+        #expect(!HLSRelay.RedirectGuard(stream: entry, lanOnlySoFar: false).follows(target, from: entry))
+
+        // The policy itself.
+        #expect(!RelayURLPolicy.allows(URL(string: lanTarget)!, stream: entry, referrer: URL(string: cdn)))
+        #expect(!RelayURLPolicy.allows(URL(string: lanTarget)!, stream: entry, referrer: entry, lanOnlySoFar: false))
+        #expect(RelayURLPolicy.allows(URL(string: lanTarget)!, stream: entry, referrer: entry, lanOnlySoFar: true))
+        #expect(RelayURLPolicy.allows(URL(string: "http://192.168.77.2:34400/other")!, stream: entry,
+                                      referrer: URL(string: cdn), lanOnlySoFar: false))
+        #expect(RelayURLPolicy.allows(URL(string: "https://cdn-l1b.example/x")!, stream: entry,
+                                      referrer: URL(string: cdn), lanOnlySoFar: false))
+
+        // LAN → LAN → LAN resolves and fetches, and the chain stayed on the LAN.
+        let lanEntry = URL(string: "http://192.168.77.3:34400/stream/l1-lan")!
+        let hop = "http://192.168.77.31:5004/hop"
+        let tuner = "http://192.168.77.32:5004/auto/v5.1"
+        StubTunerProtocol.serve(lanEntry.absoluteString, status: 302, headers: ["Location": hop], body: Data())
+        StubTunerProtocol.serve(hop, status: 302, headers: ["Location": tuner], body: Data())
+        StubTunerProtocol.serve(tuner, headers: ["Content-Type": "video/mp2t"], body: Data("TS".utf8))
+        #expect(await resolver.resolve(lanEntry).absoluteString == tuner)
+        let lanFetched = try await HLSRelay.liveFetch(lanEntry, stream: lanEntry, session: StubTunerProtocol.session())
+        #expect(lanFetched.status == 200)
+        #expect(lanFetched.stayedOnLAN)
+        #expect(!lanFetched.refusedRedirect)
+    }
+
+    /// Security lows L-1 in the relay's playlists: a LAN stream's URIs reach another LAN device only while every
+    /// playlist that led to them was on the LAN. A master whose fetch ended on a public host, and a public media
+    /// playlist a LAN master names, have their LAN URIs left out and never fetched; a LAN master's LAN media playlist
+    /// and its LAN segment are rewritten and prefetched.
+    @Test func relayPlaylistsReachOtherLANDevicesOnlyOnALANChain() async throws {
+        let movedMaster = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=1
+        http://192.168.213.20:5004/a/lan.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=2
+        https://cdn-l1.example/a/media.m3u8
+        """
+        let lanMaster = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=1
+        http://192.168.213.20:5004/b/lan.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=2
+        https://cdn-l1.example/b/media.m3u8
+        """
+        let publicMedia = """
+        #EXTM3U
+        #EXT-X-TARGETDURATION:5
+        #EXTINF:5.0,
+        http://192.168.213.21/b/seg1.ts
+        #EXTINF:5.0,
+        https://cdn-l1.example/b/seg2.ts
+        #EXT-X-ENDLIST
+        """
+        let lanMedia = """
+        #EXTM3U
+        #EXT-X-TARGETDURATION:5
+        #EXTINF:5.0,
+        http://192.168.213.22/b/seg1.ts
+        #EXT-X-ENDLIST
+        """
+        // URL → (body, final URL after the fetcher's redirects).
+        let served: [String: (String, String?)] = [
+            "http://192.168.213.9:34400/a/master.m3u8": (movedMaster, "https://cdn-l1.example/a/master.m3u8"),
+            "http://192.168.213.9:34400/b/master.m3u8": (lanMaster, nil),
+            "https://cdn-l1.example/a/media.m3u8": (HLSPlaylistTests.media, nil),
+            "https://cdn-l1.example/b/media.m3u8": (publicMedia, nil),
+            "http://192.168.213.20:5004/b/lan.m3u8": (lanMedia, nil),
+            "http://192.168.213.22/b/seg1.ts": ("LAN-SEG", nil),
+            "https://cdn-l1.example/b/seg2.ts": ("CDN-SEG", nil),
+        ]
+        let log = OSAllocatedUnfairLock<[String]>(initialState: [])
+        let relay = HLSRelay(fetch: { url, _, _ in
+            log.withLock { $0.append(url.absoluteString) }
+            guard let entry = served[url.absoluteString] else { throw URLError(.fileDoesNotExist) }
+            let (body, final) = entry
+            let type = url.pathExtension == "m3u8" ? "application/vnd.apple.mpegurl" : "video/mp2t"
+            return HLSRelay.Upstream(data: Data(body.utf8), contentType: type, status: 200,
+                                     finalURL: URL(string: final ?? url.absoluteString)!)
+        })
+        relay.start()
+        defer { relay.stop() }
+        for _ in 0..<200 where relay.port == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let fetched = { log.withLock { $0 } }
+
+        // The master redirected to a public host: its LAN URI is left out.
+        let movedLocal = try #require(relay.localURL(for: URL(string: "http://192.168.213.9:34400/a/master.m3u8")!))
+        let (moved, movedStatus, _) = try await get(movedLocal)
+        #expect(movedStatus == 200)
+        #expect(!moved.contains("192.168.213.20"))
+        #expect(moved.components(separatedBy: "/r/").count == 2)
+        #expect(!relay.isRegistered(URL(string: "http://192.168.213.20:5004/a/lan.m3u8")!))
+
+        // A LAN master: its LAN media playlist and that playlist's LAN segment are relayed and prefetched.
+        let lanLocal = try #require(relay.localURL(for: URL(string: "http://192.168.213.9:34400/b/master.m3u8")!))
+        let (master, masterStatus, _) = try await get(lanLocal)
+        #expect(masterStatus == 200)
+        #expect(!master.contains("192.168.213.20"))
+        #expect(master.components(separatedBy: "/r/").count == 3)
+        #expect(relay.isRegistered(URL(string: "http://192.168.213.20:5004/b/lan.m3u8")!))
+        await settle { fetched().contains("http://192.168.213.22/b/seg1.ts") }
+        #expect(fetched().contains("http://192.168.213.22/b/seg1.ts"))
+
+        // The public media playlist that LAN master names: its LAN segment is left out, its CDN one relayed.
+        let mediaLocal = try #require(relay.localURL(for: URL(string: "https://cdn-l1.example/b/media.m3u8")!))
+        let (media, mediaStatus, _) = try await get(mediaLocal)
+        #expect(mediaStatus == 200)
+        #expect(!media.contains("192.168.213.21"))
+        #expect(media.components(separatedBy: "/r/").count == 2)
+        #expect(!relay.isRegistered(URL(string: "http://192.168.213.21/b/seg1.ts")!))
+        #expect(relay.refusedSomething(forStreamOf: URL(string: "http://192.168.213.9:34400/b/master.m3u8")!))
+
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(!fetched().contains("http://192.168.213.20:5004/a/lan.m3u8"))
+        #expect(!fetched().contains("http://192.168.213.21/b/seg1.ts"))
     }
 
     /// Pre-release lows (c): the relay's redirect guard and the stream resolver agree with the policy: a LAN entry
@@ -355,8 +521,9 @@ struct HLSRelayTests {
         #expect(await lying.resolve(entry) == entry)
         #expect(lying.cached(entry) == nil)
 
-        let relay = HLSRelay(fetch: { url, stream in
-            try await HLSRelay.liveFetch(url, stream: stream, session: StubTunerProtocol.session())
+        let relay = HLSRelay(fetch: { url, stream, lanOnlySoFar in
+            try await HLSRelay.liveFetch(url, stream: stream, lanOnlySoFar: lanOnlySoFar,
+                                         session: StubTunerProtocol.session())
         })
         relay.start()
         defer { relay.stop() }

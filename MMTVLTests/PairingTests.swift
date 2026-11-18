@@ -15,6 +15,18 @@ struct PairingTests {
         #expect(code.check("1234", now: start + PairingCode.lifetime + 1, makeCode: { "5678" }) == .expired)
     }
 
+    /// Security lows L-5: an attempt that isn't a 4-digit code is compared with the secret only and never counts.
+    @Test func secretChecksDontCount() {
+        let code = PairingCode(code: "1234", secret: "s3cret", expires: start + PairingCode.lifetime)
+        for _ in 0..<100 {
+            #expect(code.checkSecret(String(repeating: "f", count: 32), now: start) == .rejected)
+        }
+        #expect(code.checkSecret("1234", now: start) == .rejected)
+        #expect(code.checkSecret("s3cret", now: start) == .accepted)
+        #expect(code.checkSecret("s3cret", now: start + PairingCode.lifetime) == .expired)
+        #expect(code.failures == 0 && code.totalFailures == 0)
+    }
+
     @Test func fifthWrongCodeRotates() {
         var code = PairingCode(code: "1234", secret: "s", expires: start + PairingCode.lifetime)
         for failures in 1...4 {

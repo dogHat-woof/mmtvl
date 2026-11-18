@@ -4,13 +4,17 @@ import Foundation
 /// Which URLs the HLS relay registers, rewrites into a playlist and fetches, and which redirects it and the stream
 /// resolver follow (pre-release security review, item 5). Only http and https URLs with a host. A host on the Mac or
 /// the LAN (loopback, link-local, private or shared IPv4, IPv6 loopback, link-local or unique local, "localhost",
-/// ".local" and dotless names) only when the stream's own URL is on that same host, so a LAN IPTV server still plays
-/// but a playlist can't make MMTVL fetch from the Mac or other LAN devices. Pre-release lows (c): a stream whose own
-/// host is itself on the LAN (an RFC 1918 or unique local address, or a LAN name: ".local", ".lan", ".home.arpa",
-/// dotless) may also reach another LAN device by its private address (RFC 1918 or unique local; never loopback,
-/// link-local, 0/8, a name, or one of the Mac's own addresses), e.g. a Threadfin/xTeVe proxy redirecting to a tuner.
-/// A public stream still never reaches an internal host. Names are judged as written: a public name that resolves to
-/// a LAN address isn't caught. Pure, apart from reading the Mac's own addresses (injectable).
+/// ".local", ".lan", ".home.arpa", ".internal" and dotless names) only when the stream's own URL is on that same host,
+/// so a LAN IPTV server still plays but a playlist can't make MMTVL fetch from the Mac or other LAN devices.
+/// Pre-release lows (c): a stream whose own host is itself on the LAN (an RFC 1918 or unique local address, or a LAN
+/// name: ".local", ".lan", ".home.arpa", dotless) may also reach another LAN device by its private address (RFC 1918 or
+/// unique local, in any literal form; never loopback, link-local, 0/8, a name, or one of the Mac's own addresses), e.g.
+/// a Threadfin/xTeVe proxy redirecting to a tuner, but only along a chain that has stayed on the LAN: the URL that
+/// named the target (the redirecting URL, or the playlist the URI is in) and every hop before it back to the stream
+/// must be LAN hosts (security lows L-1). Once a chain has passed a public host, it reaches no internal host but the
+/// stream's own, and a public stream reaches no internal host at all, by address or by LAN name. Names are judged as
+/// written: a public name that resolves to a LAN address isn't caught. Pure, apart from reading the Mac's own
+/// addresses (injectable).
 nonisolated enum RelayURLPolicy {
     /// http or https with a non-empty host.
     static func isWebURL(_ url: URL) -> Bool {
@@ -18,17 +22,28 @@ nonisolated enum RelayURLPolicy {
         return host(of: url) != nil
     }
 
-    /// `url` may be fetched for the stream whose original (first registered) URL is `stream`. `ownAddresses`: the
-    /// Mac's interface addresses (read only when a LAN stream reaches another LAN address).
-    static func allows(_ url: URL, stream: URL,
+    /// `url` may be fetched for the stream whose original (first registered) URL is `stream`. Security lows L-1:
+    /// `referrer` is the URL that named `url` (the one that redirected to it, or the playlist it's listed in; nil: the
+    /// stream itself), and `lanOnlySoFar` says whether every URL from the stream to the referrer was a LAN host
+    /// (`isLANHop`); a LAN-to-LAN step needs both. `ownAddresses`: the Mac's interface addresses (read only when a LAN
+    /// stream reaches another LAN address).
+    static func allows(_ url: URL, stream: URL, referrer: URL? = nil, lanOnlySoFar: Bool = true,
                        ownAddresses: () -> [String] = LANAddress.ownAddresses) -> Bool {
         guard isWebURL(url), isWebURL(stream), let urlHost = host(of: url) else { return false }
         guard isInternal(urlHost) else { return true }
         guard let streamHost = host(of: stream) else { return false }
         if sameHost(urlHost, streamHost) { return true }
-        // Pre-release lows (c): LAN to LAN, by private address only, never to the Mac itself.
-        guard isLANStreamHost(streamHost), isPrivateLANAddress(urlHost) else { return false }
+        // Pre-release lows (c): LAN to LAN, by private address only, never to the Mac itself. Security lows L-1: only
+        // while the chain from the stream to the referrer has stayed on the LAN.
+        guard lanOnlySoFar, isLANStreamHost(streamHost), isPrivateLANAddress(urlHost) else { return false }
+        if let referrer, !isLANHop(referrer) { return false }
         return !ownAddresses().contains { sameHost($0, urlHost) }
+    }
+
+    /// Security lows L-1: `url` is on a LAN host (`isLANStreamHost`), so a chain through it stays LAN-only.
+    static func isLANHop(_ url: URL) -> Bool {
+        guard isWebURL(url), let host = host(of: url) else { return false }
+        return isLANStreamHost(host)
     }
 
     /// Pre-release lows (c): a stream host on the LAN: an RFC 1918 or unique local address (not loopback, link-local
@@ -57,13 +72,16 @@ nonisolated enum RelayURLPolicy {
         return mapped && isRFC1918(Array(bytes[12..<16]))
     }
 
-    /// Loopback, link-local, private or unspecified addresses, and names that only resolve on the Mac or the LAN.
+    /// Loopback, link-local, private or unspecified addresses, and names that only resolve on the Mac or the LAN:
+    /// "localhost", ".localhost", ".local", dotless, and (security lows L-3, as `isLANStreamHost` counts them) ".lan",
+    /// ".home.arpa" (RFC 8375) and ".internal" (the ICANN private-use name).
     static func isInternal(_ host: String) -> Bool {
         guard let host = LANAddress.normalized(host) else { return true }
         let address = withoutZone(host)
         if let bytes = ipv4(address) { return isInternal(ipv4: bytes) }
         if let bytes = ipv6(address) { return isInternal(ipv6: bytes) }
-        return host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".local") || !host.contains(".")
+        if host == "localhost" || !host.contains(".") { return true }
+        return [".localhost", ".local", ".lan", ".home.arpa", ".internal"].contains { host.hasSuffix($0) }
     }
 
     // MARK: - Private
@@ -73,12 +91,24 @@ nonisolated enum RelayURLPolicy {
         return host
     }
 
-    /// The same address in any literal form, or the same name.
+    /// The same address in any literal form, or the same name. Security lows L-2: an IPv4-mapped ("::ffff:a.b.c.d")
+    /// or IPv4-compatible ("::a.b.c.d") IPv6 address is the same as its IPv4 address.
     private static func sameHost(_ a: String, _ b: String) -> Bool {
         guard let a = LANAddress.normalized(a), let b = LANAddress.normalized(b) else { return false }
-        if let x = ipv4(withoutZone(a)), let y = ipv4(withoutZone(b)) { return x == y }
-        if let x = ipv6(withoutZone(a)), let y = ipv6(withoutZone(b)) { return x == y && zone(a) == zone(b) }
+        if let x = canonicalAddress(a), let y = canonicalAddress(b) { return x == y }
         return a == b
+    }
+
+    /// An address literal as bytes: IPv4 (4 bytes) for an IPv4 address and an IPv4-mapped or -compatible IPv6 one
+    /// (not "::" or "::1"), else IPv6 (16) with its zone. nil for a name.
+    private static func canonicalAddress(_ host: String) -> (bytes: [UInt8], zone: String?)? {
+        let address = withoutZone(host)
+        if let bytes = ipv4(address) { return (bytes, nil) }
+        guard let bytes = ipv6(address) else { return nil }
+        let mapped = bytes[10] == 0xFF && bytes[11] == 0xFF
+        let compatible = bytes[10] == 0 && bytes[11] == 0 && !(bytes[12..<15].allSatisfy { $0 == 0 } && bytes[15] <= 1)
+        if bytes[0..<10].allSatisfy({ $0 == 0 }), mapped || compatible { return (Array(bytes[12..<16]), nil) }
+        return (bytes, zone(host))
     }
 
     private static func isRFC1918(_ bytes: [UInt8]) -> Bool {

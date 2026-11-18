@@ -25,7 +25,9 @@ final class RemoteServer: RemoteTransport {
     static let maxSessions = 8
     /// Sessions that haven't sent a good hello or pair yet: at most this many per address, and in all (re-review L3: a
     /// full pool closes a pending session for a new one; pre-release lows (b): the oldest of the address with the most
-    /// waiting; `PendingPool`). An IPv6 address counts by its /64 (`PeerAddress`).
+    /// waiting, an IPv6 address counting by its /64 there; `PendingPool`). Security lows L-4: the per-address limit is
+    /// by the full address (`PeerAddress.full`), so phones sharing a /64 don't share it, and an address at the limit
+    /// has its own oldest waiting socket closed for the new one.
     static let maxPendingPerHost = 3
     static let maxPending = 16
     /// Pre-release lows (b): new sockets per address (IPv6: per /64) per second; more are closed before anything else.
@@ -71,6 +73,8 @@ final class RemoteServer: RemoteTransport {
         var connection: NWConnection
         /// The peer's address key (`PeerAddress.key`); nil when the endpoint isn't host and port. Never logged.
         var host: String?
+        /// Security lows L-4: the peer's full address (`PeerAddress.full`), for the per-address pending limit.
+        var address: String?
         var isAuthenticated = false
     }
 
@@ -340,6 +344,7 @@ final class RemoteServer: RemoteTransport {
 
     private func acceptSocket(_ connection: NWConnection) {
         let host = Self.host(of: connection.endpoint)
+        let address = Self.address(of: connection.endpoint)
         // Pre-release lows (b): an address opening sockets faster than a phone ever would is refused before it can
         // take a pending slot.
         guard connectionRate.allows(host, now: Date()) else {
@@ -352,12 +357,17 @@ final class RemoteServer: RemoteTransport {
             connection.cancel()
             return
         }
-        let entries = sessions.map { PendingPool.Entry(id: $0.key, host: $0.value.host, isAuthenticated: $0.value.isAuthenticated) }
-        switch PendingPool.admit(host: host, sessions: entries, maxPending: maxPending, maxPendingPerHost: maxPendingPerHost) {
-        case .refuse:
-            Self.logger.info("Refused a phone connection: too many from its address waiting to sign in")
-            connection.cancel()
-            return
+        let entries = sessions.map {
+            PendingPool.Entry(id: $0.key, host: $0.value.host, address: $0.value.address,
+                              isAuthenticated: $0.value.isAuthenticated)
+        }
+        switch PendingPool.admit(host: host, address: address, sessions: entries, maxPending: maxPending,
+                                 maxPendingPerHost: maxPendingPerHost) {
+        case .acceptReplacing(let oldest):
+            // Security lows L-4: the address's own oldest waiting socket makes way, so a phone that left sockets
+            // behind (or one sharing nothing but a /64 with a flooder) still gets in.
+            Self.logger.info("Closed a phone connection waiting to sign in: \(self.maxPendingPerHost) waiting from its address")
+            endSession(oldest)
         case .acceptEvicting(let oldest):
             // Re-review L3, pre-release lows (b): a peer with many addresses can't hold every pending slot and keep a
             // phone out; the one closed is from the address with the most waiting, not the phone's.
@@ -368,7 +378,7 @@ final class RemoteServer: RemoteTransport {
         }
         let id = nextSessionID
         nextSessionID += 1
-        sessions[id] = Session(connection: connection, host: host)
+        sessions[id] = Session(connection: connection, host: host, address: address)
         connection.stateUpdateHandler = { [weak self, weak connection] newState in
             MainActor.assumeIsolated {
                 switch newState {
@@ -396,6 +406,12 @@ final class RemoteServer: RemoteTransport {
     private static func host(of endpoint: NWEndpoint) -> String? {
         guard case .hostPort(let host, _) = endpoint else { return nil }
         return PeerAddress.key("\(host)")
+    }
+
+    /// Security lows L-4: the endpoint's full address (`PeerAddress.full`).
+    private static func address(of endpoint: NWEndpoint) -> String? {
+        guard case .hostPort(let host, _) = endpoint else { return nil }
+        return PeerAddress.full("\(host)")
     }
 
     /// Re-armed after each message. Ends the session on an error, a close frame or EOF.
@@ -441,29 +457,46 @@ final class RemoteServer: RemoteTransport {
 }
 
 /// Which sockets that haven't signed in yet are kept (security, pre-release review, low; re-review L3; pre-release
-/// lows (b)). Hosts are address keys (`PeerAddress.key`). Pure.
+/// lows (b); security lows L-4). `host` is the address key (`PeerAddress.key`, an IPv6 address by its /64) and
+/// `address` the full address (`PeerAddress.full`). Pure.
 nonisolated enum PendingPool {
     struct Entry: Equatable, Sendable {
         var id: RemoteSessionID
         var host: String?
+        /// The full address; nil: the same as `host`.
+        var address: String?
         var isAuthenticated: Bool
+
+        init(id: RemoteSessionID, host: String?, address: String? = nil, isAuthenticated: Bool) {
+            self.id = id
+            self.host = host
+            self.address = address ?? host
+            self.isAuthenticated = isAuthenticated
+        }
     }
 
     enum Decision: Equatable, Sendable {
         case accept
         /// The pool is full: close this pending session and take the new one.
         case acceptEvicting(RemoteSessionID)
-        /// The new socket's address already has `maxPendingPerHost` waiting.
-        case refuse
+        /// Security lows L-4: the new socket's address already has `maxPendingPerHost` waiting: close its oldest
+        /// waiting session and take the new one.
+        case acceptReplacing(RemoteSessionID)
     }
 
     /// Authenticated sessions are never evicted (they don't count here; `RemoteServer.maxSessions` limits them).
-    /// Pre-release lows (b): a full pool closes the oldest pending session (the lowest id) of the address with the
-    /// most waiting (ties: the oldest of those addresses' sessions), so addresses flooding the pool churn among
-    /// themselves and a phone with one socket waiting keeps it.
-    static func admit(host: String?, sessions: [Entry], maxPending: Int, maxPendingPerHost: Int) -> Decision {
+    /// Security lows L-4: an address (in full; `address` nil: `host`) with `maxPendingPerHost` waiting has its oldest
+    /// one closed for the new one, never another address's. Pre-release lows (b): else a full pool closes the oldest
+    /// pending session (the lowest id) of the address key with the most waiting (ties: the oldest of those keys'
+    /// sessions), so addresses flooding the pool churn among themselves and a phone with one socket waiting keeps it.
+    static func admit(host: String?, address: String? = nil, sessions: [Entry], maxPending: Int,
+                      maxPendingPerHost: Int) -> Decision {
         let pending = sessions.filter { !$0.isAuthenticated }
-        guard pending.count(where: { $0.host == host }) < maxPendingPerHost else { return .refuse }
+        let address = address ?? host
+        let fromAddress = pending.filter { $0.address == address }
+        if fromAddress.count >= maxPendingPerHost, let oldest = fromAddress.map(\.id).min() {
+            return .acceptReplacing(oldest)
+        }
         guard pending.count >= maxPending else { return .accept }
         var counts: [String?: Int] = [:]
         for entry in pending { counts[entry.host, default: 0] += 1 }
@@ -500,22 +533,48 @@ nonisolated struct ConnectionRate: Sendable {
     }
 }
 
-/// Pre-release lows (b): the key a peer's address counts under for the pending pool, the connection rate and the
-/// pairing throttle. IPv4 as is; an IPv4-mapped IPv6 address as its IPv4; any other IPv6 address by its /64 (one host
-/// can use any address in its /64, so it counts once; all link-local peers share fe80::/64). Never logged.
+/// Pre-release lows (b): the key a peer's address counts under for the pending pool's eviction, the connection rate
+/// and the pairing throttle. IPv4 as is; an IPv4-mapped IPv6 address as its IPv4; any other IPv6 address by its /64
+/// (one host can use any address in its /64, so it counts once; all link-local peers share fe80::/64). Security lows
+/// L-4: `full`, the whole address, for the per-address pending limit. Never logged.
 nonisolated enum PeerAddress {
     static func key(_ host: String) -> String {
-        var text = host.trimmingCharacters(in: .whitespaces).lowercased()
-        if text.hasPrefix("["), text.hasSuffix("]") { text = String(text.dropFirst().dropLast()) }
-        let address = text.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? text
-        var v6 = in6_addr()
-        guard address.contains(":"), inet_pton(AF_INET6, address, &v6) == 1 else { return text }
-        let bytes = withUnsafeBytes(of: &v6) { Array($0) }
-        if bytes[0..<10].allSatisfy({ $0 == 0 }) && bytes[10] == 0xFF && bytes[11] == 0xFF {
-            return bytes[12..<16].map(String.init).joined(separator: ".")
-        }
+        guard let bytes = parse(host)?.bytes else { return plain(host) }
+        if let v4 = embeddedIPv4(bytes) { return v4 }
         let groups = stride(from: 0, to: 8, by: 2).map { String(format: "%x", UInt16(bytes[$0]) << 8 | UInt16(bytes[$0 + 1])) }
         return groups.joined(separator: ":") + "::/64"
+    }
+
+    /// Security lows L-4: the whole address, one spelling per address: IPv4 as is, IPv4-mapped IPv6 as its IPv4, any
+    /// other IPv6 address in all 8 groups, with its zone ("fe80:0:0:0:0:0:0:1%en0").
+    static func full(_ host: String) -> String {
+        guard let parsed = parse(host) else { return plain(host) }
+        let bytes = parsed.bytes
+        if let v4 = embeddedIPv4(bytes) { return v4 }
+        let groups = stride(from: 0, to: 16, by: 2).map { String(format: "%x", UInt16(bytes[$0]) << 8 | UInt16(bytes[$0 + 1])) }
+        let zone = parsed.text.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false).dropFirst().first
+        return groups.joined(separator: ":") + (zone.map { "%\($0)" } ?? "")
+    }
+
+    /// Lowercased, without brackets.
+    private static func plain(_ host: String) -> String {
+        var text = host.trimmingCharacters(in: .whitespaces).lowercased()
+        if text.hasPrefix("["), text.hasSuffix("]") { text = String(text.dropFirst().dropLast()) }
+        return text
+    }
+
+    /// An IPv6 literal: its plain text (zone kept) and its 16 bytes.
+    private static func parse(_ host: String) -> (text: String, bytes: [UInt8])? {
+        let text = plain(host)
+        let address = text.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? text
+        var v6 = in6_addr()
+        guard address.contains(":"), inet_pton(AF_INET6, address, &v6) == 1 else { return nil }
+        return (text, withUnsafeBytes(of: &v6) { Array($0) })
+    }
+
+    private static func embeddedIPv4(_ bytes: [UInt8]) -> String? {
+        guard bytes[0..<10].allSatisfy({ $0 == 0 }) && bytes[10] == 0xFF && bytes[11] == 0xFF else { return nil }
+        return bytes[12..<16].map(String.init).joined(separator: ".")
     }
 }
 

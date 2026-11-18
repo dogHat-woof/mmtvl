@@ -9,8 +9,9 @@ import os
 ///
 /// Only URLs MMTVL registered are served (by an opaque token), on the loopback interface only. Only http(s) URLs are
 /// registered, rewritten, fetched or redirected to, and a Mac or LAN host only on the stream's own host, or (pre-release
-/// lows (c)) another LAN device's private address when the stream itself is on the LAN (`RelayURLPolicy`). Never logs
-/// URLs or tokens (hosts and statuses only). Main queue throughout.
+/// lows (c)) another LAN device's private address when the stream itself is on the LAN and (security lows L-1) the
+/// chain that named it, redirects and playlists alike, never left the LAN (`RelayURLPolicy`). Never logs URLs or
+/// tokens (hosts and statuses only). Main queue throughout.
 final class HLSRelay {
     nonisolated struct Upstream: Sendable {
         var data: Data
@@ -20,10 +21,15 @@ final class HLSRelay {
         var finalURL: URL
         /// Re-review L2: a redirect `RelayURLPolicy` refused ended this fetch (`status` is the 3xx).
         var refusedRedirect = false
+        /// Security lows L-1: every URL this fetch went through (the URL, each redirect, `finalURL`) was a LAN host
+        /// (`RelayURLPolicy.isLANHop`); the relay then folds in the chain before the URL (`fetch`), so a URI in this
+        /// playlist may reach another LAN device only when this is true.
+        var stayedOnLAN = true
     }
 
     /// GET `url`, a URL of the stream whose original URL is `stream` (redirects are judged against it).
-    typealias Fetch = @Sendable (_ url: URL, _ stream: URL) async throws -> Upstream
+    /// `lanOnlySoFar`: every URL from the stream to the one that named `url` was a LAN host (security lows L-1).
+    typealias Fetch = @Sendable (_ url: URL, _ stream: URL, _ lanOnlySoFar: Bool) async throws -> Upstream
 
     static let shared = HLSRelay()
 
@@ -49,11 +55,20 @@ final class HLSRelay {
     /// The original URL of the stream each token's URL belongs to (`RelayURLPolicy.allows`).
     private var streamByToken: [String: URL] = [:]
     private var tokenByUpstream: [URL: String] = [:]
+    /// Security lows L-1: whether the chain that named each token's URL stayed on the LAN (false once any URL that
+    /// led to it, the same URL reached another way included, wasn't a LAN host).
+    private var lanChainByToken: [String: Bool] = [:]
     private var tokenLastUsed: [String: Date] = [:]
-    private var cache: [URL: (upstream: Upstream, storedAt: Date, isPlaylist: Bool)] = [:]
-    private var cacheOrder: [URL] = []
+    /// Security lows L-1: keyed by the URL and whether its chain stayed on the LAN, since a fetch on a LAN-only chain
+    /// may follow redirects (and give playlists) that one on a chain through a public host may not.
+    private struct FetchKey: Hashable {
+        var url: URL
+        var lanOnlySoFar: Bool
+    }
+    private var cache: [FetchKey: (upstream: Upstream, storedAt: Date, isPlaylist: Bool)] = [:]
+    private var cacheOrder: [FetchKey] = []
     private var cachedBytes = 0
-    private var inFlight: [URL: Task<Upstream?, Never>] = [:]
+    private var inFlight: [FetchKey: Task<Upstream?, Never>] = [:]
     /// Re-review L2: streams (original URLs) the relay refused a URI or a redirect for, and when; the player then
     /// skips its direct retry (`refusedSomething(forStreamOf:)`). Kept `tokenIdleLifetime`.
     private var refusedStreams: [URL: Date] = [:]
@@ -126,18 +141,23 @@ final class HLSRelay {
     /// The relay's address for `upstream` (a stream's own URL, unless it was already registered from a playlist), or
     /// nil while the relay isn't running or for a URL it doesn't relay (not http(s)); mpv then goes direct.
     func localURL(for upstream: URL) -> URL? {
-        let stream = tokenByUpstream[upstream].flatMap { streamByToken[$0] } ?? upstream
-        return localURL(for: upstream, stream: stream)
+        let token = tokenByUpstream[upstream]
+        let stream = token.flatMap { streamByToken[$0] } ?? upstream
+        let lanChain = token.flatMap { lanChainByToken[$0] } ?? true
+        return localURL(for: upstream, stream: stream, lanOnlySoFar: lanChain)
     }
 
-    /// nil when `RelayURLPolicy` refuses `upstream` for `stream`.
-    private func localURL(for upstream: URL, stream: URL) -> URL? {
-        guard let port, RelayURLPolicy.allows(upstream, stream: stream) else { return nil }
-        return URL(string: "http://127.0.0.1:\(port)\(localPath(for: upstream, stream: stream))")
+    /// nil when `RelayURLPolicy` refuses `upstream` for `stream` (`referrer`, `lanOnlySoFar`: the chain that named it).
+    private func localURL(for upstream: URL, stream: URL, referrer: URL? = nil, lanOnlySoFar: Bool) -> URL? {
+        guard let port,
+              RelayURLPolicy.allows(upstream, stream: stream, referrer: referrer, lanOnlySoFar: lanOnlySoFar)
+        else { return nil }
+        return URL(string: "http://127.0.0.1:\(port)\(localPath(for: upstream, stream: stream, lanOnlySoFar: lanOnlySoFar))")
     }
 
-    /// "/r/<token>/<the upstream's last path component>"; the name helps ffmpeg and logs, the token routes.
-    private func localPath(for upstream: URL, stream: URL) -> String {
+    /// "/r/<token>/<the upstream's last path component>"; the name helps ffmpeg and logs, the token routes. A URL
+    /// already registered keeps its token; its chain stays LAN-only only if this one is too (security lows L-1).
+    private func localPath(for upstream: URL, stream: URL, lanOnlySoFar: Bool) -> String {
         let token: String
         if let existing = tokenByUpstream[upstream] {
             token = existing
@@ -148,6 +168,7 @@ final class HLSRelay {
             streamByToken[token] = stream
             if upstreamByToken.count > Self.maxTokensBeforePrune { pruneTokens() }
         }
+        lanChainByToken[token] = (lanChainByToken[token] ?? true) && lanOnlySoFar
         tokenLastUsed[token] = now()
         let name = upstream.lastPathComponent.filter { $0.isLetter || $0.isNumber || "._-".contains($0) }.prefix(64)
         return "/r/\(token)/\(name.isEmpty ? "x" : String(name))"
@@ -179,6 +200,7 @@ final class HLSRelay {
         for (token, used) in tokenLastUsed where used < cutoff {
             if let url = upstreamByToken.removeValue(forKey: token) { tokenByUpstream[url] = nil }
             streamByToken[token] = nil
+            lanChainByToken[token] = nil
             tokenLastUsed[token] = nil
         }
     }
@@ -194,23 +216,32 @@ final class HLSRelay {
     /// Cached (fresh), joined with a fetch already running, or fetched. A master prefetches its media playlists, and
     /// those (`startsStream`) the segment ffmpeg starts at; ffmpeg's own playlist refreshes prefetch nothing. `stream`
     /// is the original URL of the stream `url` belongs to; a URL `RelayURLPolicy` refuses is never fetched (nil).
+    /// Security lows L-1: `lanOnlySoFar`, every URL from the stream to the one that named `url` was a LAN host; the
+    /// result's `stayedOnLAN` also covers `url`, its redirects and its final URL.
     @discardableResult
-    func fetch(_ url: URL, stream: URL, startsStream: Bool = false) async -> Upstream? {
-        guard RelayURLPolicy.allows(url, stream: stream) else {
+    func fetch(_ url: URL, stream: URL, lanOnlySoFar: Bool = true, startsStream: Bool = false) async -> Upstream? {
+        guard RelayURLPolicy.allows(url, stream: stream, lanOnlySoFar: lanOnlySoFar) else {
             Self.logger.notice("Refused to fetch from \(url.host() ?? "no host", privacy: .public)")
             noteRefusal(stream: stream)
             return nil
         }
-        if let entry = cache[url] {
+        // Past a host that isn't on the LAN the chain is broken whatever came before, so both keys fetch alike.
+        let key = FetchKey(url: url, lanOnlySoFar: lanOnlySoFar && RelayURLPolicy.isLANHop(url))
+        if let entry = cache[key] {
             let lifetime = entry.isPlaylist ? Self.playlistLifetime : Self.segmentLifetime
             if now().timeIntervalSince(entry.storedAt) < lifetime { return entry.upstream }
         }
-        if let task = inFlight[url] { return await task.value }
+        if let task = inFlight[key] { return await task.value }
         let fetchUpstream = fetchUpstream
-        let task = Task { try? await fetchUpstream(url, stream) }
-        inFlight[url] = task
+        let chain = key.lanOnlySoFar
+        let task = Task { () -> Upstream? in
+            guard var upstream = try? await fetchUpstream(url, stream, chain) else { return nil }
+            upstream.stayedOnLAN = chain && upstream.stayedOnLAN && RelayURLPolicy.isLANHop(upstream.finalURL)
+            return upstream
+        }
+        inFlight[key] = task
         let upstream = await task.value
-        inFlight[url] = nil
+        inFlight[key] = nil
         guard let upstream else {
             Self.logger.info("Fetching from \(url.host() ?? "?", privacy: .public) failed")
             return nil
@@ -221,37 +252,38 @@ final class HLSRelay {
             return upstream
         }
         let isPlaylist = HLSPlaylist.isPlaylist(upstream.data, contentType: upstream.contentType)
-        store(upstream, for: url, isPlaylist: isPlaylist)
+        store(upstream, for: key, isPlaylist: isPlaylist)
         if isPlaylist { prefetchFollowing(upstream, stream: stream, startsStream: startsStream) }
         return upstream
     }
 
     /// Master → its media playlists, in parallel; a media playlist reached from a master → the segment ffmpeg
-    /// starts at.
+    /// starts at. Security lows L-1: each URI is judged with the playlist as its referrer and the playlist's chain.
     private func prefetchFollowing(_ playlist: Upstream, stream: URL, startsStream: Bool) {
         let text = String(decoding: playlist.data, as: UTF8.self)
+        let chain = playlist.stayedOnLAN
         let allowed = { (url: URL) in
-            guard RelayURLPolicy.allows(url, stream: stream) else {
+            guard RelayURLPolicy.allows(url, stream: stream, referrer: playlist.finalURL, lanOnlySoFar: chain) else {
                 self.noteRefusal(stream: stream)
                 return false
             }
-            return self.inFlight[url] == nil
+            return self.inFlight[FetchKey(url: url, lanOnlySoFar: chain && RelayURLPolicy.isLANHop(url))] == nil
         }
         switch HLSPlaylist.kind(of: text) {
         case .master:
             for url in HLSPlaylist.mediaPlaylists(in: text, base: playlist.finalURL) where allowed(url) {
-                Task { await fetch(url, stream: stream, startsStream: true) }
+                Task { await fetch(url, stream: stream, lanOnlySoFar: chain, startsStream: true) }
             }
         case .media where startsStream:
             for url in HLSPlaylist.startSegments(in: text, base: playlist.finalURL) where allowed(url) {
-                Task { await fetch(url, stream: stream) }
+                Task { await fetch(url, stream: stream, lanOnlySoFar: chain) }
             }
         case .media, .unknown:
             break
         }
     }
 
-    private func store(_ upstream: Upstream, for url: URL, isPlaylist: Bool) {
+    private func store(_ upstream: Upstream, for url: FetchKey, isPlaylist: Bool) {
         if let old = cache[url] {
             cachedBytes -= old.upstream.data.count
             cacheOrder.removeAll { $0 == url }
@@ -336,9 +368,10 @@ final class HLSRelay {
         }
         tokenLastUsed[String(parts[1])] = now()
         let stream = streamByToken[String(parts[1])] ?? upstreamURL
+        let lanChain = lanChainByToken[String(parts[1])] ?? false
         let includeBody = head.method == "GET"
         Task {
-            guard let upstream = await fetch(upstreamURL, stream: stream) else {
+            guard let upstream = await fetch(upstreamURL, stream: stream, lanOnlySoFar: lanChain) else {
                 send(HTTPResponse.error(502, "Bad Gateway"), on: connection)
                 return
             }
@@ -348,12 +381,15 @@ final class HLSRelay {
             }
             if HLSPlaylist.isPlaylist(upstream.data, contentType: upstream.contentType) {
                 // A URI the policy refuses is left out of the playlist; one the relay can't serve (stopped) goes direct.
-                let text = HLSPlaylist.rewrite(String(decoding: upstream.data, as: UTF8.self), base: upstream.finalURL) {
-                    guard RelayURLPolicy.allows($0, stream: stream) else {
+                // Security lows L-1: judged with this playlist (its final URL) as the referrer, on its chain.
+                let referrer = upstream.finalURL, chain = upstream.stayedOnLAN
+                let text = HLSPlaylist.rewrite(String(decoding: upstream.data, as: UTF8.self), base: referrer) {
+                    guard RelayURLPolicy.allows($0, stream: stream, referrer: referrer, lanOnlySoFar: chain) else {
                         self.noteRefusal(stream: stream)
                         return nil
                     }
-                    return (self.localURL(for: $0, stream: stream) ?? $0).absoluteString
+                    let local = self.localURL(for: $0, stream: stream, referrer: referrer, lanOnlySoFar: chain)
+                    return (local ?? $0).absoluteString
                 }
                 send(HTTPResponse.make(status: 200, reason: "OK", contentType: "application/vnd.apple.mpegurl",
                                        body: Data(text.utf8), includeBody: includeBody), on: connection)
@@ -386,42 +422,67 @@ final class HLSRelay {
     // MARK: - Live fetch
 
     /// URLSession keeps connections to the CDN alive between requests; non-2xx comes back as its status.
-    static let liveFetch: Fetch = { url, stream in
-        try await liveFetch(url, stream: stream, session: session)
+    static let liveFetch: Fetch = { url, stream, lanOnlySoFar in
+        try await liveFetch(url, stream: stream, lanOnlySoFar: lanOnlySoFar, session: session)
     }
 
     /// `liveFetch` on `session` (tests give a stubbed one). A redirect is followed only to a URL `RelayURLPolicy`
-    /// allows for `stream`; a refused one ends the fetch with the 3xx itself.
-    nonisolated static func liveFetch(_ url: URL, stream: URL, session: URLSession) async throws -> Upstream {
+    /// allows for `stream` from the URL that redirected, on the chain so far (`lanOnlySoFar`, security lows L-1); a
+    /// refused one ends the fetch with the 3xx itself.
+    nonisolated static func liveFetch(_ url: URL, stream: URL, lanOnlySoFar: Bool = true,
+                                      session: URLSession) async throws -> Upstream {
         // URLSession also opens file: and other schemes; the relay only ever fetches http(s).
         guard RelayURLPolicy.isWebURL(url) else { throw URLError(.unsupportedURL) }
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
-        let redirectGuard = RedirectGuard(stream: stream)
+        let redirectGuard = RedirectGuard(stream: stream, lanOnlySoFar: lanOnlySoFar)
         let (data, response) = try await session.data(for: request, delegate: redirectGuard)
         let http = response as? HTTPURLResponse
+        let finalURL = response.url ?? url
         return Upstream(data: data, contentType: http?.value(forHTTPHeaderField: "Content-Type"),
-                        status: http?.statusCode ?? 200, finalURL: response.url ?? url,
-                        refusedRedirect: redirectGuard.refused)
+                        status: http?.statusCode ?? 200, finalURL: finalURL,
+                        refusedRedirect: redirectGuard.refused,
+                        stayedOnLAN: redirectGuard.stayedOnLAN && RelayURLPolicy.isLANHop(url)
+                            && RelayURLPolicy.isLANHop(finalURL))
     }
 
     /// Security review item 5: a 3xx from an allowed CDN must not take the relay to the Mac or the LAN (or off
-    /// http(s)). Logs the refused target's host only.
+    /// http(s)). Security lows L-1: each hop is judged with the URL that redirected as its referrer, and once a hop
+    /// wasn't a LAN host the rest of the chain reaches no other LAN device. One guard per fetch. Logs the refused
+    /// target's host only.
     nonisolated final class RedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
         private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "Relay")
+        private struct State {
+            var refused = false
+            var lanOnly: Bool
+        }
         let stream: URL
-        private let refusal = OSAllocatedUnfairLock(initialState: false)
+        private let state: OSAllocatedUnfairLock<State>
 
-        init(stream: URL) { self.stream = stream }
+        /// `lanOnlySoFar`: every URL from the stream to the one this fetch starts at was a LAN host.
+        init(stream: URL, lanOnlySoFar: Bool = true) {
+            self.stream = stream
+            state = OSAllocatedUnfairLock(initialState: State(lanOnly: lanOnlySoFar))
+        }
 
         /// Re-review L2: `follows` refused a redirect.
-        var refused: Bool { refusal.withLock { $0 } }
+        var refused: Bool { state.withLock { $0.refused } }
 
-        /// Whether the relay follows a redirect to `target`.
-        func follows(_ target: URL?) -> Bool {
-            guard let target, RelayURLPolicy.allows(target, stream: stream) else {
+        /// Security lows L-1: every referrer so far (and the chain before the fetch) was a LAN host.
+        var stayedOnLAN: Bool { state.withLock { $0.lanOnly } }
+
+        /// Whether the relay follows a redirect from `referrer` (the URL that answered with it; nil: the stream itself)
+        /// to `target`. A referrer that isn't a LAN host ends LAN-to-LAN steps for the rest of this chain.
+        func follows(_ target: URL?, from referrer: URL? = nil) -> Bool {
+            let lanOnly = state.withLock { state in
+                if let referrer, !RelayURLPolicy.isLANHop(referrer) { state.lanOnly = false }
+                return state.lanOnly
+            }
+            guard let target,
+                  RelayURLPolicy.allows(target, stream: stream, referrer: referrer, lanOnlySoFar: lanOnly)
+            else {
                 Self.logger.notice("Refused redirect to \(target?.host() ?? "no host", privacy: .public)")
-                refusal.withLock { $0 = true }
+                state.withLock { $0.refused = true }
                 return false
             }
             return true
@@ -430,7 +491,10 @@ final class HLSRelay {
         // The completion-handler form, like `HDHomeRunHTTP.RedirectBlocker`'s (the async one crashes Swift 6.4's SILGen).
         func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                         newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
-            completionHandler(follows(request.url) ? request : nil)
+            // The URL that answered with this redirect; with neither known, no LAN-to-LAN step.
+            let referrer = response.url ?? task.currentRequest?.url
+            if referrer == nil { state.withLock { $0.lanOnly = false } }
+            completionHandler(follows(request.url, from: referrer) ? request : nil)
         }
     }
 

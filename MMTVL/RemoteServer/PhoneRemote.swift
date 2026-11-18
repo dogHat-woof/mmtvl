@@ -61,8 +61,12 @@ final class PhoneRemote {
     static let tooFastMessage = "Too fast. Wait a second and try again"
     /// Security (pre-release review, high): one checked pairing attempt per address per second; quicker ones count
     /// as wrong codes without being checked. Pre-release lows (e): only typed 4-digit codes; the QR code's secret is
-    /// always checked at once (a wrong one still counts as a wrong code).
+    /// always checked at once. Security lows L-5: a wrong secret (any attempt that isn't 4 digits) isn't a wrong code.
     static let pairAttemptInterval: TimeInterval = 1
+    /// Security lows L-5: attempts that aren't 4-digit codes (the QR code's secret, or garbage) per session in
+    /// `secretAttemptWindow`; one more closes the session, unchecked.
+    static let maxSecretAttempts = 5
+    static let secretAttemptWindow: TimeInterval = 10
 
     /// Pairing started/rotated/ended, a phone paired, a session opened/closed or authenticated, forget-all.
     @ObservationIgnored var onStatusChange: (() -> Void)?
@@ -94,6 +98,8 @@ final class PhoneRemote {
         var lastAccessToast: Date?
         /// When this session last got the blocked-app toast for pointer messages.
         var lastBlockedToast: Date?
+        /// Security lows L-5: when this session's last attempts that weren't 4-digit codes came (`maxSecretAttempts`).
+        var secretAttempts: [Date] = []
     }
 
     /// L13: pointer messages arrive ~60 times a second; the toast repeats at most this often.
@@ -111,13 +117,19 @@ final class PhoneRemote {
     func receive(_ data: Data, from session: RemoteSessionID) {
         guard let message = ClientMessage.decode(data) else { return }
         var state = sessions[session] ?? Session()
-        defer { sessions[session] = state }
+        var closes = false
+        defer {
+            sessions[session] = state
+            // Security lows L-5: after the state is stored, so the transport's close (which ends the session's state
+            // through `sessionClosed`) has the last word.
+            if closes { transport.close(session) }
+        }
 
         switch message {
         case .hello(let token):
             hello(token, state: &state, session: session)
         case .pair(let code, let name):
-            pair(code, name: name, state: &state, session: session)
+            closes = pair(code, name: name, state: &state, session: session)
         case .command(let command):
             guard state.phoneID != nil else { return }
             // M7h step 12 (step 4 security low): the phone has no Power button; a raw `power` or `powerMenu` never
@@ -247,10 +259,12 @@ final class PhoneRemote {
         onStatusChange?()
     }
 
-    private func pair(_ code: String, name: String, state: inout Session, session: RemoteSessionID) {
+    /// Whether the session must be closed (security lows L-5: too many attempts that aren't 4-digit codes).
+    @discardableResult
+    private func pair(_ code: String, name: String, state: inout Session, session: RemoteSessionID) -> Bool {
         guard var pairing else {
             transport.send(.pairFailed(Self.openPairingMessage), to: session)
-            return
+            return false
         }
         // Security (pre-release review, high): one checked code per address (an IPv6 /64, `PeerAddress`) per second;
         // a quicker one is a failure without looking at the code. Pre-release lows (e): only 4-digit codes; the QR
@@ -262,7 +276,15 @@ final class PhoneRemote {
             && (lastPairAttempt[key].map { now.timeIntervalSince($0) < Self.pairAttemptInterval } ?? false)
         let result: PairingCode.Check
         if !isCode {
-            result = pairing.check(code, now: now, makeCode: environment.makeCode)
+            // Security lows L-5: compared with the secret only, never counted as a wrong code; more than
+            // `maxSecretAttempts` in `secretAttemptWindow` on one session closes it, unchecked.
+            state.secretAttempts.removeAll { now.timeIntervalSince($0) >= Self.secretAttemptWindow || $0 > now }
+            guard state.secretAttempts.count < Self.maxSecretAttempts else {
+                Self.logger.info("Closed a phone connection: too many pairing attempts")
+                return true
+            }
+            state.secretAttempts.append(now)
+            result = pairing.checkSecret(code, now: now)
         } else if isTooSoon {
             result = pairing.fail(now: now, makeCode: environment.makeCode)
         } else {
@@ -277,6 +299,9 @@ final class PhoneRemote {
             Self.logger.info("Pairing expired")
             transport.send(.pairFailed(Self.openPairingMessage), to: session)
             onStatusChange?()
+        case .rejected where !isCode && pairing.isCodeLocked:
+            // Security lows L-5: a wrong secret once the typed code is off: the page keeps saying to scan the QR code.
+            transport.send(.pairFailed(Self.codeLockedMessage, codeLocked: true), to: session)
         case .rejected:
             self.pairing = pairing
             transport.send(.pairFailed(isTooSoon ? Self.tooFastMessage : "Wrong code"), to: session)
@@ -317,6 +342,7 @@ final class PhoneRemote {
             sessions[session] = state
             onStatusChange?()
         }
+        return false
     }
 
     /// L5; M7h L3: the shared `ExternalRouter` (volume commands map to no key, so they do nothing here; power commands

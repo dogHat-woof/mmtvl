@@ -474,8 +474,8 @@ struct PhoneRemoteTests {
     }
 
     /// Re-review L1: a LAN peer's 10 quick wrong codes (1 checked, 9 throttled) turn the typed code off but don't end
-    /// pairing: a correct 4-digit code is refused, wrong secrets count but change nothing, and the QR code's secret
-    /// still pairs.
+    /// pairing: a correct 4-digit code is refused, a wrong secret changes nothing (and, security lows L-5, isn't
+    /// counted), and the QR code's secret still pairs.
     @Test func wrongCodesFromAPeerDontEndThePairing() throws {
         transport.hosts = [1: "10.0.0.66", 2: "10.0.0.7"]
         remote.setPairing(true)
@@ -558,14 +558,14 @@ struct PhoneRemoteTests {
     }
 
     /// Pre-release lows (e): the throttle is for typed codes only. A QR scan right after a wrong code from the same
-    /// address pairs; a wrong secret counts as a wrong code but is checked, never answered "Too fast".
+    /// address pairs; a wrong secret is checked, never answered "Too fast", and (security lows L-5) isn't a wrong code.
     @Test func qrScanRightAfterAWrongCodeStillPairs() throws {
         transport.hosts = [1: "10.0.0.7", 2: "10.0.0.7"]
         remote.setPairing(true)
         pair("0000", from: 1)
         pair(String(repeating: "0", count: 32), from: 1)
         #expect(transport.messages(to: 1) == [.pairFailed("Wrong code"), .pairFailed("Wrong code")])
-        #expect(remote.pairing?.totalFailures == 2)
+        #expect(remote.pairing?.totalFailures == 1)
         let secret = try #require(remote.pairing?.secret)
         pair(secret, from: 2)
         #expect(transport.messages(to: 2) == [.paired(token: "tok1"), status()])
@@ -574,23 +574,64 @@ struct PhoneRemoteTests {
         #expect(transport.messages(to: 1).last == .pairFailed(PhoneRemote.tooFastMessage))
     }
 
-    /// Pre-release lows (e): 20,000 wrong secrets as fast as they come are each checked and counted; none pairs, and
-    /// the real secret still does.
+    /// Pre-release lows (e): 20,000 wrong secrets as fast as they come, over 4,000 sockets of 5 each (security lows
+    /// L-5: a 6th on one socket closes it), are each checked; none pairs, they never lock or change the typed code
+    /// (L-5), and the real secret and the typed code still pair.
     @Test func twentyThousandWrongSecretsNeverPair() throws {
         remote.setPairing(true)
         let secret = try #require(remote.pairing?.secret)
+        let code = try #require(remote.pairing?.code)
         var generator = SeededGenerator(seed: 7)
-        for _ in 0..<20_000 {
+        for attempt in 0..<20_000 {
             let guess = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: .min ... .max, using: &generator)) }
                 .joined()
             guard guess != secret else { continue }
-            pair(guess)
+            pair(guess, from: 100 + attempt / PhoneRemote.maxSecretAttempts)
         }
-        #expect(!transport.messages(to: 1).contains { if case .paired = $0 { true } else { false } })
-        #expect(!transport.messages(to: 1).contains(.pairFailed(PhoneRemote.tooFastMessage)))
+        #expect(!transport.sent.contains { if case .paired = $0.1 { true } else { false } })
+        #expect(!transport.sent.contains { $0.1 == .pairFailed(PhoneRemote.tooFastMessage) })
+        #expect(transport.sent.allSatisfy { $0.1 == .pairFailed("Wrong code") })
+        #expect(transport.sent.count == 20_000)
+        #expect(transport.closed.isEmpty)
         #expect(store.load().isEmpty)
-        #expect(remote.pairing?.isCodeLocked == true)
+        #expect(remote.pairing?.isCodeLocked == false)
+        #expect(remote.pairing?.totalFailures == 0)
+        #expect(remote.pairing?.code == code)
         pair(secret, from: 2)
+        #expect(transport.messages(to: 2).first == .paired(token: "tok1"))
+        recorder.now += 1
+        pair(try #require(remote.pairing?.code), from: 3)
+        #expect(transport.messages(to: 3).first == .paired(token: "tok2"))
+    }
+
+    /// Security lows L-5: 1,000 wrong secrets (and garbage) on one socket at once: 5 are checked, the 6th closes the
+    /// socket unchecked, and none locks, rotates or counts against the typed code, which still pairs. A socket trying
+    /// a secret every 2.5 s is never closed.
+    @Test func wrongSecretsOnOneSocketCloseItWithoutLockingTheCode() throws {
+        remote.setPairing(true)
+        let code = try #require(remote.pairing?.code)
+        let changesBefore = recorder.statusChanges
+        for attempt in 0..<1_000 {
+            pair(attempt.isMultiple(of: 2) ? String(repeating: "e", count: 32) : "not-a-code-\(attempt)", from: 1)
+        }
+        #expect(transport.messages(to: 1) == Array(repeating: .pairFailed("Wrong code"), count: PhoneRemote.maxSecretAttempts))
+        #expect(transport.closed.first == 1)
+        #expect(Set(transport.closed) == [1])
+        #expect(remote.pairing?.code == code)
+        #expect(remote.pairing?.failures == 0)
+        #expect(remote.pairing?.totalFailures == 0)
+        #expect(remote.pairing?.isCodeLocked == false)
+        #expect(recorder.statusChanges == changesBefore)
+
+        transport.closed = []
+        for _ in 0..<20 {
+            recorder.now += 2.5
+            pair(String(repeating: "e", count: 32), from: 3)
+        }
+        #expect(transport.closed.isEmpty)
+        #expect(transport.messages(to: 3).count == 20)
+
+        pair(code, from: 2)
         #expect(transport.messages(to: 2).first == .paired(token: "tok1"))
     }
 

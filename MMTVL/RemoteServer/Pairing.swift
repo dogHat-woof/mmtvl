@@ -46,8 +46,17 @@ nonisolated struct PairingCode: Equatable, Sendable {
         return fail(now: now, makeCode: makeCode)
     }
 
+    /// Security lows L-5: the QR code's secret only, for an attempt that isn't a 4-digit code: accepted, or rejected
+    /// without counting as a wrong code or changing the code (128 bits can't be guessed, so wrong secrets mustn't lock
+    /// or rotate the typed code; `PhoneRemote` limits them per session instead), or expired.
+    func checkSecret(_ attempt: String, now: Date) -> Check {
+        guard now < expires else { return .expired }
+        return Self.constantTimeEqual(attempt, secret) ? .accepted : .rejected
+    }
+
     /// Pre-release lows (e): a 4-digit attempt, the only kind the per-address throttle applies to. The secret (128
-    /// bits) can't be guessed, so it's always checked at once; any other attempt can't match and simply fails.
+    /// bits) can't be guessed, so it's always checked at once (`checkSecret`; security lows L-5: a wrong one isn't a
+    /// wrong code).
     static func isCodeAttempt(_ attempt: String) -> Bool {
         attempt.utf8.count == 4 && attempt.utf8.allSatisfy { (0x30...0x39).contains($0) }
     }

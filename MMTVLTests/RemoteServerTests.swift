@@ -112,17 +112,24 @@ struct RemoteServerTests {
         for task in [evil, rebound, third, page, native] { task.cancel(with: .goingAway, reason: nil) }
     }
 
-    /// Low: 8 sockets that never sign in don't keep a phone out: at most 3 wait per address, and they're closed
-    /// after the sign-in timeout, so the next one connects.
+    /// Low: 8 sockets that never sign in don't keep a phone out: at most 3 wait per address, and (security lows L-4)
+    /// a new one from the address closes its oldest waiting one, so the next socket is served at once (once the
+    /// connection rate's second is over: URLSession reconnects sockets closed during their handshake). Sockets left
+    /// waiting are closed after the sign-in timeout.
     @Test func silentSocketsTimeOutAndFreeTheirSlots() async throws {
-        let (server, _, port) = try await echoServer(signInTimeout: 1.5)
+        let (server, _, port) = try await echoServer(signInTimeout: 2)
         defer { server.stop() }
+        var closed = 0
+        server.onSessionClosed = { _ in closed += 1 }
         let silent = (0..<8).map { _ in socket(port) }
-        try await Task.sleep(for: .milliseconds(300))
+        try await Task.sleep(for: .milliseconds(1200))
+        #expect(closed >= 5)
         let early = socket(port)
-        #expect(await echoes(early) == false)
+        #expect(await echoes(early))
 
-        try await Task.sleep(for: .milliseconds(1800))
+        // `early` never signs in: it is closed after the timeout, and a new socket still gets in.
+        try await Task.sleep(for: .milliseconds(2300))
+        #expect(await echoes(early) == false)
         let ninth = socket(port)
         #expect(await echoes(ninth))
         for task in silent + [early, ninth] { task.cancel(with: .goingAway, reason: nil) }
@@ -141,7 +148,7 @@ struct RemoteServerTests {
 
     /// Re-review L3: 16 sockets waiting to sign in from 6 addresses (3 + 3 + 3 + 3 + 2 + 2) fill the pool; a new one
     /// from a seventh address gets in by closing the oldest waiting one, never a signed-in session; an address that
-    /// already has 3 waiting is still refused.
+    /// already has 3 waiting closes its own oldest instead (security lows L-4).
     @Test func aFullPendingPoolEvictsItsOldest() {
         let hosts = ["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4", "10.0.0.5", "10.0.0.6"]
         var entries = (1...8).map { PendingPool.Entry(id: $0, host: "10.0.0.\(100 + $0)", isAuthenticated: true) }
@@ -159,7 +166,8 @@ struct RemoteServerTests {
         }
         #expect(admit("10.0.0.50", entries) == .acceptEvicting(9))
         #expect(admit("10.0.0.6", entries) == .acceptEvicting(9))
-        #expect(admit("10.0.0.1", entries) == .refuse)
+        #expect(admit("10.0.0.1", entries) == .acceptReplacing(9))
+        #expect(admit("10.0.0.2", entries) == .acceptReplacing(12))
         // Signed-in sessions don't count and are never chosen, wherever they are in the list.
         entries.shuffle()
         #expect(admit("10.0.0.50", entries) == .acceptEvicting(9))
@@ -297,13 +305,45 @@ struct RemoteServerTests {
         // Ties between A and B: the oldest of their sockets.
         entries.removeAll { $0.id == 6 }
         #expect(PendingPool.admit(host: "C", sessions: entries, maxPending: 5, maxPendingPerHost: 3) == .acceptEvicting(2))
-        // An IPv6 host varying its low 64 bits is one address: its 4th waiting socket is refused.
+        // Security lows L-4: an IPv6 /64 is one address key for the full pool's choice, but the per-address limit is
+        // by the whole address, so another address in the /64 gets in without closing anything.
         let v6 = ["2001:db8:5:6::1", "2001:db8:5:6::2", "2001:db8:5:6:aaaa::3"].enumerated()
-            .map { entry(10 + $0.offset, PeerAddress.key($0.element)) }
-        #expect(PendingPool.admit(host: PeerAddress.key("2001:db8:5:6:ffff::4"), sessions: v6, maxPending: 16,
-                                  maxPendingPerHost: 3) == .refuse)
-        #expect(PendingPool.admit(host: PeerAddress.key("2001:db8:5:7::4"), sessions: v6, maxPending: 16,
-                                  maxPendingPerHost: 3) == .accept)
+            .map { PendingPool.Entry(id: 10 + $0.offset, host: PeerAddress.key($0.element),
+                                     address: PeerAddress.full($0.element), isAuthenticated: false) }
+        #expect(PendingPool.admit(host: PeerAddress.key("2001:db8:5:6:ffff::4"), address: PeerAddress.full("2001:db8:5:6:ffff::4"),
+                                  sessions: v6, maxPending: 16, maxPendingPerHost: 3) == .accept)
+        #expect(PendingPool.admit(host: PeerAddress.key("2001:db8:5:7::4"), address: PeerAddress.full("2001:db8:5:7::4"),
+                                  sessions: v6, maxPending: 16, maxPendingPerHost: 3) == .accept)
+        // A full pool still evicts from the busiest /64.
+        let full = v6 + (0..<13).map { entry(20 + $0, "10.0.1.\($0)") }
+        #expect(PendingPool.admit(host: "10.0.2.1", sessions: full, maxPending: 16, maxPendingPerHost: 3) == .acceptEvicting(10))
+    }
+
+    /// Security lows L-4: 3 sockets waiting from 2001:db8::a, then one from 2001:db8::b (same /64) is admitted, not
+    /// refused; a 4th from ::a closes ::a's oldest, never ::b's. Spellings of one address count as one.
+    @Test func thePendingLimitIsPerFullAddress() {
+        let a = "2001:db8::a", b = "2001:db8::b"
+        #expect(PeerAddress.key(a) == PeerAddress.key(b))
+        #expect(PeerAddress.full(a) != PeerAddress.full(b))
+        #expect(PeerAddress.full("[2001:DB8:0:0:0:0:0:A]") == PeerAddress.full(a))
+        #expect(PeerAddress.full("::ffff:10.0.0.7") == "10.0.0.7")
+        #expect(PeerAddress.full("10.0.0.7") == "10.0.0.7")
+        #expect(PeerAddress.full("fe80::1%en0") != PeerAddress.full("fe80::1%en1"))
+        func entry(_ id: Int, _ host: String) -> PendingPool.Entry {
+            .init(id: id, host: PeerAddress.key(host), address: PeerAddress.full(host), isAuthenticated: false)
+        }
+        func admit(_ host: String, _ sessions: [PendingPool.Entry]) -> PendingPool.Decision {
+            PendingPool.admit(host: PeerAddress.key(host), address: PeerAddress.full(host), sessions: sessions,
+                              maxPending: RemoteServer.maxPending, maxPendingPerHost: RemoteServer.maxPendingPerHost)
+        }
+        var sessions = (1...3).map { entry($0, a) }
+        #expect(admit(b, sessions) == .accept)
+        sessions.append(entry(4, b))
+        #expect(admit(a, sessions) == .acceptReplacing(1))
+        #expect(admit(b, sessions) == .accept)
+        // Signed-in sessions from ::a don't count.
+        sessions[0].isAuthenticated = true
+        #expect(admit(a, sessions) == .accept)
     }
 
     @Test func connectionRatePerAddress() {
@@ -339,8 +379,7 @@ struct RemoteServerTests {
                 guard rate.allows(host, now: start + Double(ms) / 1000) else { return nil }
                 switch PendingPool.admit(host: host, sessions: sessions, maxPending: RemoteServer.maxPending,
                                          maxPendingPerHost: RemoteServer.maxPendingPerHost) {
-                case .refuse: return nil
-                case .acceptEvicting(let victim): sessions.removeAll { $0.id == victim }
+                case .acceptEvicting(let victim), .acceptReplacing(let victim): sessions.removeAll { $0.id == victim }
                 case .accept: break
                 }
                 defer { nextID += 1 }

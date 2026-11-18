@@ -8,6 +8,8 @@ import os
 /// redirect to the Mac or a LAN host other than the entry's never becomes the stream's (and the relay's) own host.
 /// Pre-release lows (c): an entry that is itself on the LAN may redirect to another LAN device's private address
 /// (a Threadfin/xTeVe proxy to a tuner), never to the Mac's own; the relay and its `RedirectGuard` judge alike.
+/// Security lows L-1: only from a LAN host along a chain that never left the LAN; once a hop went to a public host
+/// (a CDN), a later hop to another LAN device is refused and the entry stays unresolved.
 final class StreamResolver {
     typealias Resolve = @Sendable (URL) async throws -> URL
 
@@ -59,7 +61,7 @@ final class StreamResolver {
         var resolved = await task.value
         inFlight[url] = nil
         // Re-review L2: the address must be one the relay would fetch for the entry (`liveResolve` already stops at
-        // such a hop; this also holds for any other resolver).
+        // such a hop, and at a LAN hop after a public one, security lows L-1; this also holds for any other resolver).
         if let target = resolved, target != url, !RelayURLPolicy.allows(target, stream: url) {
             logger.notice("Refused a stream redirect from \(url.host() ?? "?", privacy: .public) to \(target.host() ?? "no host", privacy: .public)")
             resolved = nil
@@ -81,8 +83,9 @@ final class StreamResolver {
     }
 
     /// `liveResolve` on `session` (tests give a stubbed one). Re-review L2: a redirect is followed only where
-    /// `RelayURLPolicy` allows it for the entry `url` (`HLSRelay.RedirectGuard`); a refused one ends with the 3xx,
-    /// a failure, so the entry stays unresolved.
+    /// `RelayURLPolicy` allows it for the entry `url` (`HLSRelay.RedirectGuard`, which also judges each hop by the URL
+    /// that redirected and the chain before it, security lows L-1); a refused one ends with the 3xx, a failure, so the
+    /// entry stays unresolved.
     nonisolated static func liveResolve(_ url: URL, session: URLSession) async throws -> URL {
         guard RelayURLPolicy.isWebURL(url) else { throw URLError(.unsupportedURL) }
         var request = URLRequest(url: url)

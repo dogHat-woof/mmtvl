@@ -92,7 +92,7 @@ struct MPVOptionsTests {
     /// Pre-release lows (a): a running relay reports `hasRun` and gives every load of a stream (first and each
     /// retry) a relay address; stopped, it gives none but still reports that it ran.
     @Test @MainActor func runningRelayServesEveryLoad() async throws {
-        let relay = HLSRelay(fetch: { _, _ in throw URLError(.cannotConnectToHost) })
+        let relay = HLSRelay(fetch: { _, _, _ in throw URLError(.cannotConnectToHost) })
         #expect(!relay.hasRun)
         relay.start()
         defer { relay.stop() }
