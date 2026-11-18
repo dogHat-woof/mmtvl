@@ -449,8 +449,9 @@ nonisolated enum PendingPool {
 /// Security (pre-release review, high): which WebSocket upgrades may open a session. No Origin (a native client):
 /// allowed. Else it must be exactly `http://<Host>:<HTTP port>`, the phone page's own origin, with the Host header's
 /// host an IP address, `localhost`, a `.local` name, or (re-review L4) a router's name for the Mac: a dotless name,
-/// `.lan` or `.home.arpa`. None of those can be registered in public DNS, so a page on another site (including a
-/// DNS-rebinding name that points at this Mac) is refused.
+/// `.lan` or `.home.arpa` (`.home.arpa` is reserved for home networks, RFC 8375; `.lan` is only conventional, so
+/// rebinding through it is a residual risk the pairing cap bounds). A page on any other site, including a
+/// DNS-rebinding name that points at this Mac, is refused.
 nonisolated enum WebSocketOrigin {
     static func isAllowed(headers: [(name: String, value: String)], httpPort: UInt16?) -> Bool {
         let origins = headers.filter { $0.name.caseInsensitiveCompare("Origin") == .orderedSame }
