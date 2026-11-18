@@ -18,7 +18,7 @@ struct HLSRelayTests {
         var fetchedOrigins: [String] { lock.withLock { hosts } }
 
         var fetch: HLSRelay.Fetch {
-            { [self] url in
+            { [self] url, _ in
                 lock.withLock {
                     counts[url.path(), default: 0] += 1
                     hosts.append("\(url.scheme ?? "")://\(url.host() ?? "")")
@@ -212,6 +212,52 @@ struct HLSRelayTests {
         #expect(!RelayURLPolicy.isInternal("cdn.example"))
         #expect(!RelayURLPolicy.isInternal("2001:4860:4860::8888"))
         #expect(!RelayURLPolicy.isInternal("172.32.0.1"))
+    }
+
+    /// Security review item 5: the live fetch follows a CDN's redirect to another public host, never to the Mac, the
+    /// LAN or a non-http(s) URL (the 3xx comes back instead); a LAN stream may still redirect on its own host.
+    /// `StubTunerProtocol` makes each 3xx a real redirect for the session's delegate, without the network.
+    @Test func liveFetchRefusesRedirectsToInternalHosts() async throws {
+        let stream = URL(string: "https://redirect-cdn.example/live/master.m3u8")!
+        func fetch(_ url: String, stream: URL) async throws -> HLSRelay.Upstream {
+            try await HLSRelay.liveFetch(URL(string: url)!, stream: stream, session: StubTunerProtocol.session())
+        }
+        for (index, target) in ["http://127.0.0.1:1/x", "http://192.168.7.9/lan.m3u8", "http://[::1]:1/v6",
+                                "file:///etc/hosts"].enumerated() {
+            let from = "https://redirect-cdn.example/live/refused\(index).m3u8"
+            StubTunerProtocol.serve(from, status: 302, headers: ["Location": target], body: Data())
+            StubTunerProtocol.serve(target, body: Data("INTERNAL".utf8))
+            let upstream = try await fetch(from, stream: stream)
+            #expect(upstream.status == 302, "\(target)")
+            #expect(upstream.data.isEmpty, "\(target)")
+            #expect(upstream.finalURL.absoluteString == from, "\(target)")
+            #expect(!StubTunerProtocol.wasRequested(target), "\(target)")
+        }
+
+        let publicFrom = "https://redirect-cdn.example/live/moved.m3u8"
+        let publicTarget = "https://redirect-cdn2.example/live/moved.m3u8"
+        StubTunerProtocol.serve(publicFrom, status: 302, headers: ["Location": publicTarget], body: Data())
+        StubTunerProtocol.serve(publicTarget, headers: ["Content-Type": "application/vnd.apple.mpegurl"],
+                                body: Data("#EXTM3U".utf8))
+        let moved = try await fetch(publicFrom, stream: stream)
+        #expect(StubTunerProtocol.wasRequested(publicTarget))
+        #expect(moved.status == 200)
+        #expect(moved.data == Data("#EXTM3U".utf8))
+        #expect(moved.finalURL.absoluteString == publicTarget)
+
+        let lanStream = URL(string: "http://192.168.7.5:8080/live/master.m3u8")!
+        let lanFrom = "http://192.168.7.5:8080/live/old.m3u8"
+        let lanTarget = "http://192.168.7.5:8080/live/new.m3u8"
+        StubTunerProtocol.serve(lanFrom, status: 302, headers: ["Location": lanTarget], body: Data())
+        StubTunerProtocol.serve(lanTarget, body: Data("LAN".utf8))
+        #expect(try await fetch(lanFrom, stream: lanStream).status == 200)
+        #expect(StubTunerProtocol.wasRequested(lanTarget))
+
+        let guardForCDN = HLSRelay.RedirectGuard(stream: stream)
+        #expect(guardForCDN.follows(URL(string: "https://other-cdn.example/seg.ts")))
+        #expect(!guardForCDN.follows(URL(string: "http://192.168.1.5/seg.ts")))
+        #expect(!guardForCDN.follows(URL(string: "http://localhost/seg.ts")))
+        #expect(!guardForCDN.follows(nil))
     }
 
     @Test func noURLWhileStopped() {

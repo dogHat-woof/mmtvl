@@ -8,7 +8,8 @@ import os
 /// arrives it fetches the media playlists and their start segments in parallel, so ffmpeg's requests find them ready.
 ///
 /// Only URLs MMTVL registered are served (by an opaque token), on the loopback interface only. Only http(s) URLs are
-/// registered, rewritten or fetched, and a Mac or LAN host only on the stream's own host (`RelayURLPolicy`). Never logs
+/// registered, rewritten, fetched or redirected to, and a Mac or LAN host only on the stream's own host
+/// (`RelayURLPolicy`). Never logs
 /// URLs or tokens (hosts and statuses only). Main queue throughout.
 final class HLSRelay {
     nonisolated struct Upstream: Sendable {
@@ -19,7 +20,8 @@ final class HLSRelay {
         var finalURL: URL
     }
 
-    typealias Fetch = @Sendable (URL) async throws -> Upstream
+    /// GET `url`, a URL of the stream whose original URL is `stream` (redirects are judged against it).
+    typealias Fetch = @Sendable (_ url: URL, _ stream: URL) async throws -> Upstream
 
     static let shared = HLSRelay()
 
@@ -174,7 +176,7 @@ final class HLSRelay {
         }
         if let task = inFlight[url] { return await task.value }
         let fetchUpstream = fetchUpstream
-        let task = Task { try? await fetchUpstream(url) }
+        let task = Task { try? await fetchUpstream(url, stream) }
         inFlight[url] = task
         let upstream = await task.value
         inFlight[url] = nil
@@ -343,15 +345,45 @@ final class HLSRelay {
     // MARK: - Live fetch
 
     /// URLSession keeps connections to the CDN alive between requests; non-2xx comes back as its status.
-    static let liveFetch: Fetch = { url in
+    static let liveFetch: Fetch = { url, stream in
+        try await liveFetch(url, stream: stream, session: session)
+    }
+
+    /// `liveFetch` on `session` (tests give a stubbed one). A redirect is followed only to a URL `RelayURLPolicy`
+    /// allows for `stream`; a refused one ends the fetch with the 3xx itself.
+    nonisolated static func liveFetch(_ url: URL, stream: URL, session: URLSession) async throws -> Upstream {
         // URLSession also opens file: and other schemes; the relay only ever fetches http(s).
         guard RelayURLPolicy.isWebURL(url) else { throw URLError(.unsupportedURL) }
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request, delegate: RedirectGuard(stream: stream))
         let http = response as? HTTPURLResponse
         return Upstream(data: data, contentType: http?.value(forHTTPHeaderField: "Content-Type"),
                         status: http?.statusCode ?? 200, finalURL: response.url ?? url)
+    }
+
+    /// Security review item 5: a 3xx from an allowed CDN must not take the relay to the Mac or the LAN (or off
+    /// http(s)). Logs the refused target's host only.
+    nonisolated final class RedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
+        private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "Relay")
+        let stream: URL
+
+        init(stream: URL) { self.stream = stream }
+
+        /// Whether the relay follows a redirect to `target`.
+        func follows(_ target: URL?) -> Bool {
+            guard let target, RelayURLPolicy.allows(target, stream: stream) else {
+                Self.logger.notice("Refused redirect to \(target?.host() ?? "no host", privacy: .public)")
+                return false
+            }
+            return true
+        }
+
+        // The completion-handler form, like `HDHomeRunHTTP.RedirectBlocker`'s (the async one crashes Swift 6.4's SILGen).
+        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+            completionHandler(follows(request.url) ? request : nil)
+        }
     }
 
     private static let session: URLSession = {
