@@ -138,7 +138,7 @@ struct ForegroundRepairTests {
             now: { Date(timeIntervalSinceReferenceDate: 0) },
             makeCode: { "1234" },
             makeToken: { "tok" },
-            pointer: { _ in },
+            pointer: { _, _ in },
             repairForeground: { harness.repair() }
         ))
         phone.setPairing(true)

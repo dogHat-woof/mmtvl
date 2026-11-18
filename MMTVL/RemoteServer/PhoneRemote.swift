@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Observation
 import os
@@ -27,14 +28,20 @@ struct PhoneRemoteEnvironment {
     var makeCode: () -> String
     /// PhoneToken.make.
     var makeToken: () -> String
-    /// M7b: PhonePointer.perform (trackpad).
-    var pointer: (PointerAction) -> Void
+    /// M7b: PhonePointer.perform (trackpad), with the edge inset (`pointerEdgeInset`).
+    var pointer: (PointerAction, CGFloat) -> Void
     /// M7c L3: MMTVL's window shows but MMTVL isn't active (nothing else in front): brings it forward
     /// and returns true, so the command goes to MMTVL instead of out as a synthetic key.
     var repairForeground: () -> Bool = { false }
     /// M7m L19, L20: `AppRouter.endScreenSaverIfShowing(by:)`: true when the screen saver showed and this input (a
     /// command, text or Return; the argument names it for the log) ended it, so it's swallowed.
     var endsScreenSaver: (String) -> Bool = { _ in false }
+    /// Security (pre-release review, medium): `KioskGuard.pointerGate` for the app in front, like the Siri Remote's
+    /// trackpad: while the kiosk lock is in force, the phone's pointer, text, Return and keys act only in an app the
+    /// guard allows.
+    var inputGate: () -> KioskGuard.PointerGate = { .allowed }
+    /// `PointerMath.remoteEdgeInset(isLockEffective:)`: the pointer stays off the screen edges while the lock is in force.
+    var pointerEdgeInset: () -> CGFloat = { 0 }
 }
 
 /// The phone remote coordinator (D24): auth, pairing, command routing, text, volume and status pushes.
@@ -48,15 +55,25 @@ final class PhoneRemote {
     static let openPairingMessage = "Open Settings → Phone Remote → Pair a Phone on the TV"
     static let accessibilityMessage = "Allow Accessibility for MMTVL on the Mac to control other apps"
     static let nothingToTypeMessage = "Nothing to type into here"
+    static let blockedAppMessage = "The phone can't control this app. Press Home"
+    static let pairingEndedMessage = "Too many wrong codes. Open Pair a Phone on the TV again"
+    static let tooFastMessage = "Too fast. Wait a second and try again"
+    /// Security (pre-release review, high): one checked pairing attempt per address per second; quicker ones count
+    /// as wrong codes without being checked.
+    static let pairAttemptInterval: TimeInterval = 1
 
     /// Pairing started/rotated/ended, a phone paired, a session opened/closed or authenticated, forget-all.
     @ObservationIgnored var onStatusChange: (() -> Void)?
 
     private(set) var pairing: PairingCode?
+    /// Pairing ended after `PairingCode.maxTotalFailures` wrong codes; cleared when Pair a Phone opens or closes.
+    private(set) var pairingEnded = false
     /// Name of the last phone paired during the current pairing; cleared when pairing starts or ends.
     private(set) var lastPairedName: String?
     private(set) var phones: [PairedPhone]
     private var sessions: [RemoteSessionID: Session] = [:]
+    /// When each address (else session) last had a pairing attempt checked; cleared when pairing starts or ends.
+    @ObservationIgnored private var lastPairAttempt: [String: Date] = [:]
 
     var pairedCount: Int { phones.count }
     /// Authenticated sessions.
@@ -72,6 +89,8 @@ final class PhoneRemote {
         var lastText = ""
         /// M7b L13: when this session last got the Accessibility toast for pointer messages.
         var lastAccessToast: Date?
+        /// When this session last got the blocked-app toast for pointer messages.
+        var lastBlockedToast: Date?
     }
 
     /// L13: pointer messages arrive ~60 times a second; the toast repeats at most this often.
@@ -141,7 +160,17 @@ final class PhoneRemote {
                 }
                 return
             }
-            environment.pointer(action)
+            // Security: like the Siri Remote's trackpad, only in an app the kiosk guard allows, off the screen edges.
+            guard case .allowed = environment.inputGate() else {
+                let now = environment.now()
+                if state.lastBlockedToast.map({ now.timeIntervalSince($0) >= Self.pointerToastInterval }) ?? true {
+                    state.lastBlockedToast = now
+                    Self.logger.info("Ignored the phone's trackpad: the app in front isn't allowed")
+                    transport.send(.toast(Self.blockedAppMessage), to: session)
+                }
+                return
+            }
+            environment.pointer(action, environment.pointerEdgeInset())
         }
     }
 
@@ -157,11 +186,15 @@ final class PhoneRemote {
             guard pairing == nil else { return }
             pairing = PairingCode(code: environment.makeCode(), expires: environment.now() + PairingCode.lifetime)
             lastPairedName = nil
+            pairingEnded = false
+            lastPairAttempt = [:]
             Self.logger.info("Pairing started")
         } else {
-            guard pairing != nil || lastPairedName != nil else { return }
+            guard pairing != nil || lastPairedName != nil || pairingEnded else { return }
             pairing = nil
             lastPairedName = nil
+            pairingEnded = false
+            lastPairAttempt = [:]
             Self.logger.info("Pairing ended")
         }
         onStatusChange?()
@@ -203,6 +236,7 @@ final class PhoneRemote {
             return
         }
         state.phoneID = phone.id
+        transport.sessionAuthenticated(session)
         Self.logger.info("Phone \"\(phone.name, privacy: .public)\" connected")
         transport.send(.welcome, to: session)
         sendStatus(to: session)
@@ -215,16 +249,35 @@ final class PhoneRemote {
             transport.send(.pairFailed(Self.openPairingMessage), to: session)
             return
         }
-        switch pairing.check(code, now: environment.now(), makeCode: environment.makeCode) {
+        // Security (pre-release review, high): one checked attempt per address per second; a quicker one is a
+        // failure without looking at the code.
+        let now = environment.now()
+        let key = transport.peerHost(of: session) ?? "session \(session)"
+        let isTooSoon = lastPairAttempt[key].map { now.timeIntervalSince($0) < Self.pairAttemptInterval } ?? false
+        let result: PairingCode.Check
+        if isTooSoon {
+            result = pairing.fail(now: now, makeCode: environment.makeCode)
+        } else {
+            lastPairAttempt[key] = now
+            result = pairing.check(code, now: now, makeCode: environment.makeCode)
+        }
+        switch result {
         case .expired:
             transport.send(.pairFailed(Self.openPairingMessage), to: session)
         case .rejected:
             self.pairing = pairing
-            transport.send(.pairFailed("Wrong code"), to: session)
+            transport.send(.pairFailed(isTooSoon ? Self.tooFastMessage : "Wrong code"), to: session)
         case .rotated(let fresh):
             self.pairing = fresh
             Self.logger.info("Pairing code rotated after \(PairingCode.maxFailures) wrong codes")
             transport.send(.pairFailed("Wrong code. A new code is on the TV"), to: session)
+            onStatusChange?()
+        case .ended:
+            // Pair a Phone must be opened again; the page says so.
+            self.pairing = nil
+            pairingEnded = true
+            Self.logger.notice("Pairing ended after \(PairingCode.maxTotalFailures) wrong codes")
+            transport.send(.pairFailed(Self.pairingEndedMessage), to: session)
             onStatusChange?()
         case .accepted:
             let token = environment.makeToken()
@@ -236,6 +289,7 @@ final class PhoneRemote {
             }
             save()
             state.phoneID = phone.id
+            transport.sessionAuthenticated(session)
             lastPairedName = phone.name
             Self.logger.info("Paired \"\(phone.name, privacy: .public)\" (\(self.phones.count) phones)")
             transport.send(.paired(token: token), to: session)
@@ -247,23 +301,42 @@ final class PhoneRemote {
 
     /// L5; M7h L3: the shared `ExternalRouter` (volume commands map to no key, so they do nothing here; power commands
     /// never get here).
+    /// Security (pre-release review, medium): a key for another app is posted only when the kiosk guard allows that
+    /// app (`inputGate`); Home still goes home.
     private func route(_ command: RemoteCommand, session: RemoteSessionID) {
+        var blocked = false
         let router = ExternalRouter(
             isLauncherInFront: { [self] in launcherInFront() },
             dispatch: { [environment] command, isGlobal, _ in environment.dispatch(command, isGlobal) },
             canPostEvents: environment.canPostEvents,
-            postExternal: environment.postExternal,
+            postExternal: { [environment] key in
+                guard case .allowed = environment.inputGate() else {
+                    blocked = true
+                    return
+                }
+                environment.postExternal(key)
+            },
             endsScreenSaver: { [environment] in environment.endsScreenSaver("phone \($0.rawValue)") }
         )
         if router.route(command) == .needsAccessibility {
             transport.send(.toast(Self.accessibilityMessage), to: session)
+        } else if blocked {
+            Self.logger.info("Ignored a phone \(command.rawValue, privacy: .public): the app in front isn't allowed")
+            transport.send(.toast(Self.blockedAppMessage), to: session)
         }
     }
 
-    /// L7: inside MMTVL only the YouTube screen takes text; elsewhere it needs post-event access.
+    /// L7: inside MMTVL only the YouTube screen takes text; elsewhere it needs post-event access and (security) an
+    /// app the kiosk guard allows.
     private func canType(session: RemoteSessionID) -> Bool {
-        if launcherInFront() && !environment.launcherAcceptsText() {
-            transport.send(.toast(Self.nothingToTypeMessage), to: session)
+        if launcherInFront() {
+            if !environment.launcherAcceptsText() {
+                transport.send(.toast(Self.nothingToTypeMessage), to: session)
+                return false
+            }
+        } else if case .blocked = environment.inputGate() {
+            Self.logger.info("Ignored phone text: the app in front isn't allowed")
+            transport.send(.toast(Self.blockedAppMessage), to: session)
             return false
         }
         if !environment.canPostEvents() {

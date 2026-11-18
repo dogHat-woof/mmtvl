@@ -16,14 +16,40 @@ struct PairingTests {
     }
 
     @Test func fifthWrongCodeRotates() {
-        var code = PairingCode(code: "1234", expires: start + PairingCode.lifetime)
+        var code = PairingCode(code: "1234", secret: "s", expires: start + PairingCode.lifetime)
         for failures in 1...4 {
             #expect(code.check("0000", now: start, makeCode: { "5678" }) == .rejected)
             #expect(code.failures == failures)
         }
-        let rotated = PairingCode(code: "5678", expires: start + PairingCode.lifetime, failures: 0)
+        let rotated = PairingCode(code: "5678", secret: "s", expires: start + PairingCode.lifetime, failures: 0,
+                                  totalFailures: 5)
         #expect(code.check("0000", now: start, makeCode: { "5678" }) == .rotated(rotated))
         #expect(code == rotated)
+    }
+
+    /// Security (pre-release review, high): the tenth wrong code in one pairing ends it, across rotations.
+    @Test func tenthWrongCodeEndsPairing() {
+        var code = PairingCode(code: "1234", expires: start + PairingCode.lifetime)
+        var results: [PairingCode.Check] = []
+        for _ in 1...PairingCode.maxTotalFailures {
+            results.append(code.check("0000", now: start, makeCode: { "5678" }))
+        }
+        #expect(results.last == .ended)
+        #expect(results.dropLast().allSatisfy { $0 != .ended && $0 != .accepted })
+        #expect(code.totalFailures == PairingCode.maxTotalFailures)
+    }
+
+    /// Security (pre-release review, high): the QR code's 128-bit secret pairs like the code; an unchecked attempt fails.
+    @Test func secretIsAcceptedAndRandom() {
+        var code = PairingCode(code: "1234", expires: start + PairingCode.lifetime)
+        #expect(code.secret.count == 32 && code.secret.allSatisfy(\.isHexDigit))
+        #expect(code.secret != PairingCode.makeSecret())
+        #expect(code.check(code.secret, now: start, makeCode: { "5678" }) == .accepted)
+        #expect(code.check(String(code.secret.dropLast()), now: start, makeCode: { "5678" }) == .rejected)
+        #expect(code.fail(now: start, makeCode: { "5678" }) == .rejected)
+        #expect(code.totalFailures == 2)
+        var empty = PairingCode(code: "1234", secret: "", expires: start + PairingCode.lifetime)
+        #expect(empty.check("", now: start, makeCode: { "5678" }) == .rejected)
     }
 
     @Test func randomCodesAreFourDigits() {

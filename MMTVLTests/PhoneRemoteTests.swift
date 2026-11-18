@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Testing
 @testable import MMTVL
@@ -18,6 +19,14 @@ final class PhoneRemoteRecorder {
     var tokenCount = 0
     var statusChanges = 0
     var pointerActions: [PointerAction] = []
+    /// The edge inset each pointer action was given.
+    var pointerInsets: [CGFloat] = []
+    /// Security: the kiosk gate for the app in front, and the edge inset while the lock is in force.
+    var gate: KioskGuard.PointerGate = .allowed
+    var edgeInset: CGFloat = 0
+    /// `PairingCode.random(using:)` instead of `codes`, seeded so a lucky guess can't make a run flaky.
+    var randomCodes = false
+    var generator = SeededGenerator(seed: 0x4D4D_5456_4C21)
     var repairs = false
     var repairCalls = 0
     /// M7m L20: the screen saver shows; each input it swallows is recorded.
@@ -39,12 +48,15 @@ final class PhoneRemoteRecorder {
                 done(self.volumeResult)
             },
             now: { self.now },
-            makeCode: { self.codes.removeFirst() },
+            makeCode: { self.randomCodes ? PairingCode.random(using: &self.generator) : self.codes.removeFirst() },
             makeToken: {
                 self.tokenCount += 1
                 return "tok\(self.tokenCount)"
             },
-            pointer: { self.pointerActions.append($0) },
+            pointer: { action, inset in
+                self.pointerActions.append(action)
+                self.pointerInsets.append(inset)
+            },
             repairForeground: {
                 self.repairCalls += 1
                 return self.repairs
@@ -53,8 +65,23 @@ final class PhoneRemoteRecorder {
                 guard self.screenSaverShowing else { return false }
                 self.screenSaverInputs.append(input)
                 return true
-            }
+            },
+            inputGate: { self.gate },
+            pointerEdgeInset: { self.edgeInset }
         )
+    }
+}
+
+/// SplitMix64.
+struct SeededGenerator: RandomNumberGenerator {
+    var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
     }
 }
 
@@ -106,6 +133,7 @@ struct PhoneRemoteTests {
         send(#"{"type":"hello","token":"nope"}"#)
         #expect(transport.messages(to: 1) == [.authFailed])
         #expect(transport.closed.isEmpty)
+        #expect(transport.authenticated.isEmpty)
     }
 
     @Test func pairWithoutPairing() {
@@ -118,15 +146,21 @@ struct PhoneRemoteTests {
         #expect(remote.pairing?.code == "1234")
         pair("0000")
         #expect(transport.messages(to: 1).last == .pairFailed("Wrong code"))
-        for _ in 0..<3 { pair("0000") }
+        for _ in 0..<3 {
+            recorder.now += 1
+            pair("0000")
+        }
+        recorder.now += 1
         pair("0000")
         #expect(transport.messages(to: 1).last == .pairFailed("Wrong code. A new code is on the TV"))
         #expect(remote.pairing?.code == "5678")
 
         transport.sent = []
         let changesBefore = recorder.statusChanges
+        recorder.now += 1
         pair("5678")
         #expect(transport.messages(to: 1) == [.paired(token: "tok1"), status()])
+        #expect(transport.authenticated == [1])
         let phones = store.load()
         #expect(phones.count == 1)
         #expect(phones.first?.tokenHash == PhoneToken.hash("tok1"))
@@ -141,6 +175,7 @@ struct PhoneRemoteTests {
         paired()
         send(#"{"type":"hello","token":"tok1"}"#, from: 2)
         #expect(transport.messages(to: 2) == [.welcome, status()])
+        #expect(transport.authenticated == [1, 2])
         #expect(remote.connectedCount == 2)
     }
 
@@ -373,6 +408,7 @@ struct PhoneRemoteTests {
         send(#"{"type":"click","button":"right"}"#)
         send(#"{"type":"scroll","dx":0,"dy":-12.5}"#)
         #expect(recorder.pointerActions == [.move(dx: 3, dy: 4), .click(.right), .scroll(dx: 0, dy: -12.5)])
+        #expect(recorder.pointerInsets == [0, 0, 0])
         #expect(transport.sent.isEmpty)
     }
 
@@ -390,4 +426,134 @@ struct PhoneRemoteTests {
         #expect(recorder.pointerActions.isEmpty)
     }
 
+    // MARK: Pairing brute force (security, pre-release review, high)
+
+    /// 20,000 guesses cycling 0000…9999 (twice) over one socket, with random codes: never paired, and pairing ends at
+    /// the cap. Spaced a second apart, so every guess is checked until the cap.
+    @Test func twentyThousandGuessesNeverPair() {
+        recorder.randomCodes = true
+        remote.setPairing(true)
+        for attempt in 0..<20_000 {
+            recorder.now += 1.01
+            pair(String(format: "%04d", attempt % 10_000))
+        }
+        let sent = transport.messages(to: 1)
+        #expect(!sent.contains { if case .paired = $0 { true } else { false } })
+        #expect(store.load().isEmpty)
+        #expect(remote.pairing == nil)
+        #expect(remote.pairingEnded)
+        #expect(sent.count(where: { $0 == .pairFailed(PhoneRemote.pairingEndedMessage) }) == 1)
+        #expect(sent.firstIndex(of: .pairFailed(PhoneRemote.pairingEndedMessage)) == PairingCode.maxTotalFailures - 1)
+        #expect(sent.last == .pairFailed(PhoneRemote.openPairingMessage))
+    }
+
+    /// The same, all at once: after the first, guesses aren't checked (too fast) but count, so pairing ends at the cap.
+    @Test func rapidGuessesCountWithoutBeingChecked() {
+        recorder.randomCodes = true
+        remote.setPairing(true)
+        for attempt in 0..<20_000 {
+            pair(String(format: "%04d", attempt % 10_000))
+        }
+        let sent = transport.messages(to: 1)
+        #expect(!sent.contains { if case .paired = $0 { true } else { false } })
+        #expect(remote.pairingEnded)
+        #expect(sent[1] == .pairFailed(PhoneRemote.tooFastMessage))
+        #expect(sent[PairingCode.maxTotalFailures - 1] == .pairFailed(PhoneRemote.pairingEndedMessage))
+    }
+
+    /// The throttle is per address: a right code too soon after a wrong one fails unchecked; a second later it pairs.
+    @Test func throttleIsPerAddress() {
+        transport.hosts = [1: "10.0.0.7", 2: "10.0.0.7", 3: "10.0.0.8"]
+        remote.setPairing(true)
+        pair("0000", from: 1)
+        pair("1234", from: 2)
+        #expect(transport.messages(to: 2) == [.pairFailed(PhoneRemote.tooFastMessage)])
+        pair("1234", from: 3)
+        #expect(transport.messages(to: 3).first == .paired(token: "tok1"))
+        recorder.now += 1
+        pair("1234", from: 2)
+        #expect(transport.messages(to: 2).last == status())
+    }
+
+    /// The QR code's secret pairs; after the cap ends pairing, Pair a Phone opened again starts fresh.
+    @Test func secretPairsAndReopeningRestarts() throws {
+        remote.setPairing(true)
+        let secret = try #require(remote.pairing?.secret)
+        pair(secret)
+        #expect(transport.messages(to: 1).first == .paired(token: "tok1"))
+
+        remote.setPairing(false)
+        remote.setPairing(true)
+        for _ in 0..<PairingCode.maxTotalFailures {
+            recorder.now += 1
+            pair("0000", from: 2)
+        }
+        #expect(remote.pairingEnded)
+        recorder.now += 1
+        pair(secret, from: 2)
+        #expect(transport.messages(to: 2).last == .pairFailed(PhoneRemote.openPairingMessage))
+        remote.setPairing(false)
+        #expect(!remote.pairingEnded)
+        remote.setPairing(true)
+        #expect(remote.pairing != nil)
+        pair(remote.pairing!.code, from: 2)
+        #expect(transport.messages(to: 2).contains(.paired(token: "tok2")))
+    }
+
+    // MARK: Kiosk lock (security, pre-release review, medium)
+
+    /// Another app in front that the kiosk guard doesn't allow, with the lock in force: the phone's clicks, moves,
+    /// scrolls, text, Return and keys post nothing; Home still goes home.
+    @Test func blockedFrontAppGetsNothingFromThePhone() {
+        paired()
+        recorder.isActive = false
+        recorder.gate = .blocked(bundleID: "com.example.other")
+        send(#"{"type":"click","button":"left"}"#)
+        send(#"{"type":"pointer","dx":0,"dy":-500}"#)
+        send(#"{"type":"scroll","dx":0,"dy":5}"#)
+        send(#"{"type":"text","value":"secret"}"#)
+        send(#"{"type":"submit"}"#)
+        send(#"{"type":"command","command":"select"}"#)
+        send(#"{"type":"command","command":"playPause"}"#)
+        #expect(recorder.pointerActions.isEmpty)
+        #expect(recorder.edits.isEmpty)
+        #expect(recorder.returns == 0)
+        #expect(recorder.posted.isEmpty)
+        #expect(transport.messages(to: 1).contains(.toast(PhoneRemote.blockedAppMessage)))
+        // The pointer's toast is rate-limited: one for the three pointer messages, plus text, Return and two keys.
+        #expect(transport.messages(to: 1).count(where: { $0 == .toast(PhoneRemote.blockedAppMessage) }) == 5)
+
+        send(#"{"type":"command","command":"home"}"#)
+        #expect(recorder.dispatched.map(\.0) == [.home])
+
+        // An allowed app: everything goes through again, the pointer with the lock's edge inset.
+        recorder.gate = .allowed
+        recorder.edgeInset = PointerMath.remoteEdgeInset(isLockEffective: true)
+        send(#"{"type":"click","button":"left"}"#)
+        send(#"{"type":"text","value":"secretx"}"#)
+        #expect(recorder.pointerActions == [.click(.left)])
+        #expect(recorder.pointerInsets == [PointerMath.kioskEdgeInset])
+        #expect(recorder.edits.count == 1)
+    }
+
+    /// With the lock in force, a phone move toward y = 0 (the menu bar) stops at the inset.
+    @Test func lockedMoveTowardTheTopClampsToTheInset() throws {
+        paired()
+        recorder.edgeInset = PointerMath.remoteEdgeInset(isLockEffective: true)
+        send(#"{"type":"pointer","dx":0,"dy":-1000}"#)
+        let inset = try #require(recorder.pointerInsets.first)
+        #expect(inset == 6)
+        guard case .move(let dx, let dy) = recorder.pointerActions.first else {
+            Issue.record("Expected a move")
+            return
+        }
+        let screen = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let move = try #require(PhonePointer.moveTarget(dx: dx, dy: dy, current: CGPoint(x: 960, y: 40),
+                                                        displays: [screen], edgeInset: inset))
+        #expect(move.point.y == 6)
+        #expect(move.point.x == 960)
+        let unlocked = try #require(PhonePointer.moveTarget(dx: dx, dy: dy, current: CGPoint(x: 960, y: 40),
+                                                            displays: [screen], edgeInset: 0))
+        #expect(unlocked.point.y < 6)
+    }
 }

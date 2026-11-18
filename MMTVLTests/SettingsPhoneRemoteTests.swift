@@ -98,6 +98,20 @@ struct SettingsPhoneRemoteTests {
         #expect(model.focusableRowIDs == ["pair.close"])
     }
 
+    /// Security (pre-release review, high): after too many wrong codes the page says pairing ended; no code, no QR.
+    @Test func pairPageShowsPairingEnded() {
+        let (model, recorder) = makeSettingsModel()
+        model.perform(.push(.phoneRemote))
+        model.perform(.push(.pairPhone))
+        recorder.phoneRemote = PhoneRemoteSettingsStatus(isRunning: true, address: "http://192.168.1.20:8765",
+                                                         pairingEnded: true)
+        model.refreshStatus()
+        #expect(model.row(id: "pair.ended")?.title == "Pairing Ended")
+        #expect(model.row(id: "pair.code") == nil)
+        #expect(model.accessory(for: model.page) == .symbol("iphone"))
+        #expect(model.focusableRowIDs == ["pair.close"])
+    }
+
     @Test func forgetAllConfirms() {
         let (model, recorder) = makeSettingsModel()
         model.perform(.push(.phoneRemote))

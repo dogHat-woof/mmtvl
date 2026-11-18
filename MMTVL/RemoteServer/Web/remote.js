@@ -7,6 +7,9 @@ let ws = null;
 let retryDelay = 1000;
 let retryTimer = null;
 let toastTimer = null;
+// A typed code waiting for the socket: the Mac closes a socket that hasn't paired within 10 s, and the pairing view
+// stays up meanwhile, reconnecting only to send the code.
+let pendingCode = null;
 
 function storedToken() { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } }
 function storeToken(t) { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {} }
@@ -14,7 +17,8 @@ function storedMode() { try { return localStorage.getItem(MODE_KEY); } catch { r
 function storeMode(m) { try { localStorage.setItem(MODE_KEY, m); } catch {} }
 function socketURL() { return `ws://${location.hostname}:${Number(location.port || 80) + 1}/`; }
 function send(obj) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
-function hashCode() { const m = location.hash.match(/pair=(\d{4})/); return m ? m[1] : null; }
+// The QR code's link carries a 128-bit secret (32 hex digits); a 4-digit code still works.
+function hashCode() { const m = location.hash.match(/pair=([0-9a-f]{32}|\d{4})\b/); return m ? m[1] : null; }
 function clearHash() { history.replaceState(null, '', location.pathname); }
 function phoneName() {
   const ua = navigator.userAgent;
@@ -38,7 +42,8 @@ function connect() {
   socket.onopen = () => {
     retryDelay = 1000;
     const token = storedToken();
-    const code = hashCode();
+    const code = pendingCode || hashCode();
+    pendingCode = null;
     if (token) send({ type: 'hello', token });
     else if (code) send({ type: 'pair', code, name: phoneName() });
     else show('pairing');
@@ -46,7 +51,9 @@ function connect() {
   socket.onmessage = (e) => { try { handle(JSON.parse(e.data)); } catch {} };
   socket.onclose = () => {
     if (ws !== socket) return;
-    ws = null; show('connecting');
+    ws = null;
+    if (!$('pairing').hidden) return;   // reconnects when a code is entered
+    show('connecting');
     retryTimer = setTimeout(connect, retryDelay);
     retryDelay = Math.min(retryDelay * 2, 10000);
   };
@@ -174,7 +181,10 @@ function bindPairing() {
   $('pair-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const code = $('pair-code').value.trim();
-    if (/^\d{4}$/.test(code)) { $('pair-error').textContent = ''; send({ type: 'pair', code, name: phoneName() }); }
+    if (!/^\d{4}$/.test(code)) return;
+    $('pair-error').textContent = '';
+    if (ws && ws.readyState === WebSocket.OPEN) send({ type: 'pair', code, name: phoneName() });
+    else { pendingCode = code; connect(); }
   });
 }
 

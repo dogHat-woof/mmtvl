@@ -934,6 +934,15 @@ extension SettingsModel {
 
     /// M5 L3: the code is valid while this page shows.
     private var pairPhoneSections: [SettingsSection] {
+        if phoneRemote.pairingEnded {
+            return [
+                SettingsSection(id: "pair", rows: [
+                    SettingsRow(id: "pair.ended", title: "Pairing Ended", detail: "Too many wrong codes were entered",
+                                image: .symbol("exclamationmark.triangle")),
+                    SettingsRow(id: "pair.close", title: "Done", action: .pop),
+                ], footer: "To pair a phone, go back and open Pair a Phone again."),
+            ]
+        }
         var rows = [
             SettingsRow(id: "pair.code", title: "Pairing Code", value: phoneRemote.pairingCode ?? "—"),
             SettingsRow(id: "pair.address", title: phoneRemote.address ?? "No network connection",

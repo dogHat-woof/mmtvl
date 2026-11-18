@@ -469,11 +469,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                          },
                                          pointerGate: { [weak self] in
                                              // Security M1: only in an app the kiosk guard allows, suspended or not.
-                                             guard let self else { return .allowed }
-                                             let front = NSWorkspace.shared.frontmostApplication
-                                             return kioskGuard.pointerGate(
-                                                 isLockInForce: isLockEffective, frontBundleID: front?.bundleIdentifier,
-                                                 isSelf: front?.processIdentifier == ProcessInfo.processInfo.processIdentifier)
+                                             self?.remoteInputGate() ?? .allowed
                                          },
                                          revealPointer: { [weak self] in
                                              // Step 13e (c): moves don't show an obscured pointer while a finger
@@ -731,6 +727,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Security M1 (Siri Remote), pre-release review medium (phone): while the kiosk lock is in force, remote pointer
+    /// input, text and keys act only in an app the kiosk guard allows, suspended or not.
+    private func remoteInputGate() -> KioskGuard.PointerGate {
+        let front = NSWorkspace.shared.frontmostApplication
+        return kioskGuard.pointerGate(isLockInForce: isLockEffective, frontBundleID: front?.bundleIdentifier,
+                                      isSelf: front?.processIdentifier == ProcessInfo.processInfo.processIdentifier)
+    }
+
     /// M5: the phone remote server and its coordinator (D24); volume through `setUpVolume`'s controller.
     private func setUpPhoneRemote(inputRouter: InputRouter, router: AppRouter) {
         let server = RemoteServer()
@@ -767,10 +771,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             now: { Date() },
             makeCode: { PairingCode.random() },
             makeToken: { PhoneToken.make() },
-            pointer: { [weak self] in self?.phonePointer.perform($0) },
+            pointer: { [weak self] action, edgeInset in self?.phonePointer.perform(action, edgeInset: edgeInset) },
             repairForeground: { [weak self] in self?.repairForeground() ?? false },
             // M7m L19, L20: phone input while the screen saver shows only ends it.
-            endsScreenSaver: { [weak router] in router?.endScreenSaverIfShowing(by: $0) ?? false }
+            endsScreenSaver: { [weak router] in router?.endScreenSaverIfShowing(by: $0) ?? false },
+            // Security (pre-release review, medium): the Siri Remote's kiosk gate and edge inset.
+            inputGate: { [weak self] in self?.remoteInputGate() ?? .allowed },
+            pointerEdgeInset: { [weak self] in PointerMath.remoteEdgeInset(isLockEffective: self?.isLockEffective ?? false) }
         ))
         server.onMessage = { [weak phoneRemote] id, data in phoneRemote?.receive(data, from: id) }
         server.onSessionClosed = { [weak phoneRemote] id in phoneRemote?.sessionClosed(id) }
@@ -914,9 +921,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let phoneRemote {
             status.pairingCode = phoneRemote.pairing?.code
-            if let address = status.address, let code = status.pairingCode {
-                status.pairingURL = "\(address)/#pair=\(code)"
+            // Security (pre-release review, high): the QR code carries the 128-bit secret, not the typed code.
+            if let address = status.address, let secret = phoneRemote.pairing?.secret {
+                status.pairingURL = "\(address)/#pair=\(secret)"
             }
+            status.pairingEnded = phoneRemote.pairingEnded
             status.lastPairedName = phoneRemote.lastPairedName
             status.pairedCount = phoneRemote.pairedCount
             status.connectedCount = phoneRemote.connectedCount

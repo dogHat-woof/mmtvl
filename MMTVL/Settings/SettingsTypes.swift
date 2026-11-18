@@ -213,8 +213,10 @@ nonisolated struct PhoneRemoteSettingsStatus: Equatable, Sendable {
     var address: String?
     /// While Pair a Phone shows.
     var pairingCode: String?
-    /// address + "/#pair=" + code.
+    /// address + "/#pair=" + the pairing's secret (`PairingCode.secret`).
     var pairingURL: String?
+    /// Pairing ended after too many wrong codes; Pair a Phone must be opened again.
+    var pairingEnded = false
     var lastPairedName: String?
     var pairedCount = 0
     var connectedCount = 0

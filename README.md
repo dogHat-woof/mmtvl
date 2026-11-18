@@ -43,6 +43,8 @@ Download the MMTVL zip from the [latest release](https://github.com/dwolcot1/mmt
 
 Live TV's stream relay listens on localhost only.
 
+The phone remote is plain HTTP and WebSocket on your local network, not encrypted: anyone who can watch that network's traffic can see a paired phone's token and use it to control the Mac. Use the phone remote only on a network you trust (not a shared or guest network), or turn it off.
+
 ## Unofficial
 
 MMTVL isn't affiliated with any of the services it works with. YouTube runs YouTube's TV web app and may break when YouTube changes it; follow YouTube's terms. MMTVL provides no channels: Live TV plays playlists and guides you supply, and you're responsible for using sources you're entitled to. YouTube, Plex, Prime Video, AirPlay, HDHomeRun, Reflector and other names belong to their owners.
