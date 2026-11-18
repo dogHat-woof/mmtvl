@@ -260,10 +260,16 @@ nonisolated enum DIALRouting {
             + "<name>\(appName)</name><options allowStop=\"false\"/>\(state)</service>"
     }
 
-    /// L7: true when the Origin header is http(s).
+    /// The Origin schemes real DIAL clients send (the YouTube apps send `package:<app id>`); never a web page's.
+    static let allowedOriginSchemes = ["package:", "android-app:", "app:"]
+
+    /// L7, and the pre-release security review (item 4): no Origin header is allowed (native clients); otherwise only
+    /// an allowed non-web scheme with something after it. Web pages (http, https), opaque origins (`null`, from
+    /// sandboxed iframes and data: or file: pages) and anything else are forbidden.
     static func isForbiddenOrigin(_ origin: String?) -> Bool {
-        guard let origin = origin?.lowercased() else { return false }
-        return origin.hasPrefix("http://") || origin.hasPrefix("https://")
+        guard let origin else { return false }
+        let value = origin.trimmingCharacters(in: .whitespaces).lowercased()
+        return !allowedOriginSchemes.contains { value.hasPrefix($0) && value.count > $0.count }
     }
 
     /// L6. nil = not a query string; "" = nothing allowed.

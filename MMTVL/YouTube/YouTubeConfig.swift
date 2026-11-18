@@ -29,7 +29,19 @@ nonisolated enum YouTubeConfig {
     static func allowsNavigation(to url: URL, isMainFrame: Bool) -> Bool {
         guard isMainFrame else { return true }
         if url.absoluteString == "about:blank" { return true }
-        guard url.scheme?.lowercased() == "https", let host = url.host()?.lowercased() else { return false }
+        guard url.scheme?.lowercased() == "https", let host = url.host() else { return false }
+        return isAllowedHost(host)
+    }
+
+    /// Pre-release security review (item 8): the page's native messages (exit, DIAL ready) count only from the main
+    /// frame of an https page on an allowed domain, never from a subframe (ads) or another page. `scheme` and `host`
+    /// are the frame's security origin.
+    static func acceptsMessage(isMainFrame: Bool, scheme: String, host: String) -> Bool {
+        isMainFrame && scheme.lowercased() == "https" && isAllowedHost(host)
+    }
+
+    private static func isAllowedHost(_ host: String) -> Bool {
+        let host = host.lowercased()
         return allowedDomains.contains { host == $0 || host.hasSuffix("." + $0) }
     }
 }

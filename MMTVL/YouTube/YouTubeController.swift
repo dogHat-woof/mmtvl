@@ -224,6 +224,23 @@ final class YouTubeController: YouTubeHosting {
         Self.logger.info("YouTube exited")
         onExit?()
     }
+
+    /// The page's native messages (`mmtvl`: leanback exited; `mmtvlDial`: its DIAL handlers are ready), from the
+    /// sending frame's main-frame flag and security origin. Others are ignored silently (security review item 8).
+    func receiveMessage(name: String, body: Any, isMainFrame: Bool, scheme: String, host: String) {
+        guard YouTubeConfig.acceptsMessage(isMainFrame: isMainFrame, scheme: scheme, host: host) else { return }
+        switch name {
+        case YouTubeKeyMap.messageHandlerName:
+            pageDidExit()
+        case YouTubeDIAL.messageHandlerName:
+            let body = body as? [String: Any]
+            if body?["type"] as? String == "ready", body?["app"] as? String == DIALRouting.appName {
+                dialDidBecomeReady()
+            }
+        default:
+            break
+        }
+    }
 }
 
 /// WebKit delegates. Separate object holding the controller weakly, because the
@@ -235,7 +252,7 @@ private final class YouTubeWebDelegate: NSObject, WKNavigationDelegate, WKUIDele
         guard let url = navigationAction.request.url else { return .allow }
         let isMainFrame = navigationAction.targetFrame?.isMainFrame ?? true
         guard YouTubeConfig.allowsNavigation(to: url, isMainFrame: isMainFrame) else {
-            YouTubeController.logger.info("Blocked navigation to \(url.absoluteString, privacy: .public)")
+            YouTubeController.logger.info("Blocked navigation to \(LogURL.host(url), privacy: .public)")
             return .cancel
         }
         return .allow
@@ -271,22 +288,14 @@ private final class YouTubeWebDelegate: NSObject, WKNavigationDelegate, WKUIDele
         for navigationAction: WKNavigationAction,
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
-        YouTubeController.logger.info("Ignored popup to \(navigationAction.request.url?.absoluteString ?? "?", privacy: .public)")
+        YouTubeController.logger.info("Ignored popup to \(LogURL.host(navigationAction.request.url), privacy: .public)")
         return nil
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        switch message.name {
-        case YouTubeKeyMap.messageHandlerName:
-            controller?.pageDidExit()
-        case YouTubeDIAL.messageHandlerName:
-            let body = message.body as? [String: Any]
-            if body?["type"] as? String == "ready", body?["app"] as? String == DIALRouting.appName {
-                controller?.dialDidBecomeReady()
-            }
-        default:
-            break
-        }
+        let origin = message.frameInfo.securityOrigin
+        controller?.receiveMessage(name: message.name, body: message.body, isMainFrame: message.frameInfo.isMainFrame,
+                                   scheme: origin.protocol, host: origin.host)
     }
 }
 

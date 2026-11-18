@@ -8,15 +8,21 @@ struct HLSRelayTests {
     nonisolated final class Upstream: @unchecked Sendable {
         private let lock = NSLock()
         private var counts: [String: Int] = [:]
+        private var hosts: [String] = []
         private let bodies: [String: String]
 
         init(_ bodies: [String: String]) { self.bodies = bodies }
 
         func count(_ path: String) -> Int { lock.withLock { counts[path, default: 0] } }
+        /// Every fetched URL's scheme and host ("https://cdn.example").
+        var fetchedOrigins: [String] { lock.withLock { hosts } }
 
         var fetch: HLSRelay.Fetch {
             { [self] url in
-                lock.withLock { counts[url.path(), default: 0] += 1 }
+                lock.withLock {
+                    counts[url.path(), default: 0] += 1
+                    hosts.append("\(url.scheme ?? "")://\(url.host() ?? "")")
+                }
                 if url.path() == "/forbidden" {
                     return HLSRelay.Upstream(data: Data(), contentType: nil, status: 403, finalURL: url)
                 }
@@ -109,6 +115,103 @@ struct HLSRelayTests {
         #expect(try await get(forbidden).1 == 403)
         let missing = try #require(relay.localURL(for: URL(string: "https://cdn.example/missing.ts")!))
         #expect(try await get(missing).1 == 502)
+    }
+
+    /// Security review item 5: a playlist naming a local file or a Mac/LAN address that isn't the stream's own host
+    /// gets neither fetched nor rewritten to the relay; the stream's normal https URIs still are.
+    @Test func refusesNonWebAndInternalURIs() async throws {
+        let master = """
+        #EXTM3U
+        #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="Local",URI="file:///etc/hosts"
+        #EXT-X-STREAM-INF:BANDWIDTH=1
+        file:///etc/hosts
+        #EXT-X-STREAM-INF:BANDWIDTH=2
+        http://127.0.0.1:1/x
+        #EXT-X-STREAM-INF:BANDWIDTH=3
+        http://192.168.1.5/lan.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=4
+        http://[::1]:1/v6
+        #EXT-X-STREAM-INF:BANDWIDTH=5
+        video/index.m3u8
+        """
+        var fixtures = Self.fixtures
+        fixtures["/live/ch1/master.m3u8"] = master
+        let upstream = Upstream(fixtures)
+        let relay = try await startedRelay(upstream)
+        defer { relay.stop() }
+        let local = try #require(relay.localURL(for: self.master))
+
+        let (body, status, _) = try await get(local)
+        #expect(status == 200)
+        #expect(!body.contains("/etc/hosts"))
+        #expect(!body.contains("file:"))
+        #expect(!body.contains("127.0.0.1:1/"))
+        #expect(!body.contains("192.168.1.5"))
+        #expect(!body.contains("::1"))
+        // Only the https media playlist is rewritten to the relay, and it's prefetched with its start segment.
+        #expect(body.components(separatedBy: "/r/").count == 2)
+        #expect(body.contains("http://127.0.0.1:\(relay.port!)/r/"))
+        await settle { upstream.count("/live/ch1/video/seg102.ts") == 1 }
+        #expect(upstream.count("/live/ch1/video/seg102.ts") == 1)
+        #expect(Set(upstream.fetchedOrigins) == ["https://cdn.example"])
+        #expect(upstream.count("/etc/hosts") == 0)
+        #expect(upstream.count("/x") == 0)
+
+        // Registering or prefetching a non-http(s) URL does nothing either.
+        #expect(relay.localURL(for: URL(string: "file:///etc/hosts")!) == nil)
+        #expect(await relay.fetch(URL(string: "file:///etc/hosts")!, stream: URL(string: "file:///etc/hosts")!) == nil)
+        #expect(await relay.fetch(URL(string: "http://127.0.0.1:1/x")!, stream: self.master) == nil)
+        #expect(Set(upstream.fetchedOrigins) == ["https://cdn.example"])
+    }
+
+    /// A stream on a LAN server keeps working: its own host is allowed, other LAN hosts aren't.
+    @Test func aLANStreamMayUseItsOwnHost() async throws {
+        let master = """
+        #EXTM3U
+        #EXT-X-STREAM-INF:BANDWIDTH=1
+        video/index.m3u8
+        #EXT-X-STREAM-INF:BANDWIDTH=2
+        http://192.168.1.6/other.m3u8
+        """
+        let upstream = Upstream(["/live/master.m3u8": master, "/live/video/index.m3u8": HLSPlaylistTests.media,
+                                 "/live/video/seg102.ts": "LAN-102"])
+        let relay = try await startedRelay(upstream)
+        defer { relay.stop() }
+        let local = try #require(relay.localURL(for: URL(string: "http://192.168.1.5:8080/live/master.m3u8")!))
+        let (body, status, _) = try await get(local)
+        #expect(status == 200)
+        #expect(body.components(separatedBy: "/r/").count == 2)
+        #expect(!body.contains("192.168.1.6"))
+        await settle { upstream.count("/live/video/seg102.ts") == 1 }
+        #expect(upstream.count("/live/video/seg102.ts") == 1)
+        #expect(Set(upstream.fetchedOrigins) == ["http://192.168.1.5"])
+    }
+
+    @Test func urlPolicy() {
+        let cdn = URL(string: "https://cdn.example/master.m3u8")!
+        let lan = URL(string: "http://192.168.1.5:8080/master.m3u8")!
+        func allows(_ text: String, _ stream: URL) -> Bool { RelayURLPolicy.allows(URL(string: text)!, stream: stream) }
+        #expect(allows("https://cdn2.example/seg.ts", cdn))
+        #expect(allows("HTTP://cdn.example/seg.ts", cdn))
+        #expect(!allows("file:///etc/hosts", cdn))
+        #expect(!allows("data:text/plain,hi", cdn))
+        #expect(!allows("ftp://cdn.example/x", cdn))
+        for lanURL in ["http://127.0.0.1:1/x", "http://127.1/x", "http://2130706433/x", "http://0x7f.0.0.1/x",
+                       "http://localhost/x", "http://LocalHost./x", "http://[::1]/x", "http://[::ffff:127.0.0.1]/x",
+                       "http://0.0.0.0/x", "http://10.0.0.1/x", "http://172.16.0.1/x", "http://192.168.1.5/x",
+                       "http://169.254.169.254/x", "http://[fe80::1%25en0]/x", "http://[fd00::1]/x",
+                       "http://nas.local/x", "http://router/x"] {
+            #expect(!allows(lanURL, cdn), "\(lanURL)")
+        }
+        #expect(allows("http://192.168.1.5/seg.ts", lan))
+        #expect(allows("https://192.168.1.5:9000/seg.ts", lan))
+        #expect(!allows("http://192.168.1.6/seg.ts", lan))
+        #expect(!allows("http://127.0.0.1/seg.ts", lan))
+        #expect(allows("https://cdn.example/seg.ts", lan))
+        #expect(!RelayURLPolicy.isInternal("8.8.8.8"))
+        #expect(!RelayURLPolicy.isInternal("cdn.example"))
+        #expect(!RelayURLPolicy.isInternal("2001:4860:4860::8888"))
+        #expect(!RelayURLPolicy.isInternal("172.32.0.1"))
     }
 
     @Test func noURLWhileStopped() {

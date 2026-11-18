@@ -336,7 +336,7 @@ final class AppLauncher {
                 Self.logger.debug("\(browserBundleID, privacy: .public) is restarting; it opens when that's done")
                 return
             }
-            Self.logger.notice("Opening \(url.absoluteString, privacy: .public) in \(browserBundleID, privacy: .public)")
+            Self.logger.notice("Opening a page on \(LogURL.host(url), privacy: .public) in \(browserBundleID, privacy: .public)")
             onOpened?([browserBundleID])
             cancellation.began(browserBundleID, at: Date())
             let app = try await NSWorkspace.shared.open([url], withApplicationAt: browserURL, configuration: configuration)
@@ -344,7 +344,7 @@ final class AppLauncher {
             makeFullScreenIfWanted(item, pid: app.processIdentifier)
 
         case .url(let url, nil):
-            Self.logger.notice("Opening \(url.absoluteString, privacy: .public) in the default browser")
+            Self.logger.notice("Opening a page on \(LogURL.host(url), privacy: .public) in the default browser")
             if let browserID = defaultBrowserURL().flatMap({ Bundle(url: $0)?.bundleIdentifier }) { onOpened?([browserID]) }
             NSWorkspace.shared.open(url)
 

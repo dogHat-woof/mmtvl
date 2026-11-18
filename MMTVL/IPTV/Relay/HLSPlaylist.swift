@@ -21,14 +21,17 @@ nonisolated enum HLSPlaylist {
             || data.prefix(10) == Data("\u{FEFF}#EXTM3U".utf8)
     }
 
-    /// `text` with every URI replaced by `map(<the URI resolved against base>)`; other lines unchanged.
-    static func rewrite(_ text: String, base: URL, map: (URL) -> String) -> String {
-        lines(of: text).map { line in
+    /// `text` with every URI replaced by `map(<the URI resolved against base>)`; other lines unchanged. A line whose
+    /// URI isn't http(s) (`file:`, `data:`, …), doesn't parse, or `map` refuses (nil) is left out, so neither the
+    /// relay nor mpv fetches it (security review item 5).
+    static func rewrite(_ text: String, base: URL, map: (URL) -> String?) -> String {
+        lines(of: text).compactMap { line in
             if line.hasPrefix("#") {
                 return rewriteAttributes(line, base: base, map: map)
             }
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty, let url = resolve(trimmed, base: base) else { return line }
+            guard !trimmed.isEmpty else { return line }
+            guard let url = resolve(trimmed, base: base) else { return nil }
             return map(url)
         }.joined(separator: "\n")
     }
@@ -77,8 +80,10 @@ nonisolated enum HLSPlaylist {
         text.split(omittingEmptySubsequences: false) { $0 == "\n" || $0 == "\r\n" }.map(String.init)
     }
 
+    /// http(s) URLs only (security review item 5): a playlist can't name a `file:` or other local resource.
     private static func resolve(_ uri: String, base: URL) -> URL? {
-        URL(string: uri, relativeTo: base)?.absoluteURL
+        guard let url = URL(string: uri, relativeTo: base)?.absoluteURL, RelayURLPolicy.isWebURL(url) else { return nil }
+        return url
     }
 
     /// A computed property: `Regex` isn't Sendable, so it can't be a stored static.
@@ -88,11 +93,17 @@ nonisolated enum HLSPlaylist {
         line.firstMatch(of: uriAttribute).map { String($0.1) }
     }
 
-    private static func rewriteAttributes(_ line: String, base: URL, map: (URL) -> String) -> String {
-        line.replacing(uriAttribute) { match in
-            guard let url = resolve(String(match.1), base: base) else { return String(match.0) }
-            return "URI=\"\(map(url))\""
+    /// nil (the tag is left out) when one of its URIs is refused.
+    private static func rewriteAttributes(_ line: String, base: URL, map: (URL) -> String?) -> String? {
+        var refused = false
+        let rewritten = line.replacing(uriAttribute) { match in
+            guard let url = resolve(String(match.1), base: base), let mapped = map(url) else {
+                refused = true
+                return String(match.0)
+            }
+            return "URI=\"\(mapped)\""
         }
+        return refused ? nil : rewritten
     }
 
     private static func unique(_ urls: [URL]) -> [URL] {

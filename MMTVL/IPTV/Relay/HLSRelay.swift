@@ -7,8 +7,9 @@ import os
 /// 127.0.0.1, the relay fetches upstream over URLSession's kept-alive connections, and as soon as a master playlist
 /// arrives it fetches the media playlists and their start segments in parallel, so ffmpeg's requests find them ready.
 ///
-/// Only URLs MMTVL registered are served (by an opaque token), on the loopback interface only. Never logs URLs or
-/// tokens (hosts and statuses only). Main queue throughout.
+/// Only URLs MMTVL registered are served (by an opaque token), on the loopback interface only. Only http(s) URLs are
+/// registered, rewritten or fetched, and a Mac or LAN host only on the stream's own host (`RelayURLPolicy`). Never logs
+/// URLs or tokens (hosts and statuses only). Main queue throughout.
 final class HLSRelay {
     nonisolated struct Upstream: Sendable {
         var data: Data
@@ -38,6 +39,8 @@ final class HLSRelay {
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     private var upstreamByToken: [String: URL] = [:]
+    /// The original URL of the stream each token's URL belongs to (`RelayURLPolicy.allows`).
+    private var streamByToken: [String: URL] = [:]
     private var tokenByUpstream: [URL: String] = [:]
     private var tokenLastUsed: [String: Date] = [:]
     private var cache: [URL: (upstream: Upstream, storedAt: Date, isPlaylist: Bool)] = [:]
@@ -109,14 +112,21 @@ final class HLSRelay {
 
     // MARK: - URLs
 
-    /// The relay's address for `upstream`, or nil while the relay isn't running (mpv then goes direct).
+    /// The relay's address for `upstream` (a stream's own URL, unless it was already registered from a playlist), or
+    /// nil while the relay isn't running or for a URL it doesn't relay (not http(s)); mpv then goes direct.
     func localURL(for upstream: URL) -> URL? {
-        guard let port else { return nil }
-        return URL(string: "http://127.0.0.1:\(port)\(localPath(for: upstream))")
+        let stream = tokenByUpstream[upstream].flatMap { streamByToken[$0] } ?? upstream
+        return localURL(for: upstream, stream: stream)
+    }
+
+    /// nil when `RelayURLPolicy` refuses `upstream` for `stream`.
+    private func localURL(for upstream: URL, stream: URL) -> URL? {
+        guard let port, RelayURLPolicy.allows(upstream, stream: stream) else { return nil }
+        return URL(string: "http://127.0.0.1:\(port)\(localPath(for: upstream, stream: stream))")
     }
 
     /// "/r/<token>/<the upstream's last path component>"; the name helps ffmpeg and logs, the token routes.
-    private func localPath(for upstream: URL) -> String {
+    private func localPath(for upstream: URL, stream: URL) -> String {
         let token: String
         if let existing = tokenByUpstream[upstream] {
             token = existing
@@ -124,6 +134,7 @@ final class HLSRelay {
             token = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
             tokenByUpstream[upstream] = token
             upstreamByToken[token] = upstream
+            streamByToken[token] = stream
             if upstreamByToken.count > Self.maxTokensBeforePrune { pruneTokens() }
         }
         tokenLastUsed[token] = now()
@@ -135,6 +146,7 @@ final class HLSRelay {
         let cutoff = now().addingTimeInterval(-Self.tokenIdleLifetime)
         for (token, used) in tokenLastUsed where used < cutoff {
             if let url = upstreamByToken.removeValue(forKey: token) { tokenByUpstream[url] = nil }
+            streamByToken[token] = nil
             tokenLastUsed[token] = nil
         }
     }
@@ -142,15 +154,20 @@ final class HLSRelay {
     // MARK: - Upstream
 
     /// M7c L31: fetches a stream's master playlist and what follows it ahead of mpv (a channel highlighted in the
-    /// guide). `upstream` is the resolved CDN URL.
+    /// guide). `upstream` is the resolved CDN URL, the stream's own.
     func prefetch(_ upstream: URL) {
-        Task { await fetch(upstream) }
+        Task { await fetch(upstream, stream: upstream) }
     }
 
     /// Cached (fresh), joined with a fetch already running, or fetched. A master prefetches its media playlists, and
-    /// those (`startsStream`) the segment ffmpeg starts at; ffmpeg's own playlist refreshes prefetch nothing.
+    /// those (`startsStream`) the segment ffmpeg starts at; ffmpeg's own playlist refreshes prefetch nothing. `stream`
+    /// is the original URL of the stream `url` belongs to; a URL `RelayURLPolicy` refuses is never fetched (nil).
     @discardableResult
-    func fetch(_ url: URL, startsStream: Bool = false) async -> Upstream? {
+    func fetch(_ url: URL, stream: URL, startsStream: Bool = false) async -> Upstream? {
+        guard RelayURLPolicy.allows(url, stream: stream) else {
+            Self.logger.notice("Refused to fetch from \(url.host() ?? "no host", privacy: .public)")
+            return nil
+        }
         if let entry = cache[url] {
             let lifetime = entry.isPlaylist ? Self.playlistLifetime : Self.segmentLifetime
             if now().timeIntervalSince(entry.storedAt) < lifetime { return entry.upstream }
@@ -171,22 +188,23 @@ final class HLSRelay {
         }
         let isPlaylist = HLSPlaylist.isPlaylist(upstream.data, contentType: upstream.contentType)
         store(upstream, for: url, isPlaylist: isPlaylist)
-        if isPlaylist { prefetchFollowing(upstream, startsStream: startsStream) }
+        if isPlaylist { prefetchFollowing(upstream, stream: stream, startsStream: startsStream) }
         return upstream
     }
 
     /// Master → its media playlists, in parallel; a media playlist reached from a master → the segment ffmpeg
     /// starts at.
-    private func prefetchFollowing(_ playlist: Upstream, startsStream: Bool) {
+    private func prefetchFollowing(_ playlist: Upstream, stream: URL, startsStream: Bool) {
         let text = String(decoding: playlist.data, as: UTF8.self)
+        let allowed = { (url: URL) in self.inFlight[url] == nil && RelayURLPolicy.allows(url, stream: stream) }
         switch HLSPlaylist.kind(of: text) {
         case .master:
-            for url in HLSPlaylist.mediaPlaylists(in: text, base: playlist.finalURL) where inFlight[url] == nil {
-                Task { await fetch(url, startsStream: true) }
+            for url in HLSPlaylist.mediaPlaylists(in: text, base: playlist.finalURL) where allowed(url) {
+                Task { await fetch(url, stream: stream, startsStream: true) }
             }
         case .media where startsStream:
-            for url in HLSPlaylist.startSegments(in: text, base: playlist.finalURL) where inFlight[url] == nil {
-                Task { await fetch(url) }
+            for url in HLSPlaylist.startSegments(in: text, base: playlist.finalURL) where allowed(url) {
+                Task { await fetch(url, stream: stream) }
             }
         case .media, .unknown:
             break
@@ -277,9 +295,10 @@ final class HLSRelay {
             return
         }
         tokenLastUsed[String(parts[1])] = now()
+        let stream = streamByToken[String(parts[1])] ?? upstreamURL
         let includeBody = head.method == "GET"
         Task {
-            guard let upstream = await fetch(upstreamURL) else {
+            guard let upstream = await fetch(upstreamURL, stream: stream) else {
                 send(HTTPResponse.error(502, "Bad Gateway"), on: connection)
                 return
             }
@@ -288,8 +307,10 @@ final class HLSRelay {
                 return
             }
             if HLSPlaylist.isPlaylist(upstream.data, contentType: upstream.contentType) {
+                // A URI the policy refuses is left out of the playlist; one the relay can't serve (stopped) goes direct.
                 let text = HLSPlaylist.rewrite(String(decoding: upstream.data, as: UTF8.self), base: upstream.finalURL) {
-                    self.localURL(for: $0)?.absoluteString ?? $0.absoluteString
+                    guard RelayURLPolicy.allows($0, stream: stream) else { return nil }
+                    return (self.localURL(for: $0, stream: stream) ?? $0).absoluteString
                 }
                 send(HTTPResponse.make(status: 200, reason: "OK", contentType: "application/vnd.apple.mpegurl",
                                        body: Data(text.utf8), includeBody: includeBody), on: connection)
@@ -323,6 +344,8 @@ final class HLSRelay {
 
     /// URLSession keeps connections to the CDN alive between requests; non-2xx comes back as its status.
     static let liveFetch: Fetch = { url in
+        // URLSession also opens file: and other schemes; the relay only ever fetches http(s).
+        guard RelayURLPolicy.isWebURL(url) else { throw URLError(.unsupportedURL) }
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
         let (data, response) = try await session.data(for: request)

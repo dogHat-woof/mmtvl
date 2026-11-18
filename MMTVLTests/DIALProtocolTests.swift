@@ -137,8 +137,29 @@ struct DIALProtocolTests {
         #expect(DIALRouting.decide(app, context: context) == .launch(query: "pairingCode=x"))
         #expect(DIALRouting.isForbiddenOrigin("HTTP://LAN.local"))
         #expect(!DIALRouting.isForbiddenOrigin(nil))
-        #expect(!DIALRouting.isForbiddenOrigin(""))
-        #expect(!DIALRouting.isForbiddenOrigin("null"))
+    }
+
+    /// Security review item 4: only an allow-listed non-web Origin, or none, reaches /apps/YouTube.
+    @Test func originAllowList() {
+        func status(_ origin: String?) -> Int? {
+            let headers = origin.map { ["origin": $0] } ?? [:]
+            let post = request("POST", "/apps/YouTube", body: "pairingCode=x", headers: headers)
+            return reply(DIALRouting.decide(post, context: context))?.status
+        }
+        let launch = DIALDecision.launch(query: "pairingCode=x")
+        for forbidden in ["null", "NULL", " null ", "", "https://evil.example", "http://192.168.1.2", "file://",
+                          "data:text/html,x", "chrome-extension://abc", "package:", "x-package:com.example"] {
+            #expect(status(forbidden) == 403, "\(forbidden)")
+        }
+        for allowed in ["package:com.google.android.youtube", "PACKAGE:com.google.ios.youtube",
+                        "android-app://com.google.android.youtube", "app:com.example.caster"] {
+            let post = request("POST", "/apps/YouTube", body: "pairingCode=x", headers: ["origin": allowed])
+            #expect(DIALRouting.decide(post, context: context) == launch, "\(allowed)")
+        }
+        #expect(DIALRouting.decide(request("POST", "/apps/YouTube", body: "pairingCode=x"), context: context) == launch)
+        #expect(status("null") == 403)
+        let get = request("GET", "/apps/YouTube", headers: ["origin": "null"])
+        #expect(reply(DIALRouting.decide(get, context: context))?.status == 403)
     }
 
     @Test func otherMethodsAreNotAllowed() {
