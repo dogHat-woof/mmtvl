@@ -436,3 +436,10 @@ Executors append here when the plan is wrong or ambiguous: the date, the step, w
   - (a) On Invalid or Rejected, the script prints the `notarytool log` command but doesn't fetch the log.
   - (b) The dirty-tree guard has no `xcschemes/` exception, which is stricter than *Release flow* step 2. If the main checkout keeps a local scheme tweak, step 11 needs it stashed or `MMTVL_RELEASE_ALLOW_DIRTY=1`.
   - (c) Frameworks get signature, team and runtime checks, but no entitlement check. That's as planned, since they're stubs.
+- **2026-11-17, step 7: Upgrade development-signed → Developer ID (the mini, build 41; user's report).** The orchestrator copied the zip over SSH (SHA-256 matched), set `com.apple.quarantine` on it (`0083;…;Safari;`), unzipped with `ditto` (the app inherited the flag); on the mini `stapler validate` and `spctl` (`Notarized Developer ID`) passed. The user quit the dev-signed build, replaced `/Applications/MMTVL.app` and launched it:
+  - **Gatekeeper:** only the standard prompt ("an app created by the app Safari. Are you sure you want to open it?", "Apple checked it for malicious software and none was detected"), Open. No block.
+  - **Keychain:** **6 prompts** ("MMTVL wants to use your confidential information stored in dev.mmtvl.launcher", login keychain password), **Always Allow** on each. Whether any return on a later launch: not yet seen.
+  - **Accessibility:** the onboarding screen appeared (the grant didn't carry over). An old MMTVL row was still listed; it had to be **removed with −** and the app **added again by hand**. After that the **global Home key works**.
+  - **Local Network:** no prompt.
+  - **Open:** Launch at Login after a restart of the mini; a second launch to confirm no Keychain prompts return. Step 7 stays open until then.
+  - **L16:** matches what happened, with one addition for the notes: the old Accessibility row must be removed, not just toggled. The Keychain count is six ("Always Allow" each). Local Network isn't asked.
