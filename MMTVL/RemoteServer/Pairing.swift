@@ -46,6 +46,18 @@ nonisolated struct PairingCode: Equatable, Sendable {
         return fail(now: now, makeCode: makeCode)
     }
 
+    /// Pre-release lows (e): a 4-digit attempt, the only kind the per-address throttle applies to. The secret (128
+    /// bits) can't be guessed, so it's always checked at once; any other attempt can't match and simply fails.
+    static func isCodeAttempt(_ attempt: String) -> Bool {
+        attempt.utf8.count == 4 && attempt.utf8.allSatisfy { (0x30...0x39).contains($0) }
+    }
+
+    /// Pre-release lows (e): after a phone paired, a fresh code and a fresh secret (a photographed QR code is
+    /// single-use), with the same expiry and total of wrong codes; the next phone pairs from the refreshed page.
+    mutating func renew(makeCode: () -> String, makeSecret: () -> String = PairingCode.makeSecret) {
+        self = PairingCode(code: makeCode(), secret: makeSecret(), expires: expires, totalFailures: totalFailures)
+    }
+
     /// A wrong code or secret, or an attempt not checked (too soon after the last one): failures += 1. From
     /// `maxTotalFailures` on returns .codeLocked (the code stops working, the secret and the expiry stay); before
     /// that, at `maxFailures` returns (and becomes) a fresh code from makeCode, same secret, expiry and total.

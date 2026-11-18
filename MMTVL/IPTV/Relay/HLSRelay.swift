@@ -8,8 +8,8 @@ import os
 /// arrives it fetches the media playlists and their start segments in parallel, so ffmpeg's requests find them ready.
 ///
 /// Only URLs MMTVL registered are served (by an opaque token), on the loopback interface only. Only http(s) URLs are
-/// registered, rewritten, fetched or redirected to, and a Mac or LAN host only on the stream's own host
-/// (`RelayURLPolicy`). Never logs
+/// registered, rewritten, fetched or redirected to, and a Mac or LAN host only on the stream's own host, or (pre-release
+/// lows (c)) another LAN device's private address when the stream itself is on the LAN (`RelayURLPolicy`). Never logs
 /// URLs or tokens (hosts and statuses only). Main queue throughout.
 final class HLSRelay {
     nonisolated struct Upstream: Sendable {
@@ -39,6 +39,9 @@ final class HLSRelay {
     private static let logger = Logger(subsystem: "dev.mmtvl.launcher", category: "Relay")
 
     private(set) var port: UInt16?
+    /// Pre-release lows (a): the relay was ready at least once since launch. Once it was, the player never loads a
+    /// playlist stream straight from the provider (a relay that stopped fails the load instead).
+    private(set) var hasRun = false
 
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: NWConnection] = [:]
@@ -108,6 +111,7 @@ final class HLSRelay {
         switch state {
         case .ready:
             port = listener?.port?.rawValue
+            hasRun = true
             Self.logger.notice("Relay on 127.0.0.1:\(self.port ?? 0)")
         case .failed(let error):
             Self.logger.error("Relay failed: \(error.localizedDescription, privacy: .public)")

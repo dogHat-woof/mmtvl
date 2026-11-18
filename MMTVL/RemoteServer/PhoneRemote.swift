@@ -60,7 +60,8 @@ final class PhoneRemote {
     static let codeLockedMessage = "Too many wrong codes. Scan the QR code on the TV with the phone's camera"
     static let tooFastMessage = "Too fast. Wait a second and try again"
     /// Security (pre-release review, high): one checked pairing attempt per address per second; quicker ones count
-    /// as wrong codes without being checked.
+    /// as wrong codes without being checked. Pre-release lows (e): only typed 4-digit codes; the QR code's secret is
+    /// always checked at once (a wrong one still counts as a wrong code).
     static let pairAttemptInterval: TimeInterval = 1
 
     /// Pairing started/rotated/ended, a phone paired, a session opened/closed or authenticated, forget-all.
@@ -251,13 +252,18 @@ final class PhoneRemote {
             transport.send(.pairFailed(Self.openPairingMessage), to: session)
             return
         }
-        // Security (pre-release review, high): one checked attempt per address per second; a quicker one is a
-        // failure without looking at the code.
+        // Security (pre-release review, high): one checked code per address (an IPv6 /64, `PeerAddress`) per second;
+        // a quicker one is a failure without looking at the code. Pre-release lows (e): only 4-digit codes; the QR
+        // code's 128-bit secret needs no throttle, so a scan right after a wrong code from the same phone still pairs.
         let now = environment.now()
         let key = transport.peerHost(of: session) ?? "session \(session)"
-        let isTooSoon = lastPairAttempt[key].map { now.timeIntervalSince($0) < Self.pairAttemptInterval } ?? false
+        let isCode = PairingCode.isCodeAttempt(code)
+        let isTooSoon = isCode
+            && (lastPairAttempt[key].map { now.timeIntervalSince($0) < Self.pairAttemptInterval } ?? false)
         let result: PairingCode.Check
-        if isTooSoon {
+        if !isCode {
+            result = pairing.check(code, now: now, makeCode: environment.makeCode)
+        } else if isTooSoon {
             result = pairing.fail(now: now, makeCode: environment.makeCode)
         } else {
             lastPairAttempt[key] = now
@@ -301,6 +307,10 @@ final class PhoneRemote {
             state.phoneID = phone.id
             transport.sessionAuthenticated(session)
             lastPairedName = phone.name
+            // Pre-release lows (e): the QR code and the code shown when this phone paired no longer pair; Pair a
+            // Phone shows fresh ones (`onStatusChange` below).
+            pairing.renew(makeCode: environment.makeCode)
+            self.pairing = pairing
             Self.logger.info("Paired \"\(phone.name, privacy: .public)\" (\(self.phones.count) phones)")
             transport.send(.paired(token: token), to: session)
             sendStatus(to: session)

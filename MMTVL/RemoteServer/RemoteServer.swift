@@ -1,6 +1,8 @@
+import Darwin
 import Foundation
 import Network
 import os
+import SystemConfiguration
 
 typealias RemoteSessionID = Int
 
@@ -11,7 +13,8 @@ protocol RemoteTransport: AnyObject {
     /// Security (pre-release review, low): a hello or pair succeeded; the session no longer times out and counts
     /// toward `RemoteServer.maxSessions`.
     func sessionAuthenticated(_ session: RemoteSessionID)
-    /// The phone's address, for the pairing throttle; nil when unknown. Never logged.
+    /// The phone's address key (`PeerAddress.key`: an IPv6 address by its /64), for the pairing throttle; nil when
+    /// unknown. Never logged.
     func peerHost(of session: RemoteSessionID) -> String?
 }
 
@@ -21,9 +24,12 @@ final class RemoteServer: RemoteTransport {
     /// Authenticated sessions (security, pre-release review, low: sockets that haven't signed in don't count).
     static let maxSessions = 8
     /// Sessions that haven't sent a good hello or pair yet: at most this many per address, and in all (re-review L3: a
-    /// full pool closes its oldest pending session for a new one; `PendingPool`).
+    /// full pool closes a pending session for a new one; pre-release lows (b): the oldest of the address with the most
+    /// waiting; `PendingPool`). An IPv6 address counts by its /64 (`PeerAddress`).
     static let maxPendingPerHost = 3
     static let maxPending = 16
+    /// Pre-release lows (b): new sockets per address (IPv6: per /64) per second; more are closed before anything else.
+    static let maxNewConnectionsPerSecond = 10
     /// Security (pre-release review, low): a session without a good hello or pair this long after connecting is closed.
     static let defaultSignInTimeout: TimeInterval = 10
     static let maxMessageSize = 16_384
@@ -59,23 +65,28 @@ final class RemoteServer: RemoteTransport {
     private let signInTimeout: TimeInterval
     private let maxPending: Int
     private let maxPendingPerHost: Int
+    private var connectionRate: ConnectionRate
 
     private struct Session {
         var connection: NWConnection
-        /// The peer's address; nil when the endpoint isn't host and port. Never logged.
+        /// The peer's address key (`PeerAddress.key`); nil when the endpoint isn't host and port. Never logged.
         var host: String?
         var isAuthenticated = false
     }
 
-    /// `signInTimeout` and the pending limits: tests pass small ones.
+    /// `signInTimeout`, the pending limits and the connection rate: tests pass small ones.
     init(signInTimeout: TimeInterval = RemoteServer.defaultSignInTimeout, maxPending: Int = RemoteServer.maxPending,
-         maxPendingPerHost: Int = RemoteServer.maxPendingPerHost) {
+         maxPendingPerHost: Int = RemoteServer.maxPendingPerHost,
+         maxNewConnectionsPerSecond: Int = RemoteServer.maxNewConnectionsPerSecond) {
         self.signInTimeout = signInTimeout
         self.maxPending = maxPending
         self.maxPendingPerHost = maxPendingPerHost
+        connectionRate = ConnectionRate(limit: maxNewConnectionsPerSecond)
     }
 
     func start(httpPort: NWEndpoint.Port, socketPort: NWEndpoint.Port) {
+        // Pre-release lows (d): the Mac's own names, for `WebSocketOrigin` (the slow ones are read off the main queue).
+        MacHostNames.refresh()
         retryTask?.cancel()
         retryTask = nil
         cancelListeners()
@@ -328,12 +339,19 @@ final class RemoteServer: RemoteTransport {
     // MARK: WebSocket sessions
 
     private func acceptSocket(_ connection: NWConnection) {
+        let host = Self.host(of: connection.endpoint)
+        // Pre-release lows (b): an address opening sockets faster than a phone ever would is refused before it can
+        // take a pending slot.
+        guard connectionRate.allows(host, now: Date()) else {
+            Self.logger.info("Refused a phone connection: too many new ones from its address")
+            connection.cancel()
+            return
+        }
         guard authenticatedCount < Self.maxSessions else {
             Self.logger.info("Refused a phone connection: \(Self.maxSessions) already open")
             connection.cancel()
             return
         }
-        let host = Self.host(of: connection.endpoint)
         let entries = sessions.map { PendingPool.Entry(id: $0.key, host: $0.value.host, isAuthenticated: $0.value.isAuthenticated) }
         switch PendingPool.admit(host: host, sessions: entries, maxPending: maxPending, maxPendingPerHost: maxPendingPerHost) {
         case .refuse:
@@ -341,8 +359,9 @@ final class RemoteServer: RemoteTransport {
             connection.cancel()
             return
         case .acceptEvicting(let oldest):
-            // Re-review L3: a peer with many addresses can't hold every pending slot and keep a phone out.
-            Self.logger.info("Closed the oldest phone connection waiting to sign in: \(self.maxPending) waiting")
+            // Re-review L3, pre-release lows (b): a peer with many addresses can't hold every pending slot and keep a
+            // phone out; the one closed is from the address with the most waiting, not the phone's.
+            Self.logger.info("Closed a phone connection waiting to sign in: \(self.maxPending) waiting")
             endSession(oldest)
         case .accept:
             break
@@ -373,10 +392,10 @@ final class RemoteServer: RemoteTransport {
         }
     }
 
-    /// The endpoint's host as text (the session's address key).
+    /// The endpoint's address key (`PeerAddress.key`: IPv4 as is, IPv6 by its /64).
     private static func host(of endpoint: NWEndpoint) -> String? {
         guard case .hostPort(let host, _) = endpoint else { return nil }
-        return "\(host)"
+        return PeerAddress.key("\(host)")
     }
 
     /// Re-armed after each message. Ends the session on an error, a close frame or EOF.
@@ -421,7 +440,8 @@ final class RemoteServer: RemoteTransport {
     }
 }
 
-/// Which sockets that haven't signed in yet are kept (security, pre-release review, low; re-review L3). Pure.
+/// Which sockets that haven't signed in yet are kept (security, pre-release review, low; re-review L3; pre-release
+/// lows (b)). Hosts are address keys (`PeerAddress.key`). Pure.
 nonisolated enum PendingPool {
     struct Entry: Equatable, Sendable {
         var id: RemoteSessionID
@@ -431,34 +451,125 @@ nonisolated enum PendingPool {
 
     enum Decision: Equatable, Sendable {
         case accept
-        /// The pool is full: close this pending session (the oldest, the lowest id) and take the new one.
+        /// The pool is full: close this pending session and take the new one.
         case acceptEvicting(RemoteSessionID)
         /// The new socket's address already has `maxPendingPerHost` waiting.
         case refuse
     }
 
     /// Authenticated sessions are never evicted (they don't count here; `RemoteServer.maxSessions` limits them).
+    /// Pre-release lows (b): a full pool closes the oldest pending session (the lowest id) of the address with the
+    /// most waiting (ties: the oldest of those addresses' sessions), so addresses flooding the pool churn among
+    /// themselves and a phone with one socket waiting keeps it.
     static func admit(host: String?, sessions: [Entry], maxPending: Int, maxPendingPerHost: Int) -> Decision {
         let pending = sessions.filter { !$0.isAuthenticated }
         guard pending.count(where: { $0.host == host }) < maxPendingPerHost else { return .refuse }
-        guard pending.count >= maxPending, let oldest = pending.map(\.id).min() else { return .accept }
-        return .acceptEvicting(oldest)
+        guard pending.count >= maxPending else { return .accept }
+        var counts: [String?: Int] = [:]
+        for entry in pending { counts[entry.host, default: 0] += 1 }
+        guard let most = counts.values.max(),
+              let victim = pending.filter({ counts[$0.host] == most }).map(\.id).min()
+        else { return .accept }
+        return .acceptEvicting(victim)
+    }
+}
+
+/// Pre-release lows (b): new sockets per address key in fixed one-second windows. Pure (the caller passes the time).
+nonisolated struct ConnectionRate: Sendable {
+    let limit: Int
+    static let window: TimeInterval = 1
+    /// More keys than this: windows that are over are dropped.
+    static let maxKeys = 1024
+    private var windows: [String: (start: Date, count: Int)] = [:]
+
+    init(limit: Int) { self.limit = limit }
+
+    /// Whether a new socket from `host` (an address key; nil counts as one unknown address) is let in; counts it.
+    mutating func allows(_ host: String?, now: Date) -> Bool {
+        let key = host ?? ""
+        if windows.count > Self.maxKeys {
+            windows = windows.filter { now.timeIntervalSince($0.value.start) < Self.window }
+        }
+        if let current = windows[key], now >= current.start, now.timeIntervalSince(current.start) < Self.window {
+            guard current.count < limit else { return false }
+            windows[key] = (current.start, current.count + 1)
+            return true
+        }
+        windows[key] = (now, 1)
+        return limit > 0
+    }
+}
+
+/// Pre-release lows (b): the key a peer's address counts under for the pending pool, the connection rate and the
+/// pairing throttle. IPv4 as is; an IPv4-mapped IPv6 address as its IPv4; any other IPv6 address by its /64 (one host
+/// can use any address in its /64, so it counts once; all link-local peers share fe80::/64). Never logged.
+nonisolated enum PeerAddress {
+    static func key(_ host: String) -> String {
+        var text = host.trimmingCharacters(in: .whitespaces).lowercased()
+        if text.hasPrefix("["), text.hasSuffix("]") { text = String(text.dropFirst().dropLast()) }
+        let address = text.split(separator: "%", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? text
+        var v6 = in6_addr()
+        guard address.contains(":"), inet_pton(AF_INET6, address, &v6) == 1 else { return text }
+        let bytes = withUnsafeBytes(of: &v6) { Array($0) }
+        if bytes[0..<10].allSatisfy({ $0 == 0 }) && bytes[10] == 0xFF && bytes[11] == 0xFF {
+            return bytes[12..<16].map(String.init).joined(separator: ".")
+        }
+        let groups = stride(from: 0, to: 8, by: 2).map { String(format: "%x", UInt16(bytes[$0]) << 8 | UInt16(bytes[$0 + 1])) }
+        return groups.joined(separator: ":") + "::/64"
+    }
+}
+
+/// Pre-release lows (d): this Mac's own host names, lowercased first labels, for `WebSocketOrigin`: the kernel host
+/// name (`gethostname`, which macOS sets from the network's DNS name for the Mac when none is set by hand), the
+/// Bonjour local host name (`SCDynamicStoreCopyLocalHostName`, the `<name>.local` one), and `ProcessInfo.hostName`
+/// (which may wait on DNS, so `refresh` reads it off the main queue and `current` uses the last value).
+nonisolated enum MacHostNames {
+    private static let slowNames = OSAllocatedUnfairLock<Set<String>>(initialState: [])
+
+    static func current() -> Set<String> {
+        var names = slowNames.withLock { $0 }
+        var buffer = [CChar](repeating: 0, count: 256)
+        if gethostname(&buffer, buffer.count) == 0 {
+            names.formUnion(firstLabel(String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)))
+        }
+        if let local = SCDynamicStoreCopyLocalHostName(nil) as String? { names.formUnion(firstLabel(local)) }
+        return names
+    }
+
+    /// Reads `ProcessInfo.hostName` in the background for `current`.
+    static func refresh() {
+        DispatchQueue.global(qos: .utility).async {
+            let names = firstLabel(ProcessInfo.processInfo.hostName)
+            slowNames.withLock { $0 = names }
+        }
+    }
+
+    /// "Mac-mini.lan" → ["mac-mini"]; empty, "localhost" or an IP literal → [].
+    static func firstLabel(_ name: String) -> Set<String> {
+        let lowered = name.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !lowered.contains(":"), let label = lowered.split(separator: ".").first, !label.isEmpty,
+              label != "localhost", !label.allSatisfy(\.isNumber)
+        else { return [] }
+        return [String(label)]
     }
 }
 
 /// Security (pre-release review, high): which WebSocket upgrades may open a session. No Origin (a native client):
 /// allowed. Else it must be exactly `http://<Host>:<HTTP port>`, the phone page's own origin, with the Host header's
-/// host an IP address, `localhost`, a `.local` name, or (re-review L4) a router's name for the Mac: a dotless name,
-/// `.lan` or `.home.arpa` (`.home.arpa` is reserved for home networks, RFC 8375; `.lan` is only conventional, so
-/// rebinding through it is a residual risk the pairing cap bounds). A page on any other site, including a
+/// host an IP address, `localhost`, or a name for this Mac: a `.local` name, or (re-review L4) a router's name for the
+/// Mac: a dotless name, `.lan` or `.home.arpa`. Pre-release lows (d): a name's first label must be one of the Mac's
+/// own names (`MacHostNames`), since `.lan` and dotless names aren't reserved and a rebinding name there could point
+/// at this Mac; the page still works by IP address, which the QR code uses. A page on any other site, including a
 /// DNS-rebinding name that points at this Mac, is refused.
 nonisolated enum WebSocketOrigin {
-    static func isAllowed(headers: [(name: String, value: String)], httpPort: UInt16?) -> Bool {
+    /// `ownNames`: the Mac's names (lowercased first labels); tests pass their own.
+    static func isAllowed(headers: [(name: String, value: String)], httpPort: UInt16?,
+                          ownNames: @autoclosure () -> Set<String> = MacHostNames.current()) -> Bool {
         let origins = headers.filter { $0.name.caseInsensitiveCompare("Origin") == .orderedSame }
         guard let origin = origins.first?.value else { return true }
         guard origins.count == 1, let httpPort,
               let hostHeader = headers.first(where: { $0.name.caseInsensitiveCompare("Host") == .orderedSame })?.value,
-              let host = hostName(hostHeader), isLocalName(host)
+              let host = hostName(hostHeader), isLocalName(host, ownNames: ownNames())
         else { return false }
         return origin.lowercased() == "http://\(host):\(httpPort)"
     }
@@ -478,14 +589,19 @@ nonisolated enum WebSocketOrigin {
 
     /// An IPv4 address, a bracketed IPv6 address, `localhost`, a Bonjour `.local` name, or (re-review L4) a name the
     /// router's DNS gives: dotless ("mm") or under `.lan` or `.home.arpa` (RFC 8375), each label letters, digits and
-    /// hyphens. Never another dotted name: anyone can register one and point it at this Mac.
-    static func isLocalName(_ host: String) -> Bool {
-        if host == "localhost" || (host.hasSuffix(".local") && host.count > 6) { return true }
-        for suffix in [".lan", ".home.arpa"] where host.hasSuffix(suffix) {
-            let labels = host.dropLast(suffix.count).split(separator: ".", omittingEmptySubsequences: false)
-            return labels.allSatisfy(isHostLabel)
+    /// hyphens. Never another dotted name: anyone can register one and point it at this Mac. Pre-release lows (d): a
+    /// `.local`, `.lan`, `.home.arpa` or dotless name only when its first label is in `ownNames` (the Mac's own names,
+    /// lowercased first labels; `MacHostNames`), so "other.lan" is refused.
+    static func isLocalName(_ host: String, ownNames: Set<String>) -> Bool {
+        if host == "localhost" { return true }
+        func isOwn(_ labels: [Substring]) -> Bool {
+            guard let first = labels.first else { return false }
+            return labels.allSatisfy(isHostLabel) && ownNames.contains(first.lowercased())
         }
-        if !host.contains("."), !host.contains(":"), !host.hasPrefix("[") { return isHostLabel(Substring(host)) }
+        for suffix in [".local", ".lan", ".home.arpa"] where host.hasSuffix(suffix) {
+            return isOwn(host.dropLast(suffix.count).split(separator: ".", omittingEmptySubsequences: false))
+        }
+        if !host.contains("."), !host.contains(":"), !host.hasPrefix("[") { return isOwn([Substring(host)]) }
         if host.hasPrefix("[") && host.hasSuffix("]") {
             return host.dropFirst().dropLast().allSatisfy { $0.isHexDigit || $0 == ":" || $0 == "." }
         }

@@ -54,8 +54,8 @@ struct MPVOptionsTests {
         #expect(!MPVPlayerController.shouldRetry(direct: false, wasPlaying: false, used: 2))
     }
 
-    /// Re-review L2: the last retry (straight to the CDN) still happens normally, but not after the relay refused a
-    /// URI or a redirect for the stream; the relayed retry before it still does. Antenna streams are unaffected.
+    /// Re-review L2: the last retry still happens normally, but not after the relay refused a URI or a redirect for
+    /// the stream; the retry before it still does. Antenna streams are unaffected.
     @Test func noDirectRetryAfterARelayRefusal() {
         #expect(MPVPlayerController.maxRetries == 2)
         #expect(MPVPlayerController.shouldRetry(direct: false, wasPlaying: true, used: 1, relayRefused: false))
@@ -63,6 +63,48 @@ struct MPVOptionsTests {
         #expect(!MPVPlayerController.shouldRetry(direct: false, wasPlaying: false, used: 1, relayRefused: true))
         #expect(MPVPlayerController.shouldRetry(direct: false, wasPlaying: false, used: 0, relayRefused: true))
         #expect(MPVPlayerController.shouldRetry(direct: true, wasPlaying: true, used: 0, relayRefused: true))
+        // Even after a refusal, a relay that's gone never hands the stream to mpv directly.
+        #expect(MPVPlayerController.loadRoute(antenna: false, relayServes: false, isWebURL: true, relayHasRun: false,
+                                              relayRefused: true) == .refuse)
+    }
+
+    /// Pre-release lows (a): the last retry (`used: maxRetries - 1` → the `maxRetries`th load) goes through the relay
+    /// like the others while it runs; nothing in the route depends on the retry count.
+    @Test func everyPlaylistRetryGoesThroughARunningRelay() {
+        let last = MPVPlayerController.maxRetries - 1
+        #expect(MPVPlayerController.shouldRetry(direct: false, wasPlaying: true, used: last, relayRefused: false))
+        #expect(MPVPlayerController.loadRoute(antenna: false, relayServes: true, isWebURL: true, relayHasRun: true,
+                                              relayRefused: false) == .relay)
+        // The relay stopped after it ran: the load fails rather than go straight to the provider.
+        #expect(MPVPlayerController.loadRoute(antenna: false, relayServes: false, isWebURL: true, relayHasRun: true,
+                                              relayRefused: false) == .refuse)
+        // The relay never started: direct, as before.
+        #expect(MPVPlayerController.loadRoute(antenna: false, relayServes: false, isWebURL: true, relayHasRun: false,
+                                              relayRefused: false) == .direct)
+        // URLs the relay doesn't carry (rtsp, udp) still go to mpv.
+        #expect(MPVPlayerController.loadRoute(antenna: false, relayServes: false, isWebURL: false, relayHasRun: true,
+                                              relayRefused: false) == .direct)
+        // Antenna streams are unchanged: always direct.
+        #expect(MPVPlayerController.loadRoute(antenna: true, relayServes: false, isWebURL: true, relayHasRun: true,
+                                              relayRefused: false) == .direct)
+    }
+
+    /// Pre-release lows (a): a running relay reports `hasRun` and gives every load of a stream (first and each
+    /// retry) a relay address; stopped, it gives none but still reports that it ran.
+    @Test @MainActor func runningRelayServesEveryLoad() async throws {
+        let relay = HLSRelay(fetch: { _, _ in throw URLError(.cannotConnectToHost) })
+        #expect(!relay.hasRun)
+        relay.start()
+        defer { relay.stop() }
+        for _ in 0..<300 where relay.port == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(relay.hasRun)
+        let url = URL(string: "https://cdn.example/live/master.m3u8")!
+        for _ in 0...MPVPlayerController.maxRetries {
+            #expect(relay.localURL(for: url)?.host() == "127.0.0.1")
+        }
+        relay.stop()
+        #expect(relay.hasRun)
+        #expect(relay.localURL(for: url) == nil)
     }
 }
 

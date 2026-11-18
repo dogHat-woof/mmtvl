@@ -48,7 +48,9 @@ final class PhoneRemoteRecorder {
                 done(self.volumeResult)
             },
             now: { self.now },
-            makeCode: { self.randomCodes ? PairingCode.random(using: &self.generator) : self.codes.removeFirst() },
+            makeCode: {
+                self.randomCodes || self.codes.isEmpty ? PairingCode.random(using: &self.generator) : self.codes.removeFirst()
+            },
             makeToken: {
                 self.tokenCount += 1
                 return "tok\(self.tokenCount)"
@@ -190,7 +192,7 @@ struct PhoneRemoteTests {
         remote.setPairing(true)
         for session in 1...11 {
             recorder.now += 1
-            pair("1234", from: session, name: "Phone \(session)")
+            pair(remote.pairing!.code, from: session, name: "Phone \(session)")
         }
         let phones = store.load()
         #expect(phones.count == 10)
@@ -392,7 +394,8 @@ struct PhoneRemoteTests {
         paired()
         #expect(remote.lastPairedName == "iPhone")
         remote.setPairing(true)
-        #expect(remote.pairing?.code == "1234")
+        // Already pairing: unchanged, with the code renewed by the pairing (pre-release lows (e)).
+        #expect(remote.pairing?.code == "5678")
         remote.setPairing(false)
         #expect(remote.pairing == nil)
         #expect(remote.lastPairedName == nil)
@@ -513,9 +516,82 @@ struct PhoneRemoteTests {
         #expect(transport.messages(to: 2) == [.pairFailed(PhoneRemote.tooFastMessage)])
         pair("1234", from: 3)
         #expect(transport.messages(to: 3).first == .paired(token: "tok1"))
+        // Pre-release lows (e): session 3's pairing renewed the code.
+        #expect(remote.pairing?.code == "5678")
         recorder.now += 1
         pair("1234", from: 2)
+        #expect(transport.messages(to: 2).last == .pairFailed("Wrong code"))
+        recorder.now += 1
+        pair("5678", from: 2)
         #expect(transport.messages(to: 2).last == status())
+    }
+
+    /// Pre-release lows (e): a successful pairing renews both the code and the QR code's secret (same expiry), so a
+    /// photographed QR code or a seen code is single-use; the next phone pairs with the fresh ones.
+    @Test func pairingRenewsTheCodeAndTheSecret() throws {
+        transport.hosts = [1: "10.0.0.7", 2: "10.0.0.8", 3: "10.0.0.9"]
+        remote.setPairing(true)
+        let first = try #require(remote.pairing)
+        pair(first.secret, from: 1)
+        #expect(transport.messages(to: 1).first == .paired(token: "tok1"))
+        let renewed = try #require(remote.pairing)
+        #expect(renewed.secret != first.secret)
+        #expect(renewed.secret.count == 32)
+        #expect(renewed.code == "5678")
+        #expect(renewed.expires == first.expires)
+        #expect(remote.lastPairedName == "iPhone")
+
+        recorder.now += 2
+        pair(first.secret, from: 2)
+        #expect(transport.messages(to: 2) == [.pairFailed("Wrong code")])
+        recorder.now += 2
+        pair(first.code, from: 2)
+        #expect(transport.messages(to: 2).last == .pairFailed("Wrong code"))
+        #expect(store.load().count == 1)
+
+        recorder.now += 2
+        pair(renewed.secret, from: 3, name: "Pixel")
+        #expect(transport.messages(to: 3).first == .paired(token: "tok2"))
+        #expect(store.load().map(\.name) == ["iPhone", "Pixel"])
+        #expect(remote.pairing?.secret != renewed.secret)
+        #expect(remote.pairing?.code == "9012")
+    }
+
+    /// Pre-release lows (e): the throttle is for typed codes only. A QR scan right after a wrong code from the same
+    /// address pairs; a wrong secret counts as a wrong code but is checked, never answered "Too fast".
+    @Test func qrScanRightAfterAWrongCodeStillPairs() throws {
+        transport.hosts = [1: "10.0.0.7", 2: "10.0.0.7"]
+        remote.setPairing(true)
+        pair("0000", from: 1)
+        pair(String(repeating: "0", count: 32), from: 1)
+        #expect(transport.messages(to: 1) == [.pairFailed("Wrong code"), .pairFailed("Wrong code")])
+        #expect(remote.pairing?.totalFailures == 2)
+        let secret = try #require(remote.pairing?.secret)
+        pair(secret, from: 2)
+        #expect(transport.messages(to: 2) == [.paired(token: "tok1"), status()])
+        // A typed code right after is still throttled.
+        pair(remote.pairing!.code, from: 1)
+        #expect(transport.messages(to: 1).last == .pairFailed(PhoneRemote.tooFastMessage))
+    }
+
+    /// Pre-release lows (e): 20,000 wrong secrets as fast as they come are each checked and counted; none pairs, and
+    /// the real secret still does.
+    @Test func twentyThousandWrongSecretsNeverPair() throws {
+        remote.setPairing(true)
+        let secret = try #require(remote.pairing?.secret)
+        var generator = SeededGenerator(seed: 7)
+        for _ in 0..<20_000 {
+            let guess = (0..<16).map { _ in String(format: "%02x", UInt8.random(in: .min ... .max, using: &generator)) }
+                .joined()
+            guard guess != secret else { continue }
+            pair(guess)
+        }
+        #expect(!transport.messages(to: 1).contains { if case .paired = $0 { true } else { false } })
+        #expect(!transport.messages(to: 1).contains(.pairFailed(PhoneRemote.tooFastMessage)))
+        #expect(store.load().isEmpty)
+        #expect(remote.pairing?.isCodeLocked == true)
+        pair(secret, from: 2)
+        #expect(transport.messages(to: 2).first == .paired(token: "tok1"))
     }
 
     /// The QR code's secret pairs; once the pairing expires it doesn't, and Pair a Phone opened again starts fresh.

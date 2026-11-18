@@ -63,6 +63,25 @@ struct PairingTests {
         #expect(empty.check("", now: start, makeCode: { "5678" }) == .rejected)
     }
 
+    /// Pre-release lows (e): only 4 ASCII digits are throttled as typed codes; renewing changes code and secret, keeps
+    /// the expiry and the total of wrong codes.
+    @Test func codeAttemptsAndRenewal() {
+        #expect(PairingCode.isCodeAttempt("0420"))
+        for attempt in ["", "123", "12345", "12a4", "١٢٣٤", String(repeating: "a", count: 32)] {
+            #expect(!PairingCode.isCodeAttempt(attempt), "\(attempt)")
+        }
+        var code = PairingCode(code: "1234", expires: start + PairingCode.lifetime, failures: 3, totalFailures: 7)
+        let oldSecret = code.secret
+        code.renew(makeCode: { "5678" })
+        #expect(code.code == "5678")
+        #expect(code.secret != oldSecret && code.secret.count == 32)
+        #expect(code.expires == start + PairingCode.lifetime)
+        #expect(code.failures == 0)
+        #expect(code.totalFailures == 7)
+        #expect(code.check(oldSecret, now: start, makeCode: { "9999" }) == .rejected)
+        #expect(code.check(code.secret, now: start, makeCode: { "9999" }) == .accepted)
+    }
+
     @Test func randomCodesAreFourDigits() {
         for _ in 0..<200 {
             let code = PairingCode.random()

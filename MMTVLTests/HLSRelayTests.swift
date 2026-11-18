@@ -169,14 +169,14 @@ struct HLSRelayTests {
         #expect(!relay.refusedSomething(forStreamOf: URL(string: "https://cdn.example/live/ch2/master.m3u8")!))
     }
 
-    /// A stream on a LAN server keeps working: its own host is allowed, other LAN hosts aren't.
+    /// A stream on a LAN server keeps working: its own host is allowed, a link-local host isn't.
     @Test func aLANStreamMayUseItsOwnHost() async throws {
         let master = """
         #EXTM3U
         #EXT-X-STREAM-INF:BANDWIDTH=1
         video/index.m3u8
         #EXT-X-STREAM-INF:BANDWIDTH=2
-        http://192.168.1.6/other.m3u8
+        http://169.254.1.6/other.m3u8
         """
         let upstream = Upstream(["/live/master.m3u8": master, "/live/video/index.m3u8": HLSPlaylistTests.media,
                                  "/live/video/seg102.ts": "LAN-102"])
@@ -186,7 +186,7 @@ struct HLSRelayTests {
         let (body, status, _) = try await get(local)
         #expect(status == 200)
         #expect(body.components(separatedBy: "/r/").count == 2)
-        #expect(!body.contains("192.168.1.6"))
+        #expect(!body.contains("169.254.1.6"))
         await settle { upstream.count("/live/video/seg102.ts") == 1 }
         #expect(upstream.count("/live/video/seg102.ts") == 1)
         #expect(Set(upstream.fetchedOrigins) == ["http://192.168.1.5"])
@@ -210,13 +210,81 @@ struct HLSRelayTests {
         }
         #expect(allows("http://192.168.1.5/seg.ts", lan))
         #expect(allows("https://192.168.1.5:9000/seg.ts", lan))
-        #expect(!allows("http://192.168.1.6/seg.ts", lan))
         #expect(!allows("http://127.0.0.1/seg.ts", lan))
         #expect(allows("https://cdn.example/seg.ts", lan))
         #expect(!RelayURLPolicy.isInternal("8.8.8.8"))
         #expect(!RelayURLPolicy.isInternal("cdn.example"))
         #expect(!RelayURLPolicy.isInternal("2001:4860:4860::8888"))
         #expect(!RelayURLPolicy.isInternal("172.32.0.1"))
+    }
+
+    /// Pre-release lows (c): a stream on a LAN host (address or LAN name) may reach another LAN device by its
+    /// private address (a Threadfin/xTeVe proxy to a tuner); never the Mac (loopback, its own addresses), link-local,
+    /// 0/8, shared addresses or LAN names; a public stream still reaches no internal host.
+    @Test func aLANStreamMayReachAnotherLANDevice() {
+        let own = { ["192.168.1.5", "fd00::5", "127.0.0.1", "::1"] }
+        func allows(_ text: String, _ stream: String) -> Bool {
+            RelayURLPolicy.allows(URL(string: text)!, stream: URL(string: stream)!, ownAddresses: own)
+        }
+        for entry in ["http://192.168.1.9:34400/auto/v5.1", "http://10.0.0.2/live.m3u8", "http://172.20.1.1/x",
+                      "http://[fd12::9]:34400/x", "http://threadfin.local:34400/x", "http://xteve/x",
+                      "http://nas.lan/x", "http://tuner.home.arpa/x"] {
+            #expect(allows("http://192.168.1.20:5004/auto/v5.1", entry), "\(entry)")
+            #expect(allows("http://10.1.2.3/seg.ts", entry), "\(entry)")
+            #expect(allows("http://[fd00::20]:5004/x", entry), "\(entry)")
+            #expect(allows("http://[::ffff:192.168.1.20]/x", entry), "\(entry)")
+            for refused in ["http://127.0.0.1:1/x", "http://127.1/x", "http://localhost/x", "http://[::1]/x",
+                            "http://0.0.0.0/x", "http://0.1.2.3/x", "http://169.254.169.254/x",
+                            "http://[fe80::1%25en0]/x", "http://100.64.0.1/x", "http://192.168.1.5/x",
+                            "http://[fd00::5]/x", "http://[::ffff:127.0.0.1]/x", "http://other.local/x",
+                            "http://router/x", "http://255.255.255.255/x"] {
+                #expect(!allows(refused, entry), "\(entry) → \(refused)")
+            }
+        }
+        // Public, loopback, link-local and shared entries reach no other internal host.
+        for entry in ["https://cdn.example/x", "http://127.0.0.1:8080/x", "http://localhost:8080/x",
+                      "http://169.254.1.1/x", "http://100.64.0.9/x", "http://[fe80::9%25en0]/x"] {
+            #expect(!allows("http://192.168.1.20/x", entry), "\(entry)")
+            #expect(!allows("http://[fd00::20]/x", entry), "\(entry)")
+        }
+        // With the Mac's real addresses: none of its private ones is reachable from a LAN entry.
+        for address in LANAddress.ownAddresses() where RelayURLPolicy.isPrivateLANAddress(address) {
+            let host = address.contains(":") ? "[\(address)]" : address
+            #expect(!RelayURLPolicy.allows(URL(string: "http://\(host)/x")!,
+                                           stream: URL(string: "http://192.168.250.250/x")!))
+        }
+    }
+
+    /// Pre-release lows (c): the relay's redirect guard and the stream resolver agree with the policy: a LAN entry
+    /// that redirects to another LAN device resolves and plays; one that redirects to the Mac doesn't.
+    @Test func aLANEntryMayRedirectToAnotherLANDevice() async throws {
+        let entry = URL(string: "http://192.168.77.2:34400/stream/lows-c")!
+        let tuner = "http://192.168.77.20:5004/auto/v5.1"
+        StubTunerProtocol.serve(entry.absoluteString, status: 302, headers: ["Location": tuner], body: Data())
+        StubTunerProtocol.serve(tuner, headers: ["Content-Type": "video/mp2t"], body: Data("TS".utf8))
+        let resolver = StreamResolver(resolve: { try await StreamResolver.liveResolve($0, session: StubTunerProtocol.session()) })
+        #expect(await resolver.resolve(entry).absoluteString == tuner)
+        let fetched = try await HLSRelay.liveFetch(entry, stream: entry, session: StubTunerProtocol.session())
+        #expect(fetched.status == 200)
+        #expect(!fetched.refusedRedirect)
+        #expect(HLSRelay.RedirectGuard(stream: entry).follows(URL(string: tuner)))
+
+        let toMac = URL(string: "http://192.168.77.2:34400/stream/lows-c-mac")!
+        let loopback = "http://127.0.0.1:1/lows-c"
+        StubTunerProtocol.serve(toMac.absoluteString, status: 302, headers: ["Location": loopback], body: Data())
+        StubTunerProtocol.serve(loopback, body: Data("MAC".utf8))
+        #expect(await resolver.resolve(toMac) == toMac)
+        #expect(!StubTunerProtocol.wasRequested(loopback))
+        #expect(!HLSRelay.RedirectGuard(stream: entry).follows(URL(string: loopback)))
+
+        // A public entry still never reaches the LAN.
+        let publicEntry = URL(string: "https://provider-lows-c.example/live/1")!
+        let lanTarget = "http://192.168.77.21:5004/auto/v5.1"
+        StubTunerProtocol.serve(publicEntry.absoluteString, status: 302, headers: ["Location": lanTarget], body: Data())
+        StubTunerProtocol.serve(lanTarget, body: Data("TS".utf8))
+        #expect(await resolver.resolve(publicEntry) == publicEntry)
+        #expect(!StubTunerProtocol.wasRequested(lanTarget))
+        #expect(!HLSRelay.RedirectGuard(stream: publicEntry).follows(URL(string: lanTarget)))
     }
 
     /// Security review item 5: the live fetch follows a CDN's redirect to another public host, never to the Mac, the

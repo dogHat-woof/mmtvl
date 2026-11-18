@@ -67,7 +67,8 @@ final class MPVPlayerController: LivePlayer {
     /// M7c L29: follows the provider's redirect once (nil = mpv follows it).
     @ObservationIgnored var resolver: StreamResolver? = .shared
     @ObservationIgnored private var resolveTask: Task<Void, Never>?
-    /// M7c L30: mpv loads through the loopback relay (nil, or not running = straight from the CDN).
+    /// M7c L30: mpv loads through the loopback relay (nil, or never ran = straight from the CDN; pre-release lows (a):
+    /// once it ran, never straight).
     @ObservationIgnored var relay: HLSRelay? = .shared
 
     @ObservationIgnored private var mpv: MPVHandle?
@@ -78,7 +79,8 @@ final class MPVPlayerController: LivePlayer {
     @ObservationIgnored private var retries = 0
     /// Re-review L2: the URL the current load gave the relay (nil: loaded directly).
     @ObservationIgnored private var relayedURL: URL?
-    /// Re-review L2: the relay refused a URI or a redirect for one of this `play`'s loads; no direct load follows.
+    /// Re-review L2: the relay refused a URI or a redirect for one of this `play`'s loads; no direct load follows, and
+    /// one relayed retry fewer.
     @ObservationIgnored private var relayRefused = false
     @ObservationIgnored private var retryTask: Task<Void, Never>?
     @ObservationIgnored private var pollTimer: Timer?
@@ -287,13 +289,15 @@ final class MPVPlayerController: LivePlayer {
         // M7j Q2: a load replaced before its first frame still reports its count.
         reportPreFrameNoise()
         preFrameNoise.reset()
-        // M7c L30: the last retry goes straight to the CDN, in case the relay is the problem. M7j L6: an antenna
-        // stream never goes through the relay (it buffers whole bodies; a TS stream never ends).
-        let relayed = !isDirect && retries < Self.maxRetries ? relay?.localURL(for: url) : nil
+        // M7j L6: an antenna stream never goes through the relay (it buffers whole bodies; a TS stream never ends).
+        // Pre-release lows (a): every load of a playlist stream, retries included, goes through the relay while it
+        // runs; straight from the provider only when the relay never started (or for a URL it doesn't carry).
+        let relayed = isDirect ? nil : relay?.localURL(for: url)
         relayedURL = relayed == nil ? nil : url
-        // Re-review L2: never straight to a stream the relay refused part of (the relay stopped meanwhile, say).
-        if !isDirect, relayed == nil, relayRefused {
-            logger.notice("Not loading straight from \(original.host() ?? "?", privacy: .public): the relay refused part of this stream (player \(self.index))")
+        let route = Self.loadRoute(antenna: isDirect, relayServes: relayed != nil, isWebURL: RelayURLPolicy.isWebURL(url),
+                                   relayHasRun: relay?.hasRun == true, relayRefused: relayRefused)
+        if route == .refuse {
+            logger.notice("Not loading straight from \(original.host() ?? "?", privacy: .public): the relay isn't running (player \(self.index))")
             state = .failed(from: state)
             onFailure?()
             return
@@ -364,7 +368,7 @@ final class MPVPlayerController: LivePlayer {
             logger.error("Stream ended (\(String(describing: reason), privacy: .public), error \(error)); retries used \(self.retries) (player \(self.index))")
             // M7c L29: the resolved address may have expired; the retry resolves again.
             if !isDirect { resolver?.invalidate(url) }
-            // Re-review L2: a refusal skips the last retry, which would go straight to the CDN.
+            // Re-review L2: after a refusal one relayed retry fewer (another would most likely be refused too).
             if let relayedURL, relay?.refusedSomething(forStreamOf: relayedURL) == true { relayRefused = true }
             if Self.shouldRetry(direct: isDirect, wasPlaying: state.phase == .playing, used: retries,
                                 relayRefused: relayRefused) {
@@ -411,13 +415,36 @@ final class MPVPlayerController: LivePlayer {
         logger.notice("\(count) decoder warnings before the first frame (player \(self.index))")
     }
 
-    /// Whether an ended stream is loaded again. A playlist stream: `maxRetries` times per `play`, the last one
-    /// straight from the CDN, except (re-review L2) after the relay refused a URI or a redirect for the stream
-    /// (`relayRefused`): then only the relayed ones. M7j L6: an antenna stream only when it was playing, once per
-    /// `play`; one that never played fails at once, so the diagnosis follows a single tuner answer (L9).
+    /// Whether an ended stream is loaded again. A playlist stream: `maxRetries` times per `play`, each one through
+    /// the relay while it runs (`loadRoute`; pre-release lows (a): no last retry straight from the CDN, which a
+    /// provider answering mpv differently from the relay could steer to LAN hosts), one fewer (re-review L2) after
+    /// the relay refused a URI or a redirect for the stream (`relayRefused`). M7j L6: an antenna stream only when it
+    /// was playing, once per `play`; one that never played fails at once, so the diagnosis follows a single tuner
+    /// answer (L9).
     nonisolated static func shouldRetry(direct: Bool, wasPlaying: Bool, used: Int, relayRefused: Bool = false) -> Bool {
         if direct { return wasPlaying && used < directReconnects }
         return used < (relayRefused ? maxRetries - 1 : maxRetries)
+    }
+
+    nonisolated enum LoadRoute: Equatable, Sendable {
+        /// Through the loopback relay.
+        case relay
+        /// mpv fetches the URL itself.
+        case direct
+        /// Not loaded: the stream fails.
+        case refuse
+    }
+
+    /// How a load (first or retry; the retry count plays no part) reaches mpv. Pre-release lows (a): an antenna stream
+    /// directly (M7j L6); a playlist stream through the relay whenever it serves the URL; straight from the provider
+    /// only for a URL the relay doesn't carry (not http(s)) or when the relay never ran since launch and refused
+    /// nothing for the stream. A relay that ran and stopped fails the load rather than let mpv fetch on its own.
+    nonisolated static func loadRoute(antenna: Bool, relayServes: Bool, isWebURL: Bool, relayHasRun: Bool,
+                                      relayRefused: Bool) -> LoadRoute {
+        if antenna { return .direct }
+        if relayServes { return .relay }
+        if !isWebURL { return .direct }
+        return relayHasRun || relayRefused ? .refuse : .direct
     }
 
     private func phaseDidChange() {

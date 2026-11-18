@@ -43,6 +43,8 @@ Download the MMTVL zip from the [latest release](https://github.com/dwolcot1/mmt
 
 Live TV's stream relay listens on localhost only.
 
+Open the phone remote by the address Settings shows (the QR code does). A name works only when it's the Mac's own name (`<name>.local`, or your router's `<name>.lan` or `<name>.home.arpa`). After a phone pairs, Pair a Phone shows a new QR code and code for the next one.
+
 The phone remote is plain HTTP and WebSocket on your local network, not encrypted: anyone who can watch that network's traffic can see a paired phone's token and use it to control the Mac. Use the phone remote only on a network you trust (not a shared or guest network), or turn it off.
 
 ## Unofficial

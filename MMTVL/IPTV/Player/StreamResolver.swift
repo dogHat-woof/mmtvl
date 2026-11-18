@@ -6,6 +6,8 @@ import os
 /// address for `lifetime`, so a zap to a channel resolved ahead of time skips it entirely. Never logs URLs.
 /// Re-review L2: each redirect hop is judged by `RelayURLPolicy` with the M3U entry's own URL as the stream, so a
 /// redirect to the Mac or a LAN host other than the entry's never becomes the stream's (and the relay's) own host.
+/// Pre-release lows (c): an entry that is itself on the LAN may redirect to another LAN device's private address
+/// (a Threadfin/xTeVe proxy to a tuner), never to the Mac's own; the relay and its `RedirectGuard` judge alike.
 final class StreamResolver {
     typealias Resolve = @Sendable (URL) async throws -> URL
 
