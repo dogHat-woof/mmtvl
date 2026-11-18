@@ -264,7 +264,7 @@ Work on a branch first: `git switch -c m8-release`. Build after every app change
   - Run `scripts/release.sh` on the branch's committed state (version still 1.2.0). The guard rejects a non-`master` branch: for this dry run only, allow it with `MMTVL_RELEASE_ALLOW_BRANCH=1` (implement that override; document it in the script's header comment).
   - Done when: the script ends with an `Accepted` notarization, `stapler validate` passes, `spctl` reports `Notarized Developer ID`, and it prints a SHA-256. Keep `build/release/MMTVL-1.2.0.zip` for step 7; it isn't published.
 
-- [ ] **7. Upgrade check on the Mac mini (with the user)**: no files (results in *Deviations* and L16 if they differ)
+- [x] **7. Upgrade check on the Mac mini (with the user)**: no files (results in *Deviations* and L16 if they differ)
   - The mini runs a development-signed 1.2.0 build (installed by `scripts/deploy-mm.sh`). The user quits it, replaces `/Applications/MMTVL.app` with the step 6 app (copied from the zip, so it's quarantined like a download) and launches it.
   - Record: does Gatekeeper open it with only the standard "downloaded from the Internet" prompt? Does the global Home key still work, or does Accessibility need removing and re-adding? Does macOS ask about Local Network again? Do Keychain prompts appear for the playlist URL, guides, PIN, Plex tokens and phones (how many, and does "Always Allow" stop them)? Does Launch at Login still start it after a restart?
   - Done when: the answers are recorded under *Deviations* (titled "Upgrade development-signed → Developer ID"), L16's wording in the README matches what happened, and the mini runs the Developer ID build normally.
@@ -443,3 +443,4 @@ Executors append here when the plan is wrong or ambiguous: the date, the step, w
   - **Local Network:** no prompt.
   - **Open:** Launch at Login after a restart of the mini; a second launch to confirm no Keychain prompts return. Step 7 stays open until then.
   - **L16:** matches what happened, with one addition for the notes: the old Accessibility row must be removed, not just toggled. The Keychain count is six ("Always Allow" each). Local Network isn't asked.
+- **2026-11-17, step 7 closed (user):** the second launch showed **no Keychain prompts**, so the six "Always Allow" answers stuck. **Launch at Login after a restart was not checked**; the user closed the step without it. It stays a human check (add to the first notarized release's smoke test).
