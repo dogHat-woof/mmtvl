@@ -1,6 +1,6 @@
 # gitleaks configuration for MMTVL (MR step 8): gitleaks' default rules plus rules for IPTV playlist URLs, stream
 # tokens, credentials in query strings and Plex tokens. The user's real hosts and names are never written here: they
-# live in an uncommitted private-terms file that is searched separately (see docs/plans/MR-release.md, step 8).
+# live in an uncommitted private-terms file that is searched separately (see docs/plans/archive/MR-release.md, step 8).
 #
 #   gitleaks git -v --redact --config scripts/gitleaks.toml .     # every commit
 #   gitleaks dir -v --redact --config scripts/gitleaks.toml .     # the files as they are
